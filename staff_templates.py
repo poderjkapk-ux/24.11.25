@@ -279,29 +279,26 @@ STAFF_DASHBOARD_HTML = """
         }}
 
         function sendSystemNotification(text) {{
-            if (!("Notification" in window)) return;
+            if (!("Notification" in window) || Notification.permission !== "granted") return;
             
-            if (Notification.permission === "granted") {{
-                if (navigator.serviceWorker && navigator.serviceWorker.controller) {{
-                    navigator.serviceWorker.ready.then(registration => {{
-                        registration.showNotification("Staff Panel", {{
-                            body: text,
-                            icon: '/static/favicons/icon-192.png',
-                            vibrate: [200, 100, 200],
-                            tag: 'staff-notification',
-                            renotify: true
-                        }});
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {{
+                navigator.serviceWorker.ready.then(registration => {{
+                    registration.showNotification("Staff Panel", {{
+                        body: text,
+                        icon: '/static/favicons/icon-192.png',
+                        vibrate: [200, 100, 200],
+                        tag: 'staff-notification',
+                        renotify: true
                     }});
-                }} else {{
-                    try {{
-                        const notification = new Notification("Нове сповіщення", {{
-                            body: text,
-                            icon: '/static/favicons/icon-192.png',
-                            vibrate: [200, 100, 200]
-                        }});
-                        notification.onclick = function() {{ window.focus(); }};
-                    }} catch (e) {{ console.log(e); }}
-                }}
+                }});
+            }} else {{
+                try {{
+                    const notification = new Notification("Нове сповіщення", {{
+                        body: text,
+                        icon: '/static/favicons/icon-192.png',
+                        vibrate: [200, 100, 200]
+                    }});
+                }} catch (e) {{}}
             }}
         }}
 
@@ -309,11 +306,8 @@ STAFF_DASHBOARD_HTML = """
             try {{
                 if ('wakeLock' in navigator) {{
                     wakeLock = await navigator.wakeLock.request('screen');
-                    console.log('Wake Lock active');
                 }}
-            }} catch (err) {{
-                console.log('Wake Lock error:', err);
-            }}
+            }} catch (err) {{}}
         }}
 
         function showToast(message) {{
@@ -418,6 +412,27 @@ STAFF_DASHBOARD_HTML = """
             try {{
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
                 const data = await res.json();
+                
+                // Блок курьеров
+                let courierHtml = "";
+                if (data.can_assign_courier && data.is_delivery) {{
+                    let courierOptions = '<option value="0">Не призначено</option>';
+                    if (data.couriers && data.couriers.length > 0) {{
+                        data.couriers.forEach(c => {{
+                            courierOptions += `<option value="${{c.id}}" ${{c.selected ? 'selected' : ''}}>${{c.name}}</option>`;
+                        }});
+                    }} else {{
+                        courierOptions = '<option value="0" disabled>Немає кур\\'єрів на зміні</option>';
+                    }}
+                    courierHtml = `
+                    <div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;">
+                        <label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Призначити кур'єра:</label>
+                        <select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">
+                            ${{courierOptions}}
+                        </select>
+                    </div>`;
+                }}
+
                 let itemsHtml = `<div class="edit-list">`;
                 data.items.forEach(item => {{
                     itemsHtml += `
@@ -438,6 +453,7 @@ STAFF_DASHBOARD_HTML = """
                 }});
                 body.innerHTML = `
                     <h3 style="margin-top:0;">Замовлення #${{orderId}}</h3>
+                    ${{courierHtml}}
                     <div style="margin-bottom:20px; background:#f9f9f9; padding:10px; border-radius:8px;">
                         <label style="font-size:0.85rem; color:#666; margin-bottom:5px; display:block;">Змінити статус:</label>
                         <select id="status-select" style="width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; background:#fff; font-size:1rem;" onchange="changeOrderStatus(this)">
@@ -457,6 +473,20 @@ STAFF_DASHBOARD_HTML = """
             }} catch (e) {{
                 body.innerHTML = "Помилка: " + e.message;
             }}
+        }}
+
+        async function assignCourier(courierId) {{
+            if(!confirm("Змінити кур'єра?")) return;
+            try {{
+                const res = await fetch('/staff/api/order/assign_courier', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ orderId: editingOrderId, courierId: courierId }})
+                }});
+                const data = await res.json();
+                if(data.success) showToast(data.message);
+                else alert(data.error);
+            }} catch(e) {{ alert("Помилка з'єднання"); }}
         }}
 
         function updateEditQty(prodId, delta) {{

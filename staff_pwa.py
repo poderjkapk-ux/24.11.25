@@ -27,7 +27,8 @@ from staff_templates import (
 from notification_manager import (
     notify_all_parties_on_status_change, 
     notify_new_order_to_staff, 
-    notify_station_completion
+    notify_station_completion,
+    create_staff_notification
 )
 from cash_service import link_order_to_shift, register_employee_debt
 
@@ -113,27 +114,31 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
     shift_btn_class = "on" if employee.is_on_shift else "off"
     shift_btn_text = "🟢 На зміні" if employee.is_on_shift else "🔴 Почати зміну"
 
-    # Генерация вкладок навигации
+    # Генерация вкладок навигации (Накопительная логика для мульти-ролей)
     tabs_html = ""
     
+    # 1. Оператор/Админ (Видит всё + может назначать)
+    if employee.role.can_manage_orders:
+        tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-check"></i> Замовлення</button>'
+    
+    # 2. Официант
     if employee.role.can_serve_tables:
-        # Официант: Столы, Заказы, Финансы
-        tabs_html += '<button class="nav-item active" onclick="switchTab(\'tables\')"><i class="fa-solid fa-chair"></i> Столи</button>'
-        tabs_html += '<button class="nav-item" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Замовлення</button>'
+        # Если уже добавили кнопку "Замовлення" для админа, не дублируем, но добавляем столы
+        if 'switchTab(\'orders\')' not in tabs_html:
+             tabs_html += '<button class="nav-item" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Замовлення</button>'
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'tables\')"><i class="fa-solid fa-chair"></i> Столи</button>'
+        
+    # 3. Кухня/Бар
+    if employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders:
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
+    
+    # 4. Курьер
+    if employee.role.can_be_assigned:
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'delivery\')"><i class="fa-solid fa-motorcycle"></i> Доставка</button>'
+    
+    # 5. Финансы (для всех, кто работает с деньгами)
+    if employee.role.can_serve_tables or employee.role.can_be_assigned or employee.role.can_manage_orders:
         tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
-    
-    elif employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders:
-        # Повар/Бармен
-        tabs_html += '<button class="nav-item active" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
-    
-    elif employee.role.can_be_assigned:
-        # Курьер
-        tabs_html += '<button class="nav-item active" onclick="switchTab(\'delivery\')"><i class="fa-solid fa-motorcycle"></i> Доставка</button>'
-        tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
-    
-    else: 
-        # Админ
-        tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-check"></i> Всі</button>'
 
     tabs_html += '<button class="nav-item" onclick="switchTab(\'notifications\')" style="position:relative;"><i class="fa-solid fa-bell"></i> Інфо<span id="nav-notify-badge" class="notify-dot" style="display:none;"></span></button>'
 
@@ -259,13 +264,19 @@ async def get_staff_data(
             html_content += "</div>"
             return JSONResponse({"html": html_content})
 
-        # --- Вкладка ЗАКАЗЫ (Официант - с группировкой и суммами) ---
-        elif view == "orders" and employee.role.can_serve_tables:
-            orders_html = await _get_waiter_orders_grouped(session, employee)
-            return JSONResponse({"html": orders_html if orders_html else "<div class='empty-state'><i class='fa-solid fa-utensils'></i>Активних замовлень немає.</div>"})
+        # --- Вкладка ЗАКАЗЫ (С разделением логики для Официанта и Админа) ---
+        elif view == "orders":
+            if employee.role.can_serve_tables:
+                # Официант видит свои столы и заказы с группировкой
+                orders_html = await _get_waiter_orders_grouped(session, employee)
+                return JSONResponse({"html": orders_html if orders_html else "<div class='empty-state'><i class='fa-solid fa-utensils'></i>Активних замовлень немає.</div>"})
+            else:
+                # Админ/Оператор видит общий список
+                orders_data = await _get_general_orders(session, employee)
+                return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-regular fa-folder-open'></i>Активних замовлень немає.</div>"})
 
-        # --- Вкладка ФИНАНСЫ (Официант/Курьер) ---
-        elif view == "finance" and (employee.role.can_serve_tables or employee.role.can_be_assigned):
+        # --- Вкладка ФИНАНСЫ (Официант/Курьер/Админ) ---
+        elif view == "finance" and (employee.role.can_serve_tables or employee.role.can_be_assigned or employee.role.can_manage_orders):
             finance_html = await _get_finance_details(session, employee)
             return JSONResponse({"html": finance_html})
 
@@ -278,11 +289,6 @@ async def get_staff_data(
         elif view == "delivery" and employee.role.can_be_assigned:
             orders_data = await _get_courier_orders(session, employee)
             return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-motorcycle'></i>Немає призначених замовлень.</div>"})
-
-        # --- Вкладка ВСЕ ЗАКАЗЫ (Админ) ---
-        elif view == "orders":
-            orders_data = await _get_general_orders(session, employee)
-            return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-regular fa-folder-open'></i>Активних замовлень немає.</div>"})
         
         elif view == "notifications":
             return JSONResponse({"html": "<div id='notification-list-container' style='text-align:center; color:#999;'>Оновлення...</div>"})
@@ -299,7 +305,6 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
     """Группировка заказов по столикам для официанта с подсчетом общей суммы."""
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
     
-    # Получаем заказы (закрепленные за официантом или его столами)
     tables_sub = select(Table.id).where(Table.assigned_waiters.any(Employee.id == employee.id))
     
     q = select(Order).options(
@@ -313,11 +318,9 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
     
     if not orders: return ""
 
-    # Сначала группируем в памяти, чтобы посчитать сумму
-    grouped_orders = {} # { table_id: { "name": ..., "orders": [], "total": 0 } }
-    
+    grouped_orders = {} 
     for o in orders:
-        t_id = o.table_id if o.table_id else 0 # 0 для 'Без столика'
+        t_id = o.table_id if o.table_id else 0 
         if t_id not in grouped_orders:
             t_name = o.table.name if o.table else "Інше / Самовивіз"
             grouped_orders[t_id] = {"name": t_name, "orders": [], "total": Decimal(0)}
@@ -326,10 +329,7 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
         grouped_orders[t_id]["total"] += o.total_price
 
     html_out = ""
-    
-    # Теперь генерируем HTML
     for t_id, group in grouped_orders.items():
-        # Красивый заголовок с суммой
         html_out += f"""
         <div class='table-group-header' style="justify-content: space-between;">
             <span><i class='fa-solid fa-chair'></i> {html.escape(group['name'])}</span>
@@ -368,7 +368,6 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
     """Детализация долга сотрудника."""
     current_debt = employee.cash_balance
     
-    # Ищем завершенные заказы, которые висят на сотруднике и не сданы (только наличка)
     q = select(Order).options(joinedload(Order.table)).where(
         or_(
             Order.accepted_by_waiter_id == employee.id,
@@ -490,28 +489,28 @@ async def _get_courier_orders(session: AsyncSession, employee: Employee):
 
 async def _get_general_orders(session: AsyncSession, employee: Employee):
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
-    q = select(Order).options(joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter)).where(Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
+    q = select(Order).options(joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter), joinedload(Order.courier)).where(Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
 
-    if employee.role.can_serve_tables:
-        tables_sub = select(Table.id).where(Table.assigned_waiters.any(Employee.id == employee.id))
-        q = q.where(or_(Order.accepted_by_waiter_id == employee.id, Order.table_id.in_(tables_sub)))
-    
     orders = (await session.execute(q)).scalars().all()
     res = []
     for o in orders:
-        table_name = o.table.name if o.table else "N/A"
+        table_name = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
+        courier_info = f"🚴 {o.courier.full_name}" if o.courier else "🔴 Не призначено"
+        
         content = f"""
-        <div class="info-row"><i class="fa-solid fa-chair"></i> <b>{html.escape(table_name)}</b></div>
-        <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> Сума: <b>{o.total_price} грн</b></div>
+        <div class="info-row"><i class="fa-solid fa-info-circle"></i> <b>{html.escape(table_name)}</b></div>
+        <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> {o.total_price} грн</div>
         """
+        
+        if o.is_delivery:
+             content += f"<div class='info-row' style='font-size:0.85rem; color:#555;'>{courier_info}</div>"
+
         btns = ""
-        if employee.role.can_serve_tables:
-            if not o.accepted_by_waiter_id: 
-                btns += f"<button class='action-btn' onclick=\"performAction('accept_order', {o.id})\">🙋 Прийняти</button>"
-            else: 
-                btns += f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">✏️ Дії</button>"
+        # Если админ/оператор - кнопка управления
+        if employee.role.can_manage_orders:
+             btns += f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">⚙️ Керувати</button>"
         else:
-            btns = f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">Інфо</button>"
+             btns = f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">Інфо</button>"
         
         res.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
             id=o.id, 
@@ -526,7 +525,8 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
 
 @router.get("/api/order/{order_id}/details")
 async def get_order_details(order_id: int, session: AsyncSession = Depends(get_db_session), employee: Employee = Depends(get_current_staff)):
-    order = await session.get(Order, order_id, options=[selectinload(Order.items), joinedload(Order.status)])
+    """Возвращает детали заказа для модального окна, включая список курьеров."""
+    order = await session.get(Order, order_id, options=[selectinload(Order.items), joinedload(Order.status), joinedload(Order.courier)])
     if not order: return JSONResponse({"error": "Not found"}, status_code=404)
     
     status_query = select(OrderStatus)
@@ -538,23 +538,65 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         status_query = status_query.where(OrderStatus.visible_to_waiter == True)
     
     statuses = (await session.execute(status_query.order_by(OrderStatus.id))).scalars().all()
-    
-    status_list = [{
-        "id": s.id, 
-        "name": s.name, 
-        "selected": s.id == order.status_id,
-        "is_completed": s.is_completed_status
-    } for s in statuses]
+    status_list = [{"id": s.id, "name": s.name, "selected": s.id == order.status_id, "is_completed": s.is_completed_status} for s in statuses]
 
     items = [{"id": i.product_id, "name": i.product_name, "qty": i.quantity, "price": float(i.price_at_moment)} for i in order.items]
     
+    # --- СПИСОК КУРЬЕРОВ (Для операторов) ---
+    couriers_list = []
+    if employee.role.can_manage_orders and order.is_delivery:
+        courier_role_res = await session.execute(select(Role.id).where(Role.can_be_assigned == True))
+        courier_role_ids = courier_role_res.scalars().all()
+        if courier_role_ids:
+            couriers = (await session.execute(select(Employee).where(Employee.role_id.in_(courier_role_ids), Employee.is_on_shift == True))).scalars().all()
+            couriers_list = [{"id": c.id, "name": c.full_name, "selected": c.id == order.courier_id} for c in couriers]
+
     return JSONResponse({
         "id": order.id,
         "total": float(order.total_price),
         "items": items,
         "statuses": status_list,
-        "status_id": order.status_id
+        "status_id": order.status_id,
+        "is_delivery": order.is_delivery,
+        "couriers": couriers_list,
+        "can_assign_courier": employee.role.can_manage_orders
     })
+
+@router.post("/api/order/assign_courier")
+async def assign_courier_api(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    """Назначение курьера через PWA."""
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "No permission"}, status_code=403)
+        
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    courier_id = int(data.get("courierId")) # 0 если снять
+    
+    order = await session.get(Order, order_id)
+    if not order: return JSONResponse({"error": "Order not found"}, 404)
+    
+    if order.status.is_completed_status:
+        return JSONResponse({"error": "Order closed"}, 400)
+
+    msg = ""
+    if courier_id == 0:
+        order.courier_id = None
+        msg = "Кур'єра знято"
+    else:
+        courier = await session.get(Employee, courier_id)
+        if not courier: return JSONResponse({"error": "Courier not found"}, 404)
+        order.courier_id = courier_id
+        msg = f"Призначено: {courier.full_name}"
+        
+        # --- УВЕДОМЛЕНИЕ КУРЬЕРУ ---
+        await create_staff_notification(session, courier.id, f"📦 Вам призначено замовлення #{order.id} ({order.address or 'Доставка'})")
+    
+    await session.commit()
+    return JSONResponse({"success": True, "message": msg})
 
 @router.post("/api/order/update_status")
 async def update_order_status_api(

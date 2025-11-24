@@ -19,7 +19,9 @@ from decimal import Decimal
 
 from models import Order, Product, Category, OrderStatus, Employee, Role, Settings, OrderStatusHistory, OrderItem
 from courier_handlers import _generate_waiter_order_view
-from notification_manager import notify_all_parties_on_status_change
+# --- ИЗМЕНЕНИЕ: Добавлен импорт create_staff_notification ---
+from notification_manager import notify_all_parties_on_status_change, create_staff_notification
+# ------------------------------------------------------------
 # --- КАСА: Імпорт функції прив'язки ---
 from cash_service import link_order_to_shift, register_employee_debt
 
@@ -525,6 +527,7 @@ def register_admin_handlers(dp: Dispatcher):
     async def assign_courier(callback: CallbackQuery, session: AsyncSession):
         admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
         order_id, courier_id = map(int, callback.data.split("_")[2:])
+        
         order = await session.get(Order, order_id, options=[joinedload(Order.status)])
         if not order: return await callback.answer("Замовлення не знайдено!", show_alert=True)
         
@@ -534,11 +537,16 @@ def register_admin_handlers(dp: Dispatcher):
         old_courier_id = order.courier_id
         new_courier_name = "Не призначений"
 
+        # Снятие старого курьера
         if old_courier_id and old_courier_id != courier_id:
             old_courier = await session.get(Employee, old_courier_id)
-            if old_courier and old_courier.telegram_user_id:
-                try: await callback.bot.send_message(old_courier.telegram_user_id, f"❗️ Замовлення #{order.id} знято з вас.")
-                except Exception: pass
+            if old_courier:
+                # PWA уведомление о снятии
+                await create_staff_notification(session, old_courier.id, f"🚫 Замовлення #{order.id} знято з вас.")
+                
+                if old_courier.telegram_user_id:
+                    try: await callback.bot.send_message(old_courier.telegram_user_id, f"❗️ Замовлення #{order.id} знято з вас.")
+                    except Exception: pass
 
         if courier_id == 0:
             order.courier_id = None
@@ -548,6 +556,10 @@ def register_admin_handlers(dp: Dispatcher):
             order.courier_id = courier_id
             new_courier_name = new_courier.full_name
             
+            # --- ДОБАВЛЕНО: PWA Уведомление ---
+            await create_staff_notification(session, new_courier.id, f"📦 Вам призначено замовлення #{order.id}!")
+            # ----------------------------------
+
             if new_courier.telegram_user_id:
                 try:
                     kb_courier = InlineKeyboardBuilder()
@@ -567,6 +579,7 @@ def register_admin_handlers(dp: Dispatcher):
         
         await session.commit()
         
+        # Логирование в админ-чат
         if admin_chat_id_str:
             try: await callback.bot.send_message(admin_chat_id_str, f"👤 Замовленню #{order.id} призначено кур'єра: <b>{html_module.escape(new_courier_name)}</b>")
             except Exception: pass
