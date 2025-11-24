@@ -114,32 +114,48 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
     shift_btn_class = "on" if employee.is_on_shift else "off"
     shift_btn_text = "🟢 На зміні" if employee.is_on_shift else "🔴 Почати зміну"
 
-    # Генерация вкладок навигации (Накопительная логика для мульти-ролей)
+    # --- ГЕНЕРАЦИЯ ВКЛАДОК (TABS) СТРОГО ПО РОЛЯМ ---
     tabs_html = ""
     
-    # 1. Оператор/Админ (Видит всё + может назначать)
-    if employee.role.can_manage_orders:
+    # Роли (флаги)
+    is_admin_operator = employee.role.can_manage_orders
+    is_waiter = employee.role.can_serve_tables
+    is_courier = employee.role.can_be_assigned
+    is_kitchen = employee.role.can_receive_kitchen_orders
+    is_bar = employee.role.can_receive_bar_orders
+
+    # 1. ОПЕРАТОР / АДМИН
+    # Видит "Замовлення" (Все) и "Доставка" (Управление всеми доставками)
+    if is_admin_operator:
         tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-check"></i> Замовлення</button>'
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'delivery_admin\')"><i class="fa-solid fa-truck-fast"></i> Доставка (Всі)</button>'
     
-    # 2. Официант
-    if employee.role.can_serve_tables:
-        # Если уже добавили кнопку "Замовлення" для админа, не дублируем, но добавляем столы
-        if 'switchTab(\'orders\')' not in tabs_html:
-             tabs_html += '<button class="nav-item" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Замовлення</button>'
+    # 2. ОФИЦИАНТ
+    # Если он НЕ админ (чтобы не дублировать "Замовлення"), добавляем "Столы" и "Мои заказы"
+    if is_waiter:
+        if not is_admin_operator:
+            tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Мої замовлення</button>'
         tabs_html += '<button class="nav-item" onclick="switchTab(\'tables\')"><i class="fa-solid fa-chair"></i> Столи</button>'
         
-    # 3. Кухня/Бар
-    if employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders:
-        tabs_html += '<button class="nav-item" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
+    # 3. КУХНЯ / БАР
+    # Видят ТОЛЬКО "Черга" (Производство).
+    if is_kitchen or is_bar:
+        # Если это чистый повар/бармен, делаем эту вкладку активной по умолчанию
+        active_cls = "active" if not (is_admin_operator or is_waiter) else ""
+        tabs_html += f'<button class="nav-item {active_cls}" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
     
-    # 4. Курьер
-    if employee.role.can_be_assigned:
-        tabs_html += '<button class="nav-item" onclick="switchTab(\'delivery\')"><i class="fa-solid fa-motorcycle"></i> Доставка</button>'
+    # 4. КУРЬЕР
+    # Видит "Доставка" (Только свои). Если он админ, у него уже есть "Delivery Admin".
+    if is_courier and not is_admin_operator:
+        active_cls = "active" if not (is_waiter or is_kitchen or is_bar) else ""
+        tabs_html += f'<button class="nav-item {active_cls}" onclick="switchTab(\'delivery_courier\')"><i class="fa-solid fa-motorcycle"></i> Мої доставки</button>'
     
-    # 5. Финансы (для всех, кто работает с деньгами)
-    if employee.role.can_serve_tables or employee.role.can_be_assigned or employee.role.can_manage_orders:
+    # 5. ФИНАНСЫ (Каса)
+    # Видят все, кто работает с деньгами
+    if is_waiter or is_courier or is_admin_operator:
         tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
 
+    # Уведомления (для всех)
     tabs_html += '<button class="nav-item" onclick="switchTab(\'notifications\')" style="position:relative;"><i class="fa-solid fa-bell"></i> Інфо<span id="nav-notify-badge" class="notify-dot" style="display:none;"></span></button>'
 
     content = f"""
@@ -232,74 +248,98 @@ async def get_staff_data(
 
         # --- Вкладка СТОЛЫ ---
         if view == "tables" and employee.role.can_serve_tables:
-            tables = (await session.execute(
-                select(Table)
-                .where(Table.assigned_waiters.any(Employee.id == employee.id))
-                .order_by(Table.name)
-            )).scalars().all()
-            
-            if not tables: 
-                return JSONResponse({"html": "<div class='empty-state'><i class='fa-solid fa-chair'></i>За вами не закріплено столиків.</div>"})
-            
-            html_content = "<div class='grid-container'>"
-            for t in tables:
-                final_ids = select(OrderStatus.id).where(or_(OrderStatus.is_completed_status==True, OrderStatus.is_cancelled_status==True))
-                active_count = await session.scalar(
-                    select(func.count(Order.id)).where(Order.table_id == t.id, Order.status_id.not_in(final_ids))
-                )
-                
-                badge_class = "alert" if active_count > 0 else "success"
-                border_color = "#e74c3c" if active_count > 0 else "transparent"
-                bg_color = "#fff"
-                status_text = f"{active_count} активних" if active_count > 0 else "Вільний"
-                
-                html_content += STAFF_TABLE_CARD.format(
-                    id=t.id, 
-                    name_esc=html.escape(t.name), 
-                    badge_class=badge_class, 
-                    status_text=status_text,
-                    border_color=border_color, 
-                    bg_color=bg_color
-                )
-            html_content += "</div>"
-            return JSONResponse({"html": html_content})
+            return await _render_tables_view(session, employee)
 
-        # --- Вкладка ЗАКАЗЫ (С разделением логики для Официанта и Админа) ---
+        # --- Вкладка ЗАКАЗЫ ---
         elif view == "orders":
-            if employee.role.can_serve_tables:
-                # Официант видит свои столы и заказы с группировкой
-                orders_html = await _get_waiter_orders_grouped(session, employee)
-                return JSONResponse({"html": orders_html if orders_html else "<div class='empty-state'><i class='fa-solid fa-utensils'></i>Активних замовлень немає.</div>"})
-            else:
-                # Админ/Оператор видит общий список
+            if employee.role.can_manage_orders:
+                # Админ/Оператор видит ВСЕ активные заказы
                 orders_data = await _get_general_orders(session, employee)
                 return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-regular fa-folder-open'></i>Активних замовлень немає.</div>"})
+            elif employee.role.can_serve_tables:
+                # Официант видит свои столы и заказы с группировкой
+                orders_html = await _get_waiter_orders_grouped(session, employee)
+                return JSONResponse({"html": orders_html if orders_html else "<div class='empty-state'><i class='fa-solid fa-utensils'></i>Ваших активних замовлень немає.</div>"})
+            else:
+                return JSONResponse({"html": "<div class='empty-state'>Немає доступу до списку замовлень.</div>"})
 
-        # --- Вкладка ФИНАНСЫ (Официант/Курьер/Админ) ---
-        elif view == "finance" and (employee.role.can_serve_tables or employee.role.can_be_assigned or employee.role.can_manage_orders):
-            finance_html = await _get_finance_details(session, employee)
-            return JSONResponse({"html": finance_html})
+        # --- Вкладка ФИНАНСЫ (Каса) ---
+        elif view == "finance":
+            if employee.role.can_serve_tables or employee.role.can_be_assigned or employee.role.can_manage_orders:
+                finance_html = await _get_finance_details(session, employee)
+                return JSONResponse({"html": finance_html})
+            else:
+                return JSONResponse({"html": "<div class='empty-state'>Доступ заборонено.</div>"})
 
-        # --- Вкладка ПРОИЗВОДСТВО ---
+        # --- Вкладка ПРОИЗВОДСТВО (Кухня/Бар) ---
         elif view == "production":
-            orders_data = await _get_production_orders(session, employee)
-            return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-check-double'></i>Черга пуста.</div>"})
+            # Строгий фильтр: показывать только если есть права на кухню или бар
+            if employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders:
+                orders_data = await _get_production_orders(session, employee)
+                return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-check-double'></i>Черга пуста.</div>"})
+            else:
+                return JSONResponse({"html": "<div class='empty-state'>У вас немає прав доступу до кухні/бару.</div>"})
 
-        # --- Вкладка ДОСТАВКА ---
-        elif view == "delivery" and employee.role.can_be_assigned:
-            orders_data = await _get_courier_orders(session, employee)
-            return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-motorcycle'></i>Немає призначених замовлень.</div>"})
+        # --- Вкладка ДОСТАВКА (КУРЬЕР) ---
+        elif view == "delivery_courier":
+            if employee.role.can_be_assigned:
+                orders_data = await _get_my_courier_orders(session, employee)
+                return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-motorcycle'></i>Немає призначених замовлень.</div>"})
+            else:
+                return JSONResponse({"html": "<div class='empty-state'>Ви не кур'єр.</div>"})
+
+        # --- Вкладка ДОСТАВКА (АДМИН) - Управление ---
+        elif view == "delivery_admin":
+            if employee.role.can_manage_orders:
+                orders_data = await _get_all_delivery_orders_for_admin(session, employee)
+                return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-truck'></i>Активних доставок немає.</div>"})
+            else:
+                return JSONResponse({"html": "<div class='empty-state'>Доступ заборонено.</div>"})
         
         elif view == "notifications":
             return JSONResponse({"html": "<div id='notification-list-container' style='text-align:center; color:#999;'>Оновлення...</div>"})
 
-        return JSONResponse({"html": "<div class='empty-state'>Невідомий режим перегляду.</div>"})
+        # Fallback для пустой вкладки по умолчанию
+        return JSONResponse({"html": ""})
         
     except Exception as e:
         logger.error(f"API Error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- РЕНДЕРИНГ КОНТЕНТА ---
+
+async def _render_tables_view(session: AsyncSession, employee: Employee):
+    tables = (await session.execute(
+        select(Table)
+        .where(Table.assigned_waiters.any(Employee.id == employee.id))
+        .order_by(Table.name)
+    )).scalars().all()
+    
+    if not tables: 
+        return JSONResponse({"html": "<div class='empty-state'><i class='fa-solid fa-chair'></i>За вами не закріплено столиків.</div>"})
+    
+    html_content = "<div class='grid-container'>"
+    for t in tables:
+        final_ids = select(OrderStatus.id).where(or_(OrderStatus.is_completed_status==True, OrderStatus.is_cancelled_status==True))
+        active_count = await session.scalar(
+            select(func.count(Order.id)).where(Order.table_id == t.id, Order.status_id.not_in(final_ids))
+        )
+        
+        badge_class = "alert" if active_count > 0 else "success"
+        border_color = "#e74c3c" if active_count > 0 else "transparent"
+        bg_color = "#fff"
+        status_text = f"{active_count} активних" if active_count > 0 else "Вільний"
+        
+        html_content += STAFF_TABLE_CARD.format(
+            id=t.id, 
+            name_esc=html.escape(t.name), 
+            badge_class=badge_class, 
+            status_text=status_text,
+            border_color=border_color, 
+            bg_color=bg_color
+        )
+    html_content += "</div>"
+    return JSONResponse({"html": html_content})
 
 async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
     """Группировка заказов по столикам для официанта с подсчетом общей суммы."""
@@ -315,14 +355,13 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
     ).order_by(Order.table_id, Order.id.desc())
 
     orders = (await session.execute(q)).scalars().all()
-    
     if not orders: return ""
 
     grouped_orders = {} 
     for o in orders:
         t_id = o.table_id if o.table_id else 0 
         if t_id not in grouped_orders:
-            t_name = o.table.name if o.table else "Інше / Самовивіз"
+            t_name = o.table.name if o.table else "Інше"
             grouped_orders[t_id] = {"name": t_name, "orders": [], "total": Decimal(0)}
         
         grouped_orders[t_id]["orders"].append(o)
@@ -415,55 +454,66 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
     """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
+    """Получает заказы для Кухни или Бара."""
     orders_data = []
-    # Кухня
+    
+    # --- КУХНЯ ---
     if employee.role.can_receive_kitchen_orders:
         status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))).scalars().all()
         if status_ids:
             q = select(Order).options(joinedload(Order.table), selectinload(Order.items)).where(Order.status_id.in_(status_ids), Order.kitchen_done == False).order_by(Order.id.asc())
             orders = (await session.execute(q)).scalars().all()
-            for o in orders:
-                items = [i for i in o.items if i.preparation_area != 'bar'] 
-                if items:
-                    items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
-                    table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
-                    content = f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
-                    btn = f"<button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'kitchen')\">✅ Кухня готова</button>"
-                    orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
-                        id=o.id, 
-                        time=o.created_at.strftime('%H:%M'), 
-                        badge_class="warning", 
-                        status="В роботі", 
-                        content=content, 
-                        buttons=btn, 
-                        color="#f39c12"
-                    )})
+            
+            if orders:
+                orders_data.append({"html": "<div class='table-group-header'>🍳 КУХНЯ</div>"})
+                for o in orders:
+                    # Фильтруем только кухонные товары
+                    items = [i for i in o.items if i.preparation_area != 'bar'] 
+                    if items:
+                        items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
+                        table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
+                        content = f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
+                        btn = f"<button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'kitchen')\">✅ Кухня готова</button>"
+                        orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
+                            id=o.id, 
+                            time=o.created_at.strftime('%H:%M'), 
+                            badge_class="warning", 
+                            status="В роботі", 
+                            content=content, 
+                            buttons=btn, 
+                            color="#f39c12"
+                        )})
 
-    # Бар
+    # --- БАР ---
     if employee.role.can_receive_bar_orders:
         status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_bartender == True))).scalars().all()
         if status_ids:
             q = select(Order).options(joinedload(Order.table), selectinload(Order.items)).where(Order.status_id.in_(status_ids), Order.bar_done == False).order_by(Order.id.asc())
             orders = (await session.execute(q)).scalars().all()
-            for o in orders:
-                items = [i for i in o.items if i.preparation_area == 'bar'] 
-                if items:
-                    items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
-                    table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
-                    content = f"<div class='info-row'><i class='fa-solid fa-martini-glass'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
-                    btn = f"<button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'bar')\">✅ Бар готовий</button>"
-                    orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
-                        id=o.id, 
-                        time=o.created_at.strftime('%H:%M'), 
-                        badge_class="info", 
-                        status="В роботі", 
-                        content=content, 
-                        buttons=btn, 
-                        color="#3498db"
-                    )})
+            
+            if orders:
+                orders_data.append({"html": "<div class='table-group-header'>🍹 БАР</div>"})
+                for o in orders:
+                    # Фильтруем только барные товары
+                    items = [i for i in o.items if i.preparation_area == 'bar'] 
+                    if items:
+                        items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
+                        table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
+                        content = f"<div class='info-row'><i class='fa-solid fa-martini-glass'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
+                        btn = f"<button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'bar')\">✅ Бар готовий</button>"
+                        orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
+                            id=o.id, 
+                            time=o.created_at.strftime('%H:%M'), 
+                            badge_class="info", 
+                            status="В роботі", 
+                            content=content, 
+                            buttons=btn, 
+                            color="#3498db"
+                        )})
     return orders_data
 
-async def _get_courier_orders(session: AsyncSession, employee: Employee):
+async def _get_my_courier_orders(session: AsyncSession, employee: Employee):
+    """Только заказы, назначенные этому курьеру."""
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
     q = select(Order).options(joinedload(Order.status), selectinload(Order.items)).where(Order.courier_id == employee.id, Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
     orders = (await session.execute(q)).scalars().all()
@@ -487,30 +537,67 @@ async def _get_courier_orders(session: AsyncSession, employee: Employee):
         )})
     return res
 
-async def _get_general_orders(session: AsyncSession, employee: Employee):
+async def _get_all_delivery_orders_for_admin(session: AsyncSession, employee: Employee):
+    """Все активные заказы на доставку для админа."""
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
-    q = select(Order).options(joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter), joinedload(Order.courier)).where(Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
+    
+    q = select(Order).options(
+        joinedload(Order.status), joinedload(Order.courier)
+    ).where(
+        Order.status_id.not_in(final_ids),
+        Order.is_delivery == True
+    ).order_by(Order.id.desc())
+
+    orders = (await session.execute(q)).scalars().all()
+    res = []
+    for o in orders:
+        courier_info = f"🚴 {o.courier.full_name}" if o.courier else "<span style='color:red'>🔴 Не призначено</span>"
+        
+        content = f"""
+        <div class="info-row"><i class="fa-solid fa-truck"></i> <b>{html.escape(o.address or 'Адреса не вказана')}</b></div>
+        <div class="info-row"><i class="fa-solid fa-user"></i> {courier_info}</div>
+        <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> {o.total_price} грн</div>
+        """
+        
+        # Кнопка управления
+        btns = f"<button class='action-btn' onclick=\"openOrderEditModal({o.id})\">⚙️ Призначити / Змінити</button>"
+        
+        res.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
+            id=o.id, 
+            time=o.created_at.strftime('%H:%M'), 
+            badge_class="warning" if not o.courier else "info", 
+            status=o.status.name, 
+            content=content, 
+            buttons=btns, 
+            color="#e67e22" if not o.courier else "#3498db"
+        )})
+    return res
+
+async def _get_general_orders(session: AsyncSession, employee: Employee):
+    """Все активные заказы для оператора."""
+    final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
+    
+    q = select(Order).options(
+        joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter), joinedload(Order.courier)
+    ).where(Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
 
     orders = (await session.execute(q)).scalars().all()
     res = []
     for o in orders:
         table_name = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
-        courier_info = f"🚴 {o.courier.full_name}" if o.courier else "🔴 Не призначено"
+        
+        extra_info = ""
+        if o.is_delivery:
+            courier_name = o.courier.full_name if o.courier else "Не призначено"
+            extra_info = f"<div class='info-row' style='font-size:0.85rem; color:#555;'>Кур'єр: {courier_name}</div>"
         
         content = f"""
         <div class="info-row"><i class="fa-solid fa-info-circle"></i> <b>{html.escape(table_name)}</b></div>
         <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> {o.total_price} грн</div>
+        {extra_info}
         """
         
-        if o.is_delivery:
-             content += f"<div class='info-row' style='font-size:0.85rem; color:#555;'>{courier_info}</div>"
-
-        btns = ""
-        # Если админ/оператор - кнопка управления
-        if employee.role.can_manage_orders:
-             btns += f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">⚙️ Керувати</button>"
-        else:
-             btns = f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">Інфо</button>"
+        btns = f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">⚙️ Керувати</button>"
         
         res.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
             id=o.id, 
