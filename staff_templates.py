@@ -129,6 +129,39 @@ STAFF_DASHBOARD_HTML = """
         .table-card {{ text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100px; }}
         .table-card .card-title {{ font-weight: 700; margin-bottom: 8px; font-size: 1.1rem; }}
         
+        /* GROUP HEADERS */
+        .table-group-header {{
+            background: #eee;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            color: #555;
+            margin: 15px 0 10px;
+            position: sticky;
+            top: 70px;
+            z-index: 90;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            display: flex; align-items: center; gap: 10px;
+        }}
+        
+        /* FINANCE CARDS */
+        .finance-card {{
+            background: var(--white);
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+        }}
+        .finance-header {{ font-size: 0.9rem; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }}
+        .finance-amount {{ font-size: 2.5rem; font-weight: 800; }}
+        .finance-amount.red-text {{ color: var(--red); }}
+        .finance-amount.green-text {{ color: var(--green); }}
+        
+        .debt-list {{ background: var(--white); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }}
+        .debt-item {{ display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #eee; }}
+        .debt-item:last-child {{ border-bottom: none; }}
+        
         .order-card {{ margin-bottom: 15px; border-left: 5px solid var(--primary); position: relative; background: var(--white); padding: 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
         .order-card .card-header {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; font-size: 0.9rem; color: #666; }}
         .order-card .order-id {{ font-size: 1.1rem; font-weight: 800; color: #333; }}
@@ -154,7 +187,13 @@ STAFF_DASHBOARD_HTML = """
         .notify-item.read {{ border-left-color: #ddd; opacity: 0.7; box-shadow: none; background: #fcfcfc; }}
         .notify-time {{ font-size: 0.75rem; color: #999; position: absolute; top: 15px; right: 15px; }}
         .notify-msg {{ padding-right: 30px; }}
-        .notify-dot {{ position: absolute; top: 2px; right: 50%; transform: translateX(50%); width: 8px; height: 8px; background: var(--red); border-radius: 50%; border: 2px solid #fff; }}
+        .notify-dot {{ position: absolute; top: 2px; right: 50%; transform: translateX(50%); width: 10px; height: 10px; background: var(--red); border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 5px rgba(0,0,0,0.2); }}
+
+        /* TOAST NOTIFICATION (SYSTEM) */
+        #toast-container {{ position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 2000; width: 90%; max-width: 400px; pointer-events: none; }}
+        .toast {{ background: #333; color: #fff; padding: 15px 20px; border-radius: 12px; margin-bottom: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); opacity: 0; transform: translateY(-20px); transition: all 0.3s ease; display: flex; align-items: center; gap: 10px; pointer-events: auto; }}
+        .toast.show {{ opacity: 1; transform: translateY(0); }}
+        .toast i {{ color: var(--orange); font-size: 1.2rem; }}
 
         /* BOTTOM NAV */
         .bottom-nav {{ position: fixed; bottom: 0; left: 0; width: 100%; background: var(--white); border-top: 1px solid #eee; display: flex; justify-content: space-around; padding: 8px 0; z-index: 500; padding-bottom: max(8px, env(safe-area-inset-bottom)); box-shadow: 0 -2px 10px rgba(0,0,0,0.03); }}
@@ -184,6 +223,8 @@ STAFF_DASHBOARD_HTML = """
 <body>
     {content}
     
+    <div id="toast-container"></div>
+
     <div id="staff-modal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
@@ -192,14 +233,15 @@ STAFF_DASHBOARD_HTML = """
     </div>
 
     <script>
-        let currentView = 'orders'; // Default
+        let currentView = 'orders'; 
         let currentTableId = null;
         let menuData = [];
         let cart = {{}}; 
         let editingOrderId = null;
         let currentStatusChangeId = null;
+        let lastNotificationCount = 0;
+        let wakeLock = null;
 
-        // Init
         document.addEventListener('DOMContentLoaded', () => {{
             const activeBtn = document.querySelector('.nav-item.active');
             if (activeBtn) {{
@@ -211,10 +253,84 @@ STAFF_DASHBOARD_HTML = """
             fetchData();
             updateNotifications();
             
-            // Polling intervals (опитування сервера)
-            setInterval(fetchData, 10000); // Дані кожні 10с
-            setInterval(updateNotifications, 15000); // Сповіщення кожні 15с
+            setInterval(fetchData, 7000); 
+            setInterval(updateNotifications, 4000); 
+            
+            document.addEventListener("visibilitychange", async () => {{
+                if (document.visibilityState === 'visible') {{
+                    requestWakeLock();
+                    updateNotifications();
+                }}
+            }});
+            
+            document.body.addEventListener('click', initNotifications, {{ once: true }});
         }});
+
+        function initNotifications() {{
+            if (!("Notification" in window)) return;
+            if (Notification.permission === "default") {{
+                Notification.requestPermission().then(permission => {{
+                    if (permission === "granted") {{
+                        new Notification("Staff App", {{ body: "Сповіщення увімкнено ✅" }});
+                    }}
+                }});
+            }}
+            requestWakeLock();
+        }}
+
+        function sendSystemNotification(text) {{
+            if (!("Notification" in window)) return;
+            
+            if (Notification.permission === "granted") {{
+                if (navigator.serviceWorker && navigator.serviceWorker.controller) {{
+                    navigator.serviceWorker.ready.then(registration => {{
+                        registration.showNotification("Staff Panel", {{
+                            body: text,
+                            icon: '/static/favicons/icon-192.png',
+                            vibrate: [200, 100, 200],
+                            tag: 'staff-notification',
+                            renotify: true
+                        }});
+                    }});
+                }} else {{
+                    try {{
+                        const notification = new Notification("Нове сповіщення", {{
+                            body: text,
+                            icon: '/static/favicons/icon-192.png',
+                            vibrate: [200, 100, 200]
+                        }});
+                        notification.onclick = function() {{ window.focus(); }};
+                    }} catch (e) {{ console.log(e); }}
+                }}
+            }}
+        }}
+
+        async function requestWakeLock() {{
+            try {{
+                if ('wakeLock' in navigator) {{
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake Lock active');
+                }}
+            }} catch (err) {{
+                console.log('Wake Lock error:', err);
+            }}
+        }}
+
+        function showToast(message) {{
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<i class="fa-solid fa-bell"></i> <span>${{message}}</span>`;
+            container.appendChild(toast);
+            
+            setTimeout(() => toast.classList.add('show'), 10);
+            if (navigator.vibrate) navigator.vibrate(200);
+            
+            setTimeout(() => {{
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }}, 5000);
+        }}
 
         function switchTab(view) {{
             currentView = view;
@@ -232,7 +348,6 @@ STAFF_DASHBOARD_HTML = """
 
         async function fetchData() {{
             if (currentView === 'notifications') return;
-            
             try {{
                 const response = await fetch(`/staff/api/data?view=${{currentView}}`);
                 if (!response.ok) throw new Error("Server error");
@@ -240,10 +355,7 @@ STAFF_DASHBOARD_HTML = """
                 
                 document.getElementById('loading-indicator').style.display = 'none';
                 document.getElementById('content-area').innerHTML = data.html;
-                
-            }} catch (e) {{ 
-                console.error("Fetch error:", e);
-            }}
+            }} catch (e) {{ console.error("Fetch error:", e); }}
         }}
 
         async function updateNotifications() {{
@@ -252,15 +364,22 @@ STAFF_DASHBOARD_HTML = """
                 const data = await res.json();
                 const badge = document.getElementById('nav-notify-badge');
                 
+                window.notificationsList = data.list;
+
                 if (data.unread_count > 0) {{
                     badge.style.display = 'block';
-                    // Вібрація для Android
-                    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+                    if (data.unread_count > lastNotificationCount) {{
+                        const newest = data.list[0];
+                        if (newest) {{
+                            showToast(newest.message);
+                            sendSystemNotification(newest.message);
+                        }}
+                    }}
                 }} else {{
                     badge.style.display = 'none';
                 }}
                 
-                window.notificationsList = data.list;
+                lastNotificationCount = data.unread_count;
                 if (currentView === 'notifications') renderNotifications();
             }} catch(e) {{}}
         }}
@@ -280,8 +399,6 @@ STAFF_DASHBOARD_HTML = """
                 html += `<div class="notify-item ${{cls}}"><div class="notify-msg">${{n.message}}</div><span class="notify-time">${{n.time}}</span></div>`;
             }});
             container.innerHTML = html;
-            
-            // Ховаємо бейдж
             document.getElementById('nav-notify-badge').style.display = 'none';
         }}
 
@@ -292,19 +409,15 @@ STAFF_DASHBOARD_HTML = """
             if (data.status === 'ok') location.reload();
         }}
 
-        // --- EDIT ORDER MODAL ---
         async function openOrderEditModal(orderId) {{
             editingOrderId = orderId;
             const modal = document.getElementById('staff-modal');
             const body = document.getElementById('modal-body');
-            
             body.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження...</div>';
             modal.classList.add('active');
-
             try {{
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
                 const data = await res.json();
-                
                 let itemsHtml = `<div class="edit-list">`;
                 data.items.forEach(item => {{
                     itemsHtml += `
@@ -319,12 +432,10 @@ STAFF_DASHBOARD_HTML = """
                 }});
                 itemsHtml += `</div>`;
                 itemsHtml += `<button class="action-btn secondary" style="width:100%; justify-content:center;" onclick="openAddProductModal()"><i class="fa-solid fa-plus"></i> Додати страву</button>`;
-
                 let statusOptions = "";
                 data.statuses.forEach(s => {{
                     statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
                 }});
-
                 body.innerHTML = `
                     <h3 style="margin-top:0;">Замовлення #${{orderId}}</h3>
                     <div style="margin-bottom:20px; background:#f9f9f9; padding:10px; border-radius:8px;">
@@ -333,21 +444,16 @@ STAFF_DASHBOARD_HTML = """
                             ${{statusOptions}}
                         </select>
                     </div>
-                    
                     <h4 style="margin-bottom:10px;">Склад:</h4>
                     ${{itemsHtml}}
-                    
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:20px; font-size:1.2rem; font-weight:bold;">
                         <span>Разом:</span>
                         <span>${{data.total}} грн</span>
                     </div>
-                    
                     <button class="big-btn" onclick="saveOrderChanges()">Зберегти зміни</button>
                 `;
-                
                 cart = {{}};
                 data.items.forEach(i => cart[i.id] = {{ qty: i.qty, id: i.id }});
-
             }} catch (e) {{
                 body.innerHTML = "Помилка: " + e.message;
             }}
@@ -357,7 +463,6 @@ STAFF_DASHBOARD_HTML = """
             if (cart[prodId]) {{
                 cart[prodId].qty += delta;
                 if (cart[prodId].qty <= 0) delete cart[prodId];
-                
                 const qtySpan = document.getElementById(`qty-${{prodId}}`);
                 if (qtySpan) qtySpan.innerText = cart[prodId] ? cart[prodId].qty : 0;
             }}
@@ -367,7 +472,6 @@ STAFF_DASHBOARD_HTML = """
             const newStatusId = selectElem.value;
             const option = selectElem.options[selectElem.selectedIndex];
             const isCompleted = option.getAttribute('data-completed') === 'true';
-
             if (isCompleted) {{
                 currentStatusChangeId = newStatusId;
                 const body = document.getElementById('modal-body');
@@ -416,19 +520,16 @@ STAFF_DASHBOARD_HTML = """
         async function openAddProductModal() {{
             const body = document.getElementById('modal-body');
             body.innerHTML = '<div style="text-align:center; padding:20px;">Завантаження меню...</div>';
-            
             if (menuData.length === 0) {{
                 const res = await fetch('/staff/api/menu/full');
                 menuData = await res.json();
             }}
-            
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:15px;">
                     <h3 style="margin:0;">Меню</h3>
                     <button onclick="openOrderEditModal(editingOrderId)" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
                 </div>
                 <div class="edit-list" style="max-height:60vh;">`;
-            
             menuData.forEach(cat => {{
                 html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
                 cat.products.forEach(p => {{
@@ -454,7 +555,6 @@ STAFF_DASHBOARD_HTML = """
 
         function performAction(action, orderId, extra=null) {{
             if(action === 'chef_ready' && !confirm("Підтвердити готовність?")) return;
-            
             fetch('/staff/api/action', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
@@ -482,12 +582,10 @@ STAFF_DASHBOARD_HTML = """
         async function createNewOrderMenu() {{
              const body = document.getElementById('modal-body');
              body.innerHTML = '<div style="text-align:center; padding:20px;">Завантаження...</div>';
-             
              if (menuData.length === 0) {{
                 const res = await fetch('/staff/api/menu/full');
                 menuData = await res.json();
             }}
-            
             let html = `<h3 style="margin-top:0;">Створення замовлення</h3><div class="edit-list" style="max-height:55vh;">`;
             menuData.forEach(cat => {{
                 html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
@@ -518,11 +616,9 @@ STAFF_DASHBOARD_HTML = """
         async function submitNewOrder() {{
             const items = Object.values(cart).filter(i => i.qty > 0);
             if(items.length === 0) return alert("Кошик порожній");
-            
             const btn = event.currentTarget;
             btn.disabled = true;
             btn.innerText = "Створення...";
-            
             try {{
                 await fetch('/staff/api/order/create', {{
                     method: 'POST',

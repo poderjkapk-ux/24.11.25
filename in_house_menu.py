@@ -17,7 +17,8 @@ from urllib.parse import quote_plus as url_quote_plus
 from models import Table, Product, Category, Order, Settings, Employee, OrderStatusHistory, OrderStatus, OrderItem
 from dependencies import get_db_session
 from templates import IN_HOUSE_MENU_HTML_TEMPLATE
-from notification_manager import distribute_order_to_production
+# --- ИЗМЕНЕНИЕ: Добавлен импорт create_staff_notification ---
+from notification_manager import distribute_order_to_production, create_staff_notification
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -211,6 +212,13 @@ async def call_waiter(
     waiters = table.assigned_waiters
     message_text = f"❗️ <b>Виклик зі столика: {html_module.escape(table.name)}</b>"
     
+    # --- PWA NOTIFICATION START (Виклик офіціанта) ---
+    pwa_msg = f"🔔 Вас викликають до столика: {table.name}"
+    for w in waiters:
+        if w.is_on_shift:
+            await create_staff_notification(session, w.id, pwa_msg)
+    # --- PWA NOTIFICATION END ---
+
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     admin_bot = request.app.state.admin_bot
     
@@ -269,6 +277,13 @@ async def request_bill(
     message_text = (f"💰 <b>Запит на розрахунок ({method_text})</b>\n"
                     f"Столик: {html_module.escape(table.name)}\n"
                     f"Сума до сплати: <b>{total_bill} грн</b>")
+
+    # --- PWA NOTIFICATION START (Запит рахунку) ---
+    pwa_msg = f"💰 Просять рахунок ({method_text}): Стіл {table.name}. Сума: {total_bill} грн"
+    for w in waiters:
+        if w.is_on_shift:
+            await create_staff_notification(session, w.id, pwa_msg)
+    # --- PWA NOTIFICATION END ---
 
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     admin_bot = request.app.state.admin_bot
@@ -359,6 +374,14 @@ async def place_in_house_order(
     await session.commit()
     await session.refresh(order)
     await session.refresh(order, ['status'])
+
+    # --- PWA NOTIFICATION START (Нове замовлення для офіціанта) ---
+    # Сповіщаємо всіх закріплених офіціантів
+    pwa_msg = f"📝 Нове замовлення #{order.id} (Стіл: {table.name}). Сума: {total_price} грн"
+    for w in table.assigned_waiters:
+        if w.is_on_shift:
+            await create_staff_notification(session, w.id, pwa_msg)
+    # --- PWA NOTIFICATION END ---
 
     history_entry = OrderStatusHistory(
         order_id=order.id, status_id=order.status_id,

@@ -15,8 +15,8 @@ async def create_staff_notification(session: AsyncSession, employee_id: int, mes
     """Создает уведомление в БД для PWA"""
     try:
         session.add(StaffNotification(employee_id=employee_id, message=message))
-        # Мы не делаем commit здесь, чтобы использовать транзакцию вызывающего кода.
-        # Коммит данных произойдет вместе с основным изменением (например, сменой статуса).
+        # ИСПРАВЛЕНИЕ: Делаем коммит, чтобы уведомление сохранилось мгновенно
+        await session.commit() 
     except Exception as e:
         logger.error(f"Error creating PWA notification: {e}")
 

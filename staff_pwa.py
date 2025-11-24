@@ -17,7 +17,7 @@ from models import (
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
-# Импорт шаблонов (Убедитесь, что файл staff_templates.py создан)
+# Импорт шаблонов
 from staff_templates import (
     STAFF_LOGIN_HTML, STAFF_DASHBOARD_HTML, 
     STAFF_TABLE_CARD, STAFF_ORDER_CARD
@@ -58,10 +58,8 @@ async def login_action(
     session: AsyncSession = Depends(get_db_session)
 ):
     """Обработка входа сотрудника."""
-    # Очистка телефона от лишних символов
     clean_phone = ''.join(filter(str.isdigit, phone))
     
-    # Поиск сотрудника
     result = await session.execute(
         select(Employee).where(Employee.phone_number.ilike(f"%{clean_phone}%"))
     )
@@ -70,26 +68,20 @@ async def login_action(
     if not employee:
         return HTMLResponse("Користувача не знайдено", status_code=400)
     
-    # Проверка пароля
     if not employee.password_hash:
-        # Временный вход, если пароль не задан (для первого запуска)
-        if password == "admin": 
-            pass 
-        else: 
-            return HTMLResponse("Пароль ще не встановлено. Спробуйте 'admin' або зверніться до адміністратора.", status_code=400)
+        if password == "admin": pass 
+        else: return HTMLResponse("Пароль ще не встановлено.", status_code=400)
     elif not verify_password(password, employee.password_hash):
         return HTMLResponse("Невірний пароль", status_code=400)
 
-    # Создание токена
     access_token = create_access_token(data={"sub": str(employee.id)})
     
-    # Установка куки и редирект
     response = RedirectResponse(url="/staff/dashboard", status_code=303)
     response.set_cookie(
         key="staff_access_token", 
         value=access_token, 
         httponly=True, 
-        max_age=60*60*12, # 12 часов
+        max_age=60*60*12,
         samesite="lax"
     )
     return response
@@ -109,45 +101,42 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
     try:
         employee = await get_current_staff(request, session)
     except HTTPException:
-        # Если токен невалиден - редирект на логин
         response = RedirectResponse(url="/staff/login", status_code=303)
         response.delete_cookie("staff_access_token")
         return response
 
     settings = await session.get(Settings, 1) or Settings()
     
-    # Подгружаем роль, если она не загружена
     if 'role' not in employee.__dict__:
         await session.refresh(employee, ['role'])
 
-    # Настройка кнопки смены
     shift_btn_class = "on" if employee.is_on_shift else "off"
     shift_btn_text = "🟢 На зміні" if employee.is_on_shift else "🔴 Почати зміну"
 
-    # Генерация вкладок навигации в зависимости от роли
+    # Генерация вкладок навигации
     tabs_html = ""
     
     if employee.role.can_serve_tables:
-        # Официант: Столы, Заказы
+        # Официант: Столы, Заказы, Финансы
         tabs_html += '<button class="nav-item active" onclick="switchTab(\'tables\')"><i class="fa-solid fa-chair"></i> Столи</button>'
         tabs_html += '<button class="nav-item" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Замовлення</button>'
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
     
     elif employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders:
-        # Повар/Бармен: Очередь
+        # Повар/Бармен
         tabs_html += '<button class="nav-item active" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
     
     elif employee.role.can_be_assigned:
-        # Курьер: Доставка
+        # Курьер
         tabs_html += '<button class="nav-item active" onclick="switchTab(\'delivery\')"><i class="fa-solid fa-motorcycle"></i> Доставка</button>'
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
     
     else: 
-        # Админ/Оператор: Все заказы
+        # Админ
         tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-check"></i> Всі</button>'
 
-    # Вкладка уведомлений (для всех)
     tabs_html += '<button class="nav-item" onclick="switchTab(\'notifications\')" style="position:relative;"><i class="fa-solid fa-bell"></i> Інфо<span id="nav-notify-badge" class="notify-dot" style="display:none;"></span></button>'
 
-    # Сборка контента страницы
     content = f"""
     <div class="dashboard-header">
         <div class="user-info">
@@ -168,7 +157,6 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
     </div>
     """
     
-    # Возврат полного HTML, используя шаблон
     return STAFF_DASHBOARD_HTML.format(
         site_title=settings.site_title or "Staff App",
         content=content
@@ -176,10 +164,7 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
 
 @router.get("/manifest.json")
 async def get_manifest(session: AsyncSession = Depends(get_db_session)):
-    """Генерация манифеста для PWA (установка на экран)."""
     settings = await session.get(Settings, 1) or Settings()
-    
-    # Иконки должны физически существовать в папке static/favicons/
     return JSONResponse({
         "name": f"{settings.site_title} Staff",
         "short_name": "Staff",
@@ -190,8 +175,7 @@ async def get_manifest(session: AsyncSession = Depends(get_db_session)):
         "icons": [
             {"src": "/static/favicons/icon-192.png", "sizes": "192x192", "type": "image/png"},
             {"src": "/static/favicons/icon-512.png", "sizes": "512x512", "type": "image/png"},
-            {"src": "/static/favicons/apple-touch-icon.png", "sizes": "180x180", "type": "image/png"},
-            {"src": "/static/favicons/favicon-32x32.png", "sizes": "32x32", "type": "image/png"}
+            {"src": "/static/favicons/apple-touch-icon.png", "sizes": "180x180", "type": "image/png"}
         ]
     })
 
@@ -199,14 +183,12 @@ async def get_manifest(session: AsyncSession = Depends(get_db_session)):
 
 @router.post("/api/shift/toggle")
 async def toggle_shift_api(session: AsyncSession = Depends(get_db_session), employee: Employee = Depends(get_current_staff)):
-    """Переключение статуса смены (На смене / Не на смене)."""
     employee.is_on_shift = not employee.is_on_shift
     await session.commit()
     return JSONResponse({"status": "ok", "is_on_shift": employee.is_on_shift})
 
 @router.get("/api/notifications")
 async def get_notifications_api(session: AsyncSession = Depends(get_db_session), employee: Employee = Depends(get_current_staff)):
-    """Получение уведомлений для polling."""
     notifs = (await session.execute(
         select(StaffNotification)
         .where(StaffNotification.employee_id == employee.id)
@@ -224,7 +206,6 @@ async def get_notifications_api(session: AsyncSession = Depends(get_db_session),
             "time": n.created_at.strftime("%d.%m %H:%M"), 
             "is_read": n.is_read
         })
-        # Помечаем как прочитанные при получении списка
         if not n.is_read: 
             n.is_read = True
     
@@ -244,7 +225,7 @@ async def get_staff_data(
         if not employee.is_on_shift:
             return JSONResponse({"html": "<div class='empty-state'><i class='fa-solid fa-power-off'></i>🔴 Ви не на зміні. <br>Натисніть кнопку зверху для початку роботи.</div>"})
 
-        # --- Вкладка СТОЛЫ (Официант) ---
+        # --- Вкладка СТОЛЫ ---
         if view == "tables" and employee.role.can_serve_tables:
             tables = (await session.execute(
                 select(Table)
@@ -278,24 +259,32 @@ async def get_staff_data(
             html_content += "</div>"
             return JSONResponse({"html": html_content})
 
-        # --- Вкладка ПРОИЗВОДСТВО (Кухня/Бар) ---
+        # --- Вкладка ЗАКАЗЫ (Официант - с группировкой и суммами) ---
+        elif view == "orders" and employee.role.can_serve_tables:
+            orders_html = await _get_waiter_orders_grouped(session, employee)
+            return JSONResponse({"html": orders_html if orders_html else "<div class='empty-state'><i class='fa-solid fa-utensils'></i>Активних замовлень немає.</div>"})
+
+        # --- Вкладка ФИНАНСЫ (Официант/Курьер) ---
+        elif view == "finance" and (employee.role.can_serve_tables or employee.role.can_be_assigned):
+            finance_html = await _get_finance_details(session, employee)
+            return JSONResponse({"html": finance_html})
+
+        # --- Вкладка ПРОИЗВОДСТВО ---
         elif view == "production":
             orders_data = await _get_production_orders(session, employee)
             return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-check-double'></i>Черга пуста.</div>"})
 
-        # --- Вкладка ДОСТАВКА (Курьер) ---
+        # --- Вкладка ДОСТАВКА ---
         elif view == "delivery" and employee.role.can_be_assigned:
             orders_data = await _get_courier_orders(session, employee)
             return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-solid fa-motorcycle'></i>Немає призначених замовлень.</div>"})
 
-        # --- Вкладка ВСЕ ЗАКАЗЫ (Админ/Оператор) ---
+        # --- Вкладка ВСЕ ЗАКАЗЫ (Админ) ---
         elif view == "orders":
             orders_data = await _get_general_orders(session, employee)
             return JSONResponse({"html": "".join([o["html"] for o in orders_data]) if orders_data else "<div class='empty-state'><i class='fa-regular fa-folder-open'></i>Активних замовлень немає.</div>"})
         
-        # --- Вкладка УВЕДОМЛЕНИЯ ---
         elif view == "notifications":
-            # Контент подгрузится через функцию renderNotifications() на клиенте
             return JSONResponse({"html": "<div id='notification-list-container' style='text-align:center; color:#999;'>Оновлення...</div>"})
 
         return JSONResponse({"html": "<div class='empty-state'>Невідомий режим перегляду.</div>"})
@@ -304,12 +293,130 @@ async def get_staff_data(
         logger.error(f"API Error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПОЛУЧЕНИЯ ДАННЫХ ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
+    """Группировка заказов по столикам для официанта с подсчетом общей суммы."""
+    final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
+    
+    # Получаем заказы (закрепленные за официантом или его столами)
+    tables_sub = select(Table.id).where(Table.assigned_waiters.any(Employee.id == employee.id))
+    
+    q = select(Order).options(
+        joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter)
+    ).where(
+        Order.status_id.not_in(final_ids),
+        or_(Order.accepted_by_waiter_id == employee.id, Order.table_id.in_(tables_sub))
+    ).order_by(Order.table_id, Order.id.desc())
+
+    orders = (await session.execute(q)).scalars().all()
+    
+    if not orders: return ""
+
+    # Сначала группируем в памяти, чтобы посчитать сумму
+    grouped_orders = {} # { table_id: { "name": ..., "orders": [], "total": 0 } }
+    
+    for o in orders:
+        t_id = o.table_id if o.table_id else 0 # 0 для 'Без столика'
+        if t_id not in grouped_orders:
+            t_name = o.table.name if o.table else "Інше / Самовивіз"
+            grouped_orders[t_id] = {"name": t_name, "orders": [], "total": Decimal(0)}
+        
+        grouped_orders[t_id]["orders"].append(o)
+        grouped_orders[t_id]["total"] += o.total_price
+
+    html_out = ""
+    
+    # Теперь генерируем HTML
+    for t_id, group in grouped_orders.items():
+        # Красивый заголовок с суммой
+        html_out += f"""
+        <div class='table-group-header' style="justify-content: space-between;">
+            <span><i class='fa-solid fa-chair'></i> {html.escape(group['name'])}</span>
+            <span class="badge warning" style="font-size:0.9em; color:#333;">Σ {group['total']:.2f} грн</span>
+        </div>
+        """
+
+        for o in group['orders']:
+            content = f"""
+            <div class="info-row"><i class="fa-solid fa-clock"></i> {o.created_at.strftime('%H:%M')}</div>
+            <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> <b>{o.total_price} грн</b></div>
+            """
+            
+            btns = ""
+            if not o.accepted_by_waiter_id: 
+                btns += f"<button class='action-btn' onclick=\"performAction('accept_order', {o.id})\">🙋 Прийняти</button>"
+            else: 
+                btns += f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">✏️ Деталі / Оплата</button>"
+            
+            badge_class = "success" if o.status.name == "Готовий до видачі" else "info"
+            color = "#27ae60" if o.status.name == "Готовий до видачі" else "#333"
+
+            html_out += STAFF_ORDER_CARD.format(
+                id=o.id, 
+                time=o.created_at.strftime('%H:%M'), 
+                badge_class=badge_class, 
+                status=o.status.name, 
+                content=content, 
+                buttons=btns, 
+                color=color
+            )
+        
+    return html_out
+
+async def _get_finance_details(session: AsyncSession, employee: Employee):
+    """Детализация долга сотрудника."""
+    current_debt = employee.cash_balance
+    
+    # Ищем завершенные заказы, которые висят на сотруднике и не сданы (только наличка)
+    q = select(Order).options(joinedload(Order.table)).where(
+        or_(
+            Order.accepted_by_waiter_id == employee.id,
+            Order.courier_id == employee.id
+        ),
+        Order.payment_method == 'cash',
+        Order.is_cash_turned_in == False,
+        Order.status.has(is_completed_status=True)
+    ).order_by(Order.id.desc())
+    
+    orders = (await session.execute(q)).scalars().all()
+    
+    list_html = ""
+    for o in orders:
+        target = o.table.name if o.table else (o.address or "Самовивіз")
+        list_html += f"""
+        <div class="debt-item">
+            <div>
+                <div style="font-weight:bold;">#{o.id} - {html.escape(target)}</div>
+                <div style="font-size:0.8rem; color:#777;">{o.created_at.strftime('%d.%m %H:%M')}</div>
+            </div>
+            <div style="font-weight:bold; color:#e74c3c;">{o.total_price} грн</div>
+        </div>
+        """
+    
+    if not list_html:
+        list_html = "<div style='text-align:center; color:#999; padding:20px;'>Немає незакритих чеків</div>"
+
+    color_class = "red-text" if current_debt > 0 else "green-text"
+    
+    return f"""
+    <div class="finance-card">
+        <div class="finance-header">Ваш баланс (Борг)</div>
+        <div class="finance-amount {color_class}">{current_debt:.2f} грн</div>
+        <div style="font-size:0.9rem; color:#666; margin-top:5px;">Готівка на руках</div>
+    </div>
+    
+    <h4 style="margin: 20px 0 10px; padding-left: 5px;">Деталізація (Не здані в касу):</h4>
+    <div class="debt-list">
+        {list_html}
+    </div>
+    <div style="text-align:center; margin-top:20px; font-size:0.85rem; color:#888;">
+        Щоб здати гроші, зверніться до адміністратора.
+    </div>
+    """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
-    """Генерация карточек для Кухни и Бара."""
     orders_data = []
-    
     # Кухня
     if employee.role.can_receive_kitchen_orders:
         status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))).scalars().all()
@@ -358,7 +465,6 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
     return orders_data
 
 async def _get_courier_orders(session: AsyncSession, employee: Employee):
-    """Генерация карточек для Курьера."""
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
     q = select(Order).options(joinedload(Order.status), selectinload(Order.items)).where(Order.courier_id == employee.id, Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
     orders = (await session.execute(q)).scalars().all()
@@ -383,11 +489,9 @@ async def _get_courier_orders(session: AsyncSession, employee: Employee):
     return res
 
 async def _get_general_orders(session: AsyncSession, employee: Employee):
-    """Генерация карточек для Админа/Официанта."""
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
     q = select(Order).options(joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter)).where(Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
 
-    # Если официант, показываем его заказы + заказы его столов
     if employee.role.can_serve_tables:
         tables_sub = select(Table.id).where(Table.assigned_waiters.any(Employee.id == employee.id))
         q = q.where(or_(Order.accepted_by_waiter_id == employee.id, Order.table_id.in_(tables_sub)))
@@ -420,15 +524,11 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
         )})
     return res
 
-# --- МЕТОДЫ ДЕТАЛЕЙ И ОБНОВЛЕНИЯ ---
-
 @router.get("/api/order/{order_id}/details")
 async def get_order_details(order_id: int, session: AsyncSession = Depends(get_db_session), employee: Employee = Depends(get_current_staff)):
-    """API: Получение деталей заказа для модального окна."""
     order = await session.get(Order, order_id, options=[selectinload(Order.items), joinedload(Order.status)])
     if not order: return JSONResponse({"error": "Not found"}, status_code=404)
     
-    # Фильтрация статусов в зависимости от роли
     status_query = select(OrderStatus)
     if employee.role.can_manage_orders:
         status_query = status_query.where(OrderStatus.visible_to_operator == True)
@@ -462,7 +562,6 @@ async def update_order_status_api(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """API: Обновление статуса заказа."""
     data = await request.json()
     order_id = int(data.get("orderId"))
     new_status_id = int(data.get("statusId"))
@@ -478,7 +577,6 @@ async def update_order_status_api(
     if payment_method:
         order.payment_method = payment_method
 
-    # Кассовая логика при закрытии
     if new_status.is_completed_status:
         await link_order_to_shift(session, order, employee.id)
         if order.payment_method == 'cash':
@@ -499,7 +597,7 @@ async def update_order_items_api(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """API: Обновление состава заказа."""
+    from sqlalchemy import delete
     data = await request.json()
     order_id = int(data.get("orderId"))
     items = data.get("items")
@@ -508,7 +606,6 @@ async def update_order_items_api(
     if not order: return JSONResponse({"error": "Not found"}, 404)
     if order.status.is_completed_status: return JSONResponse({"error": "Order closed"}, 400)
     
-    # Удаляем старые, добавляем новые (простой способ обновления)
     await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
     
     total_price = Decimal(0)
@@ -541,7 +638,6 @@ async def handle_action_api(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """API: Выполнение быстрых действий (готовность, принятие)."""
     try:
         data = await request.json()
         action = data.get("action")
@@ -561,7 +657,6 @@ async def handle_action_api(
         elif action == "accept_order":
             if order.accepted_by_waiter_id: return JSONResponse({"error": "Уже занято"}, status_code=400)
             order.accepted_by_waiter_id = employee.id
-            # Меняем статус на "В обробці"
             proc_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "В обробці").limit(1))
             if proc_status:
                 order.status_id = proc_status.id
@@ -576,7 +671,6 @@ async def handle_action_api(
 
 @router.get("/api/menu/full")
 async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
-    """API: Полное меню для добавления блюд в заказ."""
     cats = (await session.execute(select(Category).where(Category.show_in_restaurant==True).order_by(Category.sort_order))).scalars().all()
     menu = []
     for c in cats:
@@ -594,7 +688,6 @@ async def create_waiter_order(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """API: Создание нового заказа официантом."""
     try:
         data = await request.json()
         table_id = int(data.get("tableId"))
