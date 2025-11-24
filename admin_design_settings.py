@@ -4,13 +4,13 @@ import html
 import os
 import secrets
 import aiofiles
+import logging
 from fastapi import APIRouter, Depends, Form, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from models import Settings
-# Тепер імпортуємо і ADMIN_DESIGN_SETTINGS_BODY, оскільки ми перенесли його в templates.py
 from templates import ADMIN_HTML_TEMPLATE, ADMIN_DESIGN_SETTINGS_BODY
 from dependencies import get_db_session, check_credentials
 
@@ -125,8 +125,18 @@ async def save_design_settings(
     category_nav_text_color: str = Form("#333333"),
     # -----------------
 
-    # --- Зображення шапки ---
+    # --- Зображення та іконки ---
     header_image_file: UploadFile = File(None),
+    logo_file: UploadFile = File(None),
+    apple_touch_icon: UploadFile = File(None),
+    favicon_32x32: UploadFile = File(None),
+    favicon_16x16: UploadFile = File(None),
+    favicon_ico: UploadFile = File(None),
+    site_webmanifest: UploadFile = File(None),
+    
+    # --- PWA Android Icons (НОВІ ПОЛЯ) ---
+    icon_192: UploadFile = File(None),
+    icon_512: UploadFile = File(None),
     
     # --- Підвал та контакти ---
     footer_address: str = Form(""),
@@ -165,27 +175,62 @@ async def save_design_settings(
     settings.category_nav_text_color = category_nav_text_color
     # --------------------------------
 
-    # --- Обробка зображення шапки ---
+    # --- Обробка ЛОГОТИПУ ---
+    if logo_file and logo_file.filename:
+        if settings.logo_url and os.path.exists(settings.logo_url):
+            try:
+                os.remove(settings.logo_url)
+            except OSError: pass
+        
+        ext = logo_file.filename.split('.')[-1] if '.' in logo_file.filename else 'jpg'
+        filename = f"logo_{secrets.token_hex(8)}.{ext}"
+        path = os.path.join("static/images", filename)
+        try:
+            async with aiofiles.open(path, 'wb') as f:
+                await f.write(await logo_file.read())
+            settings.logo_url = path
+        except Exception as e:
+            print(f"Error saving logo: {e}")
+
+    # --- Обробка зображення ШАПКИ ---
     if header_image_file and header_image_file.filename:
-        # Видаляємо старе зображення, якщо воно є
         if settings.header_image_url and os.path.exists(settings.header_image_url):
             try:
                 os.remove(settings.header_image_url)
-            except OSError:
-                pass
+            except OSError: pass
         
-        # Зберігаємо нове
         ext = header_image_file.filename.split('.')[-1] if '.' in header_image_file.filename else 'jpg'
         filename = f"header_bg_{secrets.token_hex(8)}.{ext}"
         path = os.path.join("static/images", filename)
-        
         try:
             async with aiofiles.open(path, 'wb') as f:
                 await f.write(await header_image_file.read())
             settings.header_image_url = path
         except Exception as e:
             print(f"Error saving header image: {e}")
-    # --------------------------------
+    
+    # --- Збереження ФАВІКОНІВ та PWA іконок ---
+    favicon_dir = "static/favicons"
+    os.makedirs(favicon_dir, exist_ok=True)
+    
+    # Словник файлів для збереження
+    icons_to_save = {
+        "apple-touch-icon.png": apple_touch_icon,
+        "favicon-32x32.png": favicon_32x32,
+        "favicon-16x16.png": favicon_16x16,
+        "favicon.ico": favicon_ico,
+        "site.webmanifest": site_webmanifest,
+        "icon-192.png": icon_192, # <--- PWA Android
+        "icon-512.png": icon_512  # <--- PWA Android
+    }
+
+    for name, file_obj in icons_to_save.items():
+        if file_obj and file_obj.filename:
+            try:
+                async with aiofiles.open(os.path.join(favicon_dir, name), 'wb') as f:
+                    await f.write(await file_obj.read())
+            except Exception as e:
+                print(f"Error saving icon {name}: {e}")
 
     # --- Збереження контактів та Wi-Fi ---
     settings.footer_address = footer_address
