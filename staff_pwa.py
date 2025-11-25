@@ -6,7 +6,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, delete
 from sqlalchemy.orm import joinedload, selectinload
 
 # Импорт моделей и зависимостей
@@ -35,6 +35,28 @@ from cash_service import link_order_to_shift, register_employee_debt
 # Настройка роутера и логгера
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
 logger = logging.getLogger(__name__)
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+def check_edit_permissions(employee: Employee, order: Order) -> bool:
+    """
+    Проверяет, имеет ли сотрудник право редактировать состав заказа.
+    """
+    # 1. Админ/Оператор может всё
+    if employee.role.can_manage_orders:
+        return True
+    
+    # 2. Официант может редактировать только СВОИ заказы (или заказы со своих столов, если еще не приняты)
+    if employee.role.can_serve_tables:
+        # Если заказ "in_house" и принят этим официантом
+        if order.accepted_by_waiter_id == employee.id:
+            return True
+        # Если заказ "in_house", никем не принят (разрешаем редактировать/принимать)
+        if order.order_type == 'in_house' and order.accepted_by_waiter_id is None:
+            return True
+            
+    # 3. Курьеры, Повара, Бармены не могут менять состав заказа
+    return False
 
 # --- АВТОРИЗАЦИЯ ---
 
@@ -623,8 +645,17 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         status_query = status_query.where(OrderStatus.visible_to_courier == True)
     elif employee.role.can_serve_tables:
         status_query = status_query.where(OrderStatus.visible_to_waiter == True)
+    else:
+        # Для остальных ролей показываем только текущий статус
+        status_query = status_query.where(OrderStatus.id == order.status_id)
     
     statuses = (await session.execute(status_query.order_by(OrderStatus.id))).scalars().all()
+    
+    # Убедимся, что текущий статус есть в списке
+    if order.status_id not in [s.id for s in statuses]:
+        current_s = await session.get(OrderStatus, order.status_id)
+        if current_s: statuses.append(current_s)
+
     status_list = [{"id": s.id, "name": s.name, "selected": s.id == order.status_id, "is_completed": s.is_completed_status} for s in statuses]
 
     items = [{"id": i.product_id, "name": i.product_name, "qty": i.quantity, "price": float(i.price_at_moment)} for i in order.items]
@@ -646,7 +677,8 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         "status_id": order.status_id,
         "is_delivery": order.is_delivery,
         "couriers": couriers_list,
-        "can_assign_courier": employee.role.can_manage_orders
+        "can_assign_courier": employee.role.can_manage_orders,
+        "can_edit_items": check_edit_permissions(employee, order) # Флаг для UI
     })
 
 @router.post("/api/order/assign_courier")
@@ -699,6 +731,15 @@ async def update_order_status_api(
     order = await session.get(Order, order_id, options=[joinedload(Order.status)])
     if not order: return JSONResponse({"error": "Not found"}, 404)
     
+    # ПРОВЕРКА ПРАВ
+    can_edit = False
+    if employee.role.can_manage_orders: can_edit = True
+    elif employee.role.can_serve_tables and order.accepted_by_waiter_id == employee.id: can_edit = True
+    elif employee.role.can_be_assigned and order.courier_id == employee.id: can_edit = True
+    
+    if not can_edit:
+         return JSONResponse({"error": "Немає прав"}, 403)
+
     old_status = order.status.name
     new_status = await session.get(OrderStatus, new_status_id)
     order.status_id = new_status_id
@@ -706,10 +747,17 @@ async def update_order_status_api(
     if payment_method:
         order.payment_method = payment_method
 
+    # Логика кассы
     if new_status.is_completed_status:
         await link_order_to_shift(session, order, employee.id)
         if order.payment_method == 'cash':
-            await register_employee_debt(session, order, employee.id)
+            # Определяем должника
+            debtor_id = employee.id
+            if employee.role.can_manage_orders:
+                if order.courier_id: debtor_id = order.courier_id
+                elif order.accepted_by_waiter_id: debtor_id = order.accepted_by_waiter_id
+            
+            await register_employee_debt(session, order, debtor_id)
 
     session.add(OrderStatusHistory(order_id=order.id, status_id=new_status_id, actor_info=f"{employee.full_name} (PWA)"))
     await session.commit()
@@ -726,36 +774,44 @@ async def update_order_items_api(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    from sqlalchemy import delete
     data = await request.json()
     order_id = int(data.get("orderId"))
     items = data.get("items")
     
     order = await session.get(Order, order_id)
     if not order: return JSONResponse({"error": "Not found"}, 404)
-    if order.status.is_completed_status: return JSONResponse({"error": "Order closed"}, 400)
     
+    # 1. ПРОВЕРКА ПРАВ
+    if not check_edit_permissions(employee, order):
+        return JSONResponse({"error": "Немає прав на редагування"}, 403)
+
+    # 2. ПРОВЕРКА СТАТУСА
+    if order.status.is_completed_status or order.status.is_cancelled_status:
+        return JSONResponse({"error": "Order closed"}, 400)
+    
+    # 3. ОБНОВЛЕНИЕ ТОВАРОВ
     await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
     
     total_price = Decimal(0)
-    prod_ids = [int(i['id']) for i in items]
-    products = (await session.execute(select(Product).where(Product.id.in_(prod_ids)))).scalars().all()
-    prod_map = {p.id: p for p in products}
-    
-    for item in items:
-        pid = int(item['id'])
-        qty = int(item['qty'])
-        if pid in prod_map and qty > 0:
-            p = prod_map[pid]
-            total_price += p.price * qty
-            session.add(OrderItem(
-                order_id=order_id,
-                product_id=p.id,
-                product_name=p.name,
-                quantity=qty,
-                price_at_moment=p.price,
-                preparation_area=p.preparation_area
-            ))
+    if items:
+        prod_ids = [int(i['id']) for i in items]
+        products = (await session.execute(select(Product).where(Product.id.in_(prod_ids)))).scalars().all()
+        prod_map = {p.id: p for p in products}
+        
+        for item in items:
+            pid = int(item['id'])
+            qty = int(item['qty'])
+            if pid in prod_map and qty > 0:
+                p = prod_map[pid]
+                total_price += p.price * qty
+                session.add(OrderItem(
+                    order_id=order_id,
+                    product_id=p.id,
+                    product_name=p.name,
+                    quantity=qty,
+                    price_at_moment=p.price,
+                    preparation_area=p.preparation_area
+                ))
             
     order.total_price = total_price
     await session.commit()
@@ -777,6 +833,10 @@ async def handle_action_api(
         if not order: return JSONResponse({"error": "Not found"}, status_code=404)
 
         if action == "chef_ready":
+            # Проверка прав кухни/бара
+            if extra == 'kitchen' and not employee.role.can_receive_kitchen_orders: return JSONResponse({"error": "Forbidden"}, 403)
+            if extra == 'bar' and not employee.role.can_receive_bar_orders: return JSONResponse({"error": "Forbidden"}, 403)
+
             if extra == 'kitchen': order.kitchen_done = True
             elif extra == 'bar': order.bar_done = True
             await notify_station_completion(request.app.state.admin_bot, order, extra, session)
@@ -784,7 +844,9 @@ async def handle_action_api(
             return JSONResponse({"success": True})
 
         elif action == "accept_order":
+            if not employee.role.can_serve_tables: return JSONResponse({"error": "Forbidden"}, 403)
             if order.accepted_by_waiter_id: return JSONResponse({"error": "Уже занято"}, status_code=400)
+            
             order.accepted_by_waiter_id = employee.id
             proc_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "В обробці").limit(1))
             if proc_status:
@@ -817,6 +879,9 @@ async def create_waiter_order(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
+    if not employee.role.can_serve_tables:
+        return JSONResponse({"error": "Forbidden"}, 403)
+
     try:
         data = await request.json()
         table_id = int(data.get("tableId"))

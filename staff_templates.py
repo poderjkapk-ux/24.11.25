@@ -204,20 +204,33 @@ STAFF_DASHBOARD_HTML = """
         /* MODAL */
         .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 2000; justify-content: center; align-items: flex-end; backdrop-filter: blur(2px); }}
         .modal.active {{ display: flex; animation: slideUp 0.25s ease-out; }}
-        .modal-content {{ background: var(--white); width: 100%; max-width: 600px; max-height: 85vh; border-radius: 20px 20px 0 0; padding: 25px; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; box-shadow: 0 -10px 40px rgba(0,0,0,0.2); }}
-        .close {{ position: absolute; top: 20px; right: 20px; font-size: 24px; color: #999; cursor: pointer; z-index: 10; }}
+        
+        .modal-content {{ 
+            background: var(--white); width: 100%; max-width: 600px; 
+            height: 90vh; /* Почти на весь экран для удобства */
+            border-radius: 20px 20px 0 0; padding: 20px; 
+            box-sizing: border-box; display: flex; flex-direction: column; 
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.2); 
+            position: relative;
+        }}
+        
+        .close {{ position: absolute; top: 15px; right: 15px; font-size: 28px; color: #999; cursor: pointer; z-index: 10; padding: 10px; line-height: 1; }}
         @keyframes slideUp {{ from {{ transform: translateY(100%); }} to {{ transform: translateY(0); }} }}
         
         /* EDIT LIST */
-        .edit-list {{ max-height: 40vh; overflow-y: auto; margin: 15px 0; border: 1px solid #eee; border-radius: 8px; }}
-        .edit-item {{ display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee; }}
+        .edit-list {{ flex-grow: 1; overflow-y: auto; margin: 15px 0; border: 1px solid #eee; border-radius: 8px; -webkit-overflow-scrolling: touch; }}
+        .edit-item {{ display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #eee; }}
         .edit-item:last-child {{ border-bottom: none; }}
-        .qty-ctrl-sm {{ display: flex; gap: 10px; align-items: center; background: #f5f5f5; padding: 4px; border-radius: 8px; }}
-        .qty-btn-sm {{ width: 28px; height: 28px; border-radius: 6px; border: none; background: #fff; cursor: pointer; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }}
+        
+        .qty-ctrl-sm {{ display: flex; gap: 15px; align-items: center; background: #f5f5f5; padding: 5px 10px; border-radius: 8px; }}
+        .qty-btn-sm {{ width: 32px; height: 32px; border-radius: 50%; border: none; background: #fff; cursor: pointer; font-weight: bold; font-size: 1.1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; }}
         
         .big-btn {{ width: 100%; padding: 16px; background: var(--primary); color: white; border: none; border-radius: 12px; font-size: 1rem; font-weight: bold; margin-top: 15px; cursor: pointer; }}
         
         #loading-indicator {{ text-align: center; padding: 20px; color: #999; display: none; }}
+        
+        #search-input {{ width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; margin-bottom: 10px; box-sizing: border-box; background: #f9f9f9; }}
+        #search-input:focus {{ border-color: #333; background: #fff; outline: none; }}
     </style>
 </head>
 <body>
@@ -228,7 +241,7 @@ STAFF_DASHBOARD_HTML = """
     <div id="staff-modal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
-            <div id="modal-body"></div>
+            <div id="modal-body" style="display: flex; flex-direction: column; height: 100%;"></div>
         </div>
     </div>
 
@@ -407,11 +420,17 @@ STAFF_DASHBOARD_HTML = """
             editingOrderId = orderId;
             const modal = document.getElementById('staff-modal');
             const body = document.getElementById('modal-body');
-            body.innerHTML = '<div style="text-align:center; padding:20px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження...</div>';
+            body.innerHTML = '<div style="text-align:center; padding:50px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження...</div>';
             modal.classList.add('active');
+            
             try {{
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
                 const data = await res.json();
+                
+                if(data.error) {{
+                    body.innerHTML = `<div style="text-align:center; padding:20px;"><h3>Помилка</h3><p>${{data.error}}</p></div>`;
+                    return;
+                }}
                 
                 // Блок курьеров
                 let courierHtml = "";
@@ -426,7 +445,7 @@ STAFF_DASHBOARD_HTML = """
                     }}
                     courierHtml = `
                     <div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;">
-                        <label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Призначити кур'єра:</label>
+                        <label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label>
                         <select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">
                             ${{courierOptions}}
                         </select>
@@ -435,38 +454,47 @@ STAFF_DASHBOARD_HTML = """
 
                 let itemsHtml = `<div class="edit-list">`;
                 data.items.forEach(item => {{
+                    // Показываем контролы только если есть права
+                    const controls = data.can_edit_items ? `
+                        <div class="qty-ctrl-sm">
+                            <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, -1)">-</button>
+                            <span id="qty-${{item.id}}" style="font-weight:bold; min-width:20px; text-align:center;">${{item.qty}}</span>
+                            <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, 1)">+</button>
+                        </div>` : `<span>x${{item.qty}}</span>`;
+                        
                     itemsHtml += `
                     <div class="edit-item">
                         <div><b>${{item.name}}</b><br><small>${{item.price}} грн</small></div>
-                        <div class="qty-ctrl-sm">
-                            <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, -1)">-</button>
-                            <span id="qty-${{item.id}}" style="min-width:20px; text-align:center;">${{item.qty}}</span>
-                            <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, 1)">+</button>
-                        </div>
+                        ${{controls}}
                     </div>`;
                 }});
                 itemsHtml += `</div>`;
-                itemsHtml += `<button class="action-btn secondary" style="width:100%; justify-content:center;" onclick="openAddProductModal()"><i class="fa-solid fa-plus"></i> Додати страву</button>`;
+                
+                // Кнопка добавления (если есть права)
+                if (data.can_edit_items) {{
+                    itemsHtml += `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal()"><i class="fa-solid fa-plus"></i> Додати страву</button>`;
+                }}
+                
                 let statusOptions = "";
                 data.statuses.forEach(s => {{
                     statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
                 }});
+                
+                // Кнопка сохранения (если есть права на редактирование состава)
+                const saveBtn = data.can_edit_items ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад</button>` : '';
+
                 body.innerHTML = `
-                    <h3 style="margin-top:0;">Замовлення #${{orderId}}</h3>
+                    <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{orderId}}</h3>
                     ${{courierHtml}}
-                    <div style="margin-bottom:20px; background:#f9f9f9; padding:10px; border-radius:8px;">
-                        <label style="font-size:0.85rem; color:#666; margin-bottom:5px; display:block;">Змінити статус:</label>
+                    <div style="margin-bottom:15px; background:#f9f9f9; padding:10px; border-radius:8px;">
+                        <label style="font-size:0.85rem; color:#666; margin-bottom:5px; display:block;">Статус:</label>
                         <select id="status-select" style="width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; background:#fff; font-size:1rem;" onchange="changeOrderStatus(this)">
                             ${{statusOptions}}
                         </select>
                     </div>
-                    <h4 style="margin-bottom:10px;">Склад:</h4>
+                    <h4 style="margin:0 0 5px 0;">Склад (${{data.total}} грн):</h4>
                     ${{itemsHtml}}
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:20px; font-size:1.2rem; font-weight:bold;">
-                        <span>Разом:</span>
-                        <span>${{data.total}} грн</span>
-                    </div>
-                    <button class="big-btn" onclick="saveOrderChanges()">Зберегти зміни</button>
+                    ${{saveBtn}}
                 `;
                 cart = {{}};
                 data.items.forEach(i => cart[i.id] = {{ qty: i.qty, id: i.id }});
@@ -502,16 +530,19 @@ STAFF_DASHBOARD_HTML = """
             const newStatusId = selectElem.value;
             const option = selectElem.options[selectElem.selectedIndex];
             const isCompleted = option.getAttribute('data-completed') === 'true';
+            
             if (isCompleted) {{
                 currentStatusChangeId = newStatusId;
                 const body = document.getElementById('modal-body');
                 body.innerHTML = `
-                    <h3 style="text-align:center;">💰 Оплата замовлення</h3>
-                    <p style="text-align:center; color:#666; margin-bottom:20px;">Оберіть метод оплати:</p>
-                    <button class="big-btn" style="background:#27ae60;" onclick="finishStatusChange('cash')"><i class="fa-solid fa-money-bill-wave"></i> Готівка</button>
-                    <button class="big-btn" style="background:#2980b9;" onclick="finishStatusChange('card')"><i class="fa-regular fa-credit-card"></i> Картка / Термінал</button>
-                    <br>
-                    <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="openOrderEditModal(editingOrderId)">Скасувати</button>
+                    <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+                        <h3 style="text-align:center;">💰 Оплата замовлення</h3>
+                        <p style="text-align:center; color:#666; margin-bottom:20px;">Оберіть метод оплати:</p>
+                        <button class="big-btn" style="background:#27ae60; margin-bottom:10px;" onclick="finishStatusChange('cash')"><i class="fa-solid fa-money-bill-wave"></i> Готівка</button>
+                        <button class="big-btn" style="background:#2980b9;" onclick="finishStatusChange('card')"><i class="fa-regular fa-credit-card"></i> Картка / Термінал</button>
+                        <br>
+                        <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="openOrderEditModal(editingOrderId)">Скасувати</button>
+                    </div>
                 `;
                 return;
             }}
@@ -525,7 +556,7 @@ STAFF_DASHBOARD_HTML = """
         }}
 
         async function updateStatusAPI(statusId, paymentMethod) {{
-            await fetch('/staff/api/order/update_status', {{
+            const res = await fetch('/staff/api/order/update_status', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ 
@@ -534,57 +565,99 @@ STAFF_DASHBOARD_HTML = """
                     paymentMethod: paymentMethod 
                 }})
             }});
+            const data = await res.json();
+            if(data.error) alert(data.error);
+            else showToast("Статус оновлено");
         }}
 
         async function saveOrderChanges() {{
             const items = Object.values(cart);
-            await fetch('/staff/api/order/update_items', {{
+            const res = await fetch('/staff/api/order/update_items', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, items: items }})
             }});
-            closeModal();
-            fetchData();
+            const data = await res.json();
+            if(data.success) {{
+                closeModal();
+                fetchData();
+                showToast("Склад збережено");
+            }} else {{
+                alert(data.error || "Помилка");
+            }}
         }}
 
         async function openAddProductModal() {{
             const body = document.getElementById('modal-body');
             body.innerHTML = '<div style="text-align:center; padding:20px;">Завантаження меню...</div>';
+            
             if (menuData.length === 0) {{
                 const res = await fetch('/staff/api/menu/full');
                 menuData = await res.json();
             }}
+            
+            renderAddProductList("");
+        }}
+        
+        function renderAddProductList(filterText = "") {{
+            const body = document.getElementById('modal-body');
+            const lowerFilter = filterText.toLowerCase();
+            
             let html = `
-                <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:15px;">
-                    <h3 style="margin:0;">Меню</h3>
+                <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
+                    <h3 style="margin:0;">Додати страву</h3>
                     <button onclick="openOrderEditModal(editingOrderId)" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
                 </div>
-                <div class="edit-list" style="max-height:60vh;">`;
+                <input type="text" id="search-input" placeholder="🔍 Пошук страви..." value="${{filterText}}" oninput="renderAddProductList(this.value)">
+                <div class="edit-list">`;
+                
+            let hasItems = false;
             menuData.forEach(cat => {{
-                html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
-                cat.products.forEach(p => {{
-                    html += `
-                    <div class="edit-item">
-                        <div style="flex-grow:1;">${{p.name}}</div>
-                        <button class="action-btn" style="padding:6px 12px;" onclick="addToEditCart(${{p.id}})">+</button>
-                    </div>`;
-                }});
+                const filteredProds = cat.products.filter(p => p.name.toLowerCase().includes(lowerFilter));
+                
+                if (filteredProds.length > 0) {{
+                    hasItems = true;
+                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
+                    filteredProds.forEach(p => {{
+                        html += `
+                        <div class="edit-item">
+                            <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}})</small></div>
+                            <button class="action-btn" style="padding:6px 12px;" onclick="addToEditCart(${{p.id}})">+</button>
+                        </div>`;
+                    }});
+                }}
             }});
+            
+            if(!hasItems) html += `<div style="padding:20px; text-align:center; color:#999;">Нічого не знайдено</div>`;
+            
             html += `</div>`;
             body.innerHTML = html;
+            
+            const input = document.getElementById('search-input');
+            if(input) {{
+                input.focus();
+                // Move cursor to end
+                const val = input.value; input.value = ''; input.value = val;
+            }}
         }}
 
         function addToEditCart(prodId) {{
             if (!cart[prodId]) cart[prodId] = {{ id: prodId, qty: 0 }};
             cart[prodId].qty++;
+            
             const btn = event.currentTarget;
             const originalText = btn.innerText;
             btn.innerText = "✓";
-            setTimeout(() => btn.innerText = originalText, 500);
+            btn.style.background = "#27ae60";
+            setTimeout(() => {{ 
+                btn.innerText = originalText; 
+                btn.style.background = ""; 
+            }}, 500);
         }}
 
         function performAction(action, orderId, extra=null) {{
             if(action === 'chef_ready' && !confirm("Підтвердити готовність?")) return;
+            
             fetch('/staff/api/action', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
@@ -601,7 +674,7 @@ STAFF_DASHBOARD_HTML = """
             const modal = document.getElementById('staff-modal');
             document.getElementById('modal-body').innerHTML = `
                 <h3 style="text-align:center;">${{tableName}}</h3>
-                <div style="display:flex; flex-direction:column; gap:10px; margin-top:30px;">
+                <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:15px;">
                     <button class="big-btn" onclick="createNewOrderMenu()">📝 Нове замовлення</button>
                     <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="closeModal()">Закрити</button>
                 </div>
@@ -616,29 +689,51 @@ STAFF_DASHBOARD_HTML = """
                 const res = await fetch('/staff/api/menu/full');
                 menuData = await res.json();
             }}
-            let html = `<h3 style="margin-top:0;">Створення замовлення</h3><div class="edit-list" style="max-height:55vh;">`;
+            renderNewOrderMenu("");
+        }}
+        
+        function renderNewOrderMenu(filterText) {{
+            const body = document.getElementById('modal-body');
+            const lowerFilter = filterText.toLowerCase();
+            
+            let html = `
+                <h3 style="margin-top:0; margin-bottom:10px;">Створення замовлення</h3>
+                <input type="text" id="new-order-search" placeholder="🔍 Пошук..." value="${{filterText}}" oninput="renderNewOrderMenu(this.value)" style="width:100%; padding:12px; border:1px solid #ddd; border-radius:8px; margin-bottom:10px; box-sizing:border-box;">
+                <div class="edit-list">`;
+            
             menuData.forEach(cat => {{
-                html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
-                cat.products.forEach(p => {{
-                    html += `
-                    <div class="edit-item">
-                        <div style="font-size:0.95rem;">${{p.name}}</div>
-                        <div class="qty-ctrl-sm">
-                            <button class="qty-btn-sm" onclick="updateNewOrderCart(${{p.id}}, -1)">-</button>
-                            <span id="new-qty-${{p.id}}" style="width:20px; text-align:center;">0</span>
-                            <button class="qty-btn-sm" onclick="updateNewOrderCart(${{p.id}}, 1)">+</button>
-                        </div>
-                    </div>`;
-                }});
+                const filteredProds = cat.products.filter(p => p.name.toLowerCase().includes(lowerFilter));
+                if(filteredProds.length > 0) {{
+                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
+                    filteredProds.forEach(p => {{
+                        const qty = cart[p.id] ? cart[p.id].qty : 0;
+                        html += `
+                        <div class="edit-item">
+                            <div style="font-size:0.95rem;">${{p.name}}</div>
+                            <div class="qty-ctrl-sm">
+                                <button class="qty-btn-sm" onclick="updateNewOrderCart(${{p.id}}, -1)">-</button>
+                                <span id="new-qty-${{p.id}}" style="min-width:20px; text-align:center;">${{qty}}</span>
+                                <button class="qty-btn-sm" onclick="updateNewOrderCart(${{p.id}}, 1)">+</button>
+                            </div>
+                        </div>`;
+                    }});
+                }}
             }});
             html += `</div><button class="big-btn" onclick="submitNewOrder()">✅ Підтвердити замовлення</button>`;
             body.innerHTML = html;
+            
+            const input = document.getElementById('new-order-search');
+            if(input) {{
+                input.focus();
+                const val = input.value; input.value = ''; input.value = val;
+            }}
         }}
         
         function updateNewOrderCart(id, delta) {{
             if (!cart[id]) cart[id] = {{ id: id, qty: 0 }};
             cart[id].qty += delta;
             if(cart[id].qty < 0) cart[id].qty = 0;
+            
             const el = document.getElementById(`new-qty-${{id}}`);
             if (el) el.innerText = cart[id].qty;
         }}
@@ -646,9 +741,11 @@ STAFF_DASHBOARD_HTML = """
         async function submitNewOrder() {{
             const items = Object.values(cart).filter(i => i.qty > 0);
             if(items.length === 0) return alert("Кошик порожній");
+            
             const btn = event.currentTarget;
             btn.disabled = true;
             btn.innerText = "Створення...";
+            
             try {{
                 await fetch('/staff/api/order/create', {{
                     method: 'POST',
@@ -657,6 +754,7 @@ STAFF_DASHBOARD_HTML = """
                 }});
                 closeModal();
                 fetchData();
+                showToast("Замовлення створено");
             }} catch (e) {{
                 alert("Помилка створення");
                 btn.disabled = false;
