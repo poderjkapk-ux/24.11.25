@@ -3,22 +3,20 @@
 import asyncio
 import logging
 import sys
-from os import getenv
-from contextlib import asynccontextmanager
+import os
 import secrets
 import re
-import os
 import aiofiles
-from typing import Dict, Any, Generator, Optional, List
-from datetime import date, datetime, timedelta
-import html
 import json
-from decimal import Decimal 
-from dotenv import load_dotenv
+import html
+from contextlib import asynccontextmanager
+from decimal import Decimal
+from datetime import datetime
+from typing import Dict, Any, Optional
 from urllib.parse import quote_plus as url_quote_plus
 
 # --- FastAPI & Uvicorn ---
-from fastapi import FastAPI, Form, Request, Depends, HTTPException, status, Query, File, UploadFile, Body
+from fastapi import FastAPI, Form, Request, Depends, HTTPException, File, UploadFile, Body, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -38,14 +36,13 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import IntegrityError
 import sqlalchemy as sa
-from sqlalchemy import func, and_, delete, desc
+from sqlalchemy import func, desc, or_
 
 # --- Локальні імпорти ---
 from templates import (
     ADMIN_HTML_TEMPLATE, WEB_ORDER_HTML, 
-    ADMIN_REPORTS_BODY, ADMIN_ORDER_FORM_BODY, 
-    ADMIN_SETTINGS_BODY, ADMIN_ORDER_MANAGE_BODY, 
-    ADMIN_TABLES_BODY
+    ADMIN_ORDER_FORM_BODY, ADMIN_SETTINGS_BODY, 
+    ADMIN_REPORTS_BODY
 )
 from models import *
 from admin_handlers import register_admin_handlers
@@ -53,9 +50,9 @@ from courier_handlers import register_courier_handlers
 from notification_manager import notify_new_order_to_staff
 from admin_clients import router as clients_router
 from dependencies import get_db_session, check_credentials
-from auth_utils import get_password_hash
+from auth_utils import get_password_hash 
 
-# --- ІМПОРТИ РОУТЕРІВ (Всі модулі підключені) ---
+# --- ІМПОРТИ РОУТЕРІВ ---
 from admin_order_management import router as admin_order_router
 from admin_tables import router as admin_tables_router
 from in_house_menu import router as in_house_menu_router
@@ -70,6 +67,7 @@ from admin_statuses import router as admin_statuses_router
 # -----------------------------------------------
 
 # --- КОНФІГУРАЦІЯ ---
+from dotenv import load_dotenv
 load_dotenv()
 
 PRODUCTS_PER_PAGE = 5
@@ -615,7 +613,9 @@ async def process_specific_time(message: Message, state: FSMContext, session: As
 async def finalize_order(message: Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
     user_id = data.get('user_id')
-    admin_bot = dp_admin.get("bot_instance")
+    
+    # Получаем бота из state
+    admin_bot = message.bot 
     
     cart_items_res = await session.execute(
         sa.select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id)
@@ -664,15 +664,17 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     await session.commit()
     await session.refresh(order)
 
-    if admin_bot:
-        await notify_new_order_to_staff(admin_bot, order, session)
+    # Используем instance бота для уведомлений, если он был сохранен в app.state или берем текущего
+    app_admin_bot = message.bot # В aiogram хендлере message.bot это и есть бот
+    if app_admin_bot:
+        await notify_new_order_to_staff(app_admin_bot, order, session)
 
     await message.answer("Шановний клієнте, ваше замовлення оформлено! Дякуємо за вибір. Смачного!")
 
     await state.clear()
     await command_start_handler(message, state, session)
 
-# --- Функція start_bot ---
+# --- Функция start_bot ---
 async def start_bot(client_dp: Dispatcher, admin_dp: Dispatcher, client_bot: Bot, admin_bot: Bot):
     try:
         admin_dp["client_bot"] = client_bot
@@ -750,6 +752,7 @@ app = FastAPI(lifespan=lifespan)
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# --- ПОДКЛЮЧЕНИЕ РОУТЕРОВ ---
 app.include_router(in_house_menu_router)
 app.include_router(clients_router)
 app.include_router(admin_order_router)
@@ -757,16 +760,15 @@ app.include_router(admin_tables_router)
 app.include_router(admin_design_router)
 app.include_router(admin_cash_router)
 app.include_router(admin_reports_router)
-app.include_router(staff_router) # <--- ДОДАНО РОУТЕР PWA
-app.include_router(admin_products_router) # <--- ДОДАНО РОУТЕР АДМІНКИ ТОВАРІВ
-app.include_router(admin_menu_pages_router) # <--- ДОДАНО РОУТЕР АДМІНКИ СТОРІНОК
-app.include_router(admin_employees_router) # <--- ДОДАНО РОУТЕР СПІВРОБІТНИКІВ
-app.include_router(admin_statuses_router) # <--- ДОДАНО РОУТЕР СТАТУСІВ
+app.include_router(staff_router) 
+app.include_router(admin_products_router)
+app.include_router(admin_menu_pages_router)
+app.include_router(admin_employees_router) 
+app.include_router(admin_statuses_router) 
 
 # --- Спеціальний роут для Service Worker ---
 @app.get("/sw.js", response_class=FileResponse)
 async def get_service_worker():
-    # Читаем файл из корня, а не из static/
     return FileResponse("sw.js", media_type="application/javascript")
 
 class DbSessionMiddleware:
@@ -776,11 +778,20 @@ class DbSessionMiddleware:
             data['session'] = session
             return await handler(event, data)
 
-# --- FastAPI ендпоінти ---
-# ... (Тут без змін, веб-сторінка замовлення) ... 
+async def get_settings(session: AsyncSession) -> Settings:
+    settings = await session.get(Settings, 1)
+    if not settings:
+        settings = Settings(id=1)
+        session.add(settings)
+        try: await session.commit(); await session.refresh(settings)
+        except Exception: await session.rollback(); return Settings(id=1)
+    if not settings.telegram_welcome_message: settings.telegram_welcome_message = f"Шановний {{user_name}}, ласкаво просимо!"
+    return settings
+
+# --- FastAPI ендпоінти для КЛІЄНТА (WEB) ---
+
 @app.get("/", response_class=HTMLResponse)
 async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session)):
-    # ... (Код не змінено) ...
     settings = await get_settings(session)
     logo_html = f'<img src="/{settings.logo_url}" alt="Логотип" class="header-logo">' if settings.logo_url else ''
 
@@ -792,57 +803,36 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         [f'<a href="#" class="menu-popup-trigger" data-item-id="{item.id}">{html.escape(item.title)}</a>' for item in menu_items]
     )
 
-    site_title = settings.site_title or "Назва"
-    primary_color_val = settings.primary_color or "#5a5a5a"
-    secondary_color_val = settings.secondary_color or "#eeeeee"
-    background_color_val = settings.background_color or "#f4f4f4"
-    text_color_val = settings.text_color or "#333333"
-    footer_bg_color_val = settings.footer_bg_color or "#333333"
-    footer_text_color_val = settings.footer_text_color or "#ffffff"
-    font_family_sans_val = settings.font_family_sans or "Golos Text"
-    font_family_serif_val = settings.font_family_serif or "Playfair Display"
+    # Параметры для шаблона
+    template_params = {
+        "logo_html": logo_html,
+        "menu_links_html": menu_links_html,
+        "site_title": html.escape(settings.site_title or "Назва"),
+        "seo_description": html.escape(settings.seo_description or ""),
+        "seo_keywords": html.escape(settings.seo_keywords or ""),
+        "primary_color_val": settings.primary_color or "#5a5a5a",
+        "secondary_color_val": settings.secondary_color or "#eeeeee",
+        "background_color_val": settings.background_color or "#f4f4f4",
+        "text_color_val": settings.text_color or "#333333",
+        "footer_bg_color_val": settings.footer_bg_color or "#333333",
+        "footer_text_color_val": settings.footer_text_color or "#ffffff",
+        "font_family_sans_val": settings.font_family_sans or "Golos Text",
+        "font_family_serif_val": settings.font_family_serif or "Playfair Display",
+        "font_family_sans_encoded": url_quote_plus(settings.font_family_sans or "Golos Text"),
+        "font_family_serif_encoded": url_quote_plus(settings.font_family_serif or "Playfair Display"),
+        "footer_address": html.escape(settings.footer_address or "Адреса не вказана"),
+        "footer_phone": html.escape(settings.footer_phone or ""),
+        "working_hours": html.escape(settings.working_hours or ""),
+        "social_links_html": "", # Можно добавить логику
+        "category_nav_bg_color": settings.category_nav_bg_color or "#ffffff",
+        "category_nav_text_color": settings.category_nav_text_color or "#333333",
+        "header_image_url": settings.header_image_url or "",
+        "wifi_ssid": html.escape(settings.wifi_ssid or ""),
+        "wifi_password": html.escape(settings.wifi_password or "")
+    }
 
-    social_links = []
-    if settings.instagram_url:
-        social_links.append(f'<a href="{html.escape(settings.instagram_url)}" target="_blank"><i class="fa-brands fa-instagram"></i></a>')
-    if settings.facebook_url:
-        social_links.append(f'<a href="{html.escape(settings.facebook_url)}" target="_blank"><i class="fa-brands fa-facebook"></i></a>')
-    
-    social_links_html = "".join(social_links)
-    category_nav_bg_color = settings.category_nav_bg_color or "#ffffff"
-    category_nav_text_color = settings.category_nav_text_color or "#333333"
-    header_image_url = settings.header_image_url or "" 
-    wifi_ssid = html.escape(settings.wifi_ssid or "Не налаштовано")
-    wifi_password = html.escape(settings.wifi_password or "")
+    return HTMLResponse(content=WEB_ORDER_HTML.format(**template_params))
 
-    return HTMLResponse(content=WEB_ORDER_HTML.format(
-        logo_html=logo_html,
-        menu_links_html=menu_links_html,
-        site_title=html.escape(site_title),
-        seo_description=html.escape(settings.seo_description or ""),
-        seo_keywords=html.escape(settings.seo_keywords or ""),
-        primary_color_val=primary_color_val,
-        secondary_color_val=secondary_color_val,
-        background_color_val=background_color_val,
-        text_color_val=text_color_val,
-        footer_bg_color_val=footer_bg_color_val,
-        footer_text_color_val=footer_text_color_val,
-        font_family_sans_val=font_family_sans_val,
-        font_family_serif_val=font_family_serif_val,
-        font_family_sans_encoded=url_quote_plus(font_family_sans_val),
-        font_family_serif_encoded=url_quote_plus(font_family_serif_val),
-        footer_address=html.escape(settings.footer_address or "Адреса не вказана"),
-        footer_phone=html.escape(settings.footer_phone or ""),
-        working_hours=html.escape(settings.working_hours or ""),
-        social_links_html=social_links_html,
-        category_nav_bg_color=category_nav_bg_color,
-        category_nav_text_color=category_nav_text_color,
-        header_image_url=header_image_url,
-        wifi_ssid=wifi_ssid,
-        wifi_password=wifi_password
-    ))
-
-# ... (API ендпоінти залишаються без змін) ...
 @app.get("/api/page/{item_id}", response_class=JSONResponse)
 async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(get_db_session)):
     menu_item = await session.get(MenuItem, item_id)
@@ -864,7 +854,7 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
     )
 
     categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
-    products = [{"id": p.id, "name": p.name, "description": p.description, "price": p.price, "image_url": p.image_url, "category_id": p.category_id} for p in products_res.scalars().all()]
+    products = [{"id": p.id, "name": p.name, "description": p.description, "price": float(p.price), "image_url": p.image_url, "category_id": p.category_id} for p in products_res.scalars().all()]
 
     return {"categories": categories, "products": products}
 
@@ -879,7 +869,7 @@ async def get_customer_info(phone_number: str, session: AsyncSession = Depends(g
     raise HTTPException(status_code=404, detail="Клієнта не знайдено")
 
 @app.post("/api/place_order")
-async def place_web_order(order_data: dict = Body(...), session: AsyncSession = Depends(get_db_session)):
+async def place_web_order(request: Request, order_data: dict = Body(...), session: AsyncSession = Depends(get_db_session)):
     items = order_data.get("items", [])
     if not items:
         raise HTTPException(status_code=400, detail="Кошик порожній")
@@ -928,16 +918,15 @@ async def place_web_order(order_data: dict = Body(...), session: AsyncSession = 
     await session.commit()
     await session.refresh(order)
 
-    admin_bot = app.state.admin_bot
-    if admin_bot:
-        await notify_new_order_to_staff(admin_bot, order, session)
+    if request.app.state.admin_bot:
+        await notify_new_order_to_staff(request.app.state.admin_bot, order, session)
 
     return JSONResponse(content={"message": "Замовлення успішно розміщено", "order_id": order.id})
 
-# --- ВЕБ АДМІН-ПАНЕЛЬ (Без змін) ---
+# --- АДМИН ПАНЕЛЬ (DASHBOARD) ---
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
-    # ... (Код не змінено) ...
     settings = await get_settings(session)
     orders_res = await session.execute(sa.select(Order).order_by(Order.id.desc()).limit(5))
     orders_count_res = await session.execute(sa.select(sa.func.count(Order.id)))
@@ -950,7 +939,7 @@ async def admin_dashboard(session: AsyncSession = Depends(get_db_session), usern
     <div class="card"><h2>📈 Швидка статистика</h2><p><strong>Всього страв:</strong> {products_count}</p><p><strong>Всього замовлень:</strong> {orders_count}</p></div>
     <div class="card"><h2>📦 5 останніх замовлень</h2>
         <table><thead><tr><th>ID</th><th>Клієнт</th><th>Телефон</th><th>Сума</th></tr></thead><tbody>
-        {''.join([f"<tr><td><a href='/admin/orders?search=%23{o.id}'>#{o.id}</a></td><td>{html.escape(o.customer_name or '')}</td><td>{html.escape(o.phone_number or '')}</td><td>{o.total_price} грн</td></tr>" for o in orders_res.scalars().all()]) or "<tr><td colspan='4'>Немає замовлень</td></tr>"}
+        {''.join([f"<tr><td><a href='/admin/order/manage/{o.id}'>#{o.id}</a></td><td>{html.escape(o.customer_name or '')}</td><td>{html.escape(o.phone_number or '')}</td><td>{o.total_price} грн</td></tr>" for o in orders_res.scalars().all()]) or "<tr><td colspan='4'>Немає замовлень</td></tr>"}
         </tbody></table></div>"""
 
     active_classes = {key: "" for key in ["orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
@@ -960,7 +949,8 @@ async def admin_dashboard(session: AsyncSession = Depends(get_db_session), usern
         title="Головна панель", body=body, site_title=settings.site_title or "Назва", **active_classes
     ))
 
-# ... (Категорії, Меню, Замовлення)
+# --- МАРШРУТЫ КАТЕГОРИЙ ---
+
 @app.get("/admin/categories", response_class=HTMLResponse)
 async def admin_categories(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
     settings = await get_settings(session)
@@ -1004,7 +994,215 @@ async def delete_category(cat_id: int, session: AsyncSession = Depends(get_db_se
         await session.commit()
     return RedirectResponse(url="/admin/categories", status_code=303)
 
-# --- ЗВІТИ ТА НАЛАШТУВАННЯ (Ось вони, нічого не втрачено) ---
+# --- МАРШРУТЫ СПИСКА ЗАКАЗОВ И СОЗДАНИЯ ---
+
+@app.get("/admin/orders", response_class=HTMLResponse)
+async def admin_orders(page: int = Query(1, ge=1), q: str = Query(None, alias="search"), session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
+    settings = await get_settings(session)
+    per_page = 15
+    offset = (page - 1) * per_page
+    
+    query = sa.select(Order).options(joinedload(Order.status), selectinload(Order.items)).order_by(Order.id.desc())
+    
+    filters = []
+    if q:
+        search_term = q.replace('#', '')
+        if search_term.isdigit():
+             filters.append(sa.or_(Order.id == int(search_term), Order.customer_name.ilike(f"%{q}%"), Order.phone_number.ilike(f"%{q}%")))
+        else:
+             filters.append(sa.or_(Order.customer_name.ilike(f"%{q}%"), Order.phone_number.ilike(f"%{q}%")))
+    if filters:
+        query = query.where(*filters)
+
+    count_query = sa.select(sa.func.count(Order.id))
+    if filters:
+        count_query = count_query.where(*filters)
+        
+    total_res = await session.execute(count_query)
+    total = total_res.scalar_one_or_none() or 0
+    
+    orders_res = await session.execute(query.limit(per_page).offset(offset))
+    orders = orders_res.scalars().all()
+    pages = (total // per_page) + (1 if total % per_page > 0 else 0)
+
+    rows = ""
+    for o in orders:
+        items_str = ", ".join([f"{i.product_name} x {i.quantity}" for i in o.items])
+        if len(items_str) > 50:
+            items_str = items_str[:50] + "..."
+            
+        rows += f"""
+        <tr>
+            <td><a href="/admin/order/manage/{o.id}" title="Керувати замовленням">#{o.id}</a></td>
+            <td>{html.escape(o.customer_name or '')}</td>
+            <td>{html.escape(o.phone_number or '')}</td>
+            <td>{o.total_price} грн</td>
+            <td><span class='status'>{o.status.name if o.status else '-'}</span></td>
+            <td>{html.escape(items_str)}</td>
+            <td class='actions'>
+                <a href='/admin/order/manage/{o.id}' class='button-sm' title="Керувати статусом та кур'єром">⚙️ Керувати</a>
+                <a href='/admin/order/edit/{o.id}' class='button-sm' title="Редагувати склад замовлення">✏️ Редагувати</a>
+            </td>
+        </tr>"""
+
+    links_orders = []
+    for i in range(1, pages + 1):
+        search_part = f'&search={q}' if q else ''
+        class_part = 'active' if i == page else ''
+        links_orders.append(f'<a href="/admin/orders?page={i}{search_part}" class="{class_part}">{i}</a>')
+    
+    pagination = f"<div class='pagination'>{' '.join(links_orders)}</div>"
+
+    body = f"""
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2>📋 Список замовлень</h2>
+            <a href="/admin/order/new" class="button"><i class="fa-solid fa-plus"></i> Створити замовлення</a>
+        </div>
+        <form action="/admin/orders" method="get" class="search-form">
+            <input type="text" name="search" placeholder="Пошук за ID, іменем, телефоном..." value="{q or ''}">
+            <button type="submit">🔍 Знайти</button>
+        </form>
+        <table><thead><tr><th>ID</th><th>Клієнт</th><th>Телефон</th><th>Сума</th><th>Статус</th><th>Склад</th><th>Дії</th></tr></thead><tbody>
+        {rows or "<tr><td colspan='7'>Немає замовлень</td></tr>"}
+        </tbody></table>{pagination if pages > 1 else ''}
+    </div>"""
+    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes["orders_active"] = "active"
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Замовлення", body=body, site_title=settings.site_title or "Назва", **active_classes))
+
+@app.get("/admin/order/new", response_class=HTMLResponse)
+async def get_add_order_form(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
+    settings = await get_settings(session)
+    initial_data = {"items": {}, "action": "/api/admin/order/new", "submit_text": "Створити замовлення", "form_values": None}
+    script = f"<script>document.addEventListener('DOMContentLoaded',()=>{{if(typeof window.initializeForm==='function'&&!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}else if(!window.initializeForm){{document.addEventListener('formScriptLoaded',()=>{{if(!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}}});}}}});</script>"
+    body = ADMIN_ORDER_FORM_BODY + script
+    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes["orders_active"] = "active"
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Нове замовлення", body=body, site_title=settings.site_title or "Назва", **active_classes))
+
+@app.get("/admin/order/edit/{order_id}", response_class=HTMLResponse)
+async def get_edit_order_form(order_id: int, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
+    settings = await get_settings(session)
+    order = await session.get(Order, order_id, options=[joinedload(Order.status), selectinload(Order.items)])
+    if not order: raise HTTPException(404, "Замовлення не знайдено")
+
+    if order.status.is_completed_status or order.status.is_cancelled_status:
+        return HTMLResponse(f"""<div style="padding: 20px; font-family: sans-serif; max-width: 600px; margin: 20px auto; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;"><h2 style="color: #d32f2f;">⛔️ Замовлення #{order.id} закрите</h2><p>Редагування заборонено.</p><div style="margin-top: 20px;"><a href="/admin/orders" style="display: inline-block; padding: 10px 20px; background: #5a5a5a; color: white; text-decoration: none; border-radius: 5px;">⬅️ Назад</a><a href="/admin/order/manage/{order.id}" style="display: inline-block; padding: 10px 20px; background: #0d6efd; color: white; text-decoration: none; border-radius: 5px; margin-left: 10px;">⚙️ Керувати</a></div></div>""")
+
+    initial_items = {}
+    for item in order.items:
+        initial_items[item.product_id] = {"name": item.product_name, "price": float(item.price_at_moment), "quantity": item.quantity}
+
+    initial_data = {
+        "items": initial_items,
+        "action": f"/api/admin/order/edit/{order_id}",
+        "submit_text": "Зберегти зміни",
+        "form_values": {"phone_number": order.phone_number or "", "customer_name": order.customer_name or "", "is_delivery": order.is_delivery, "address": order.address or ""}
+    }
+    script = f"<script>document.addEventListener('DOMContentLoaded',()=>{{if(typeof window.initializeForm==='function'&&!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}else if(!window.initializeForm){{document.addEventListener('formScriptLoaded',()=>{{if(!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}}});}}}});</script>"
+    body = ADMIN_ORDER_FORM_BODY + script
+    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes["orders_active"] = "active"
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"Редагування замовлення #{order.id}", body=body, site_title=settings.site_title or "Назва", **active_classes))
+
+async def _process_and_save_order(order: Order, data: dict, session: AsyncSession, request: Request):
+    is_new_order = order.id is None
+    order.customer_name = data.get("customer_name")
+    order.phone_number = data.get("phone_number")
+    order.is_delivery = data.get("delivery_type") == "delivery"
+    order.address = data.get("address") if order.is_delivery else None
+    order.order_type = "delivery" if order.is_delivery else "pickup"
+
+    items_from_js = data.get("items", {})
+    
+    if order.id:
+        await session.execute(sa.delete(OrderItem).where(OrderItem.order_id == order.id))
+    
+    total_price = Decimal('0.00') 
+    new_items = []
+    
+    if items_from_js:
+        valid_product_ids = [int(pid) for pid in items_from_js.keys() if pid.isdigit()]
+        if valid_product_ids:
+            products_res = await session.execute(sa.select(Product).where(Product.id.in_(valid_product_ids)))
+            db_products_map = {p.id: p for p in products_res.scalars().all()}
+
+            for pid_str, item_data in items_from_js.items():
+                if not pid_str.isdigit(): continue
+                pid = int(pid_str)
+                product = db_products_map.get(pid)
+                if product:
+                    qty = int(item_data.get('quantity', 0))
+                    if qty > 0:
+                        total_price += product.price * qty
+                        new_items.append(OrderItem(
+                            product_id=pid,
+                            product_name=product.name,
+                            quantity=qty,
+                            price_at_moment=product.price, 
+                            preparation_area=product.preparation_area
+                        ))
+
+    order.total_price = total_price
+    
+    if is_new_order:
+        session.add(order)
+        if not order.status_id:
+            new_status_res = await session.execute(sa.select(OrderStatus.id).where(OrderStatus.name == "Новий").limit(1))
+            order.status_id = new_status_res.scalar_one_or_none() or 1
+        
+        await session.flush()
+        
+        for item in new_items:
+            item.order_id = order.id
+            session.add(item)
+    else:
+        for item in new_items:
+            item.order_id = order.id
+            session.add(item)
+
+    await session.commit()
+    await session.refresh(order)
+
+    if is_new_order:
+        try:
+             session.add(OrderStatusHistory(order_id=order.id, status_id=order.status_id, actor_info="Адміністративна панель"))
+             await session.commit()
+        except Exception as e: logging.error(f"History error: {e}")
+
+        admin_bot = request.app.state.admin_bot
+        if admin_bot:
+            await notify_new_order_to_staff(admin_bot, order, session)
+
+@app.post("/api/admin/order/new", response_class=JSONResponse)
+async def api_create_order(request: Request, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
+    try: data = await request.json()
+    except json.JSONDecodeError: raise HTTPException(400, "Invalid JSON")
+    try:
+        await _process_and_save_order(Order(), data, session, request)
+        return JSONResponse(content={"message": "Замовлення створено успішно", "redirect_url": "/admin/orders"})
+    except Exception as e:
+        logging.error(f"Create order error: {e}", exc_info=True)
+        raise HTTPException(500, "Failed to create order")
+
+@app.post("/api/admin/order/edit/{order_id}", response_class=JSONResponse)
+async def api_update_order(order_id: int, request: Request, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
+    try: data = await request.json()
+    except json.JSONDecodeError: raise HTTPException(400, "Invalid JSON")
+    
+    order = await session.get(Order, order_id, options=[joinedload(Order.status)])
+    if not order: raise HTTPException(404, "Order not found")
+    if order.status.is_completed_status or order.status.is_cancelled_status: raise HTTPException(400, "Order closed")
+
+    try:
+        await _process_and_save_order(order, data, session, request)
+        return JSONResponse(content={"message": "Замовлення оновлено успішно", "redirect_url": "/admin/orders"})
+    except Exception as e:
+        logging.error(f"Update order error: {e}", exc_info=True)
+        raise HTTPException(500, "Failed to update order")
+
+# --- ВОССТАНОВЛЕННЫЕ РАЗДЕЛЫ: ЗВІТИ ТА НАЛАШТУВАННЯ ---
 
 @app.get("/admin/reports", response_class=HTMLResponse)
 async def admin_reports_menu(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
@@ -1069,148 +1267,6 @@ async def save_admin_settings(session: AsyncSession = Depends(get_db_session), u
     await session.commit()
     return RedirectResponse(url="/admin/settings?saved=true", status_code=303)
 
-async def get_settings(session: AsyncSession) -> Settings:
-    settings = await session.get(Settings, 1)
-    if not settings:
-        settings = Settings(id=1)
-        session.add(settings)
-        try: await session.commit(); await session.refresh(settings)
-        except Exception: await session.rollback(); return Settings(id=1)
-    if not settings.telegram_welcome_message: settings.telegram_welcome_message = f"Шановний {{user_name}}, ласкаво просимо! 👋\n\nМи раді вас бачити. Оберіть опцію:"
-    return settings
-
-@app.get("/admin/order/new", response_class=HTMLResponse)
-async def get_add_order_form(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
-    settings = await get_settings(session)
-    initial_data = {"items": {}, "action": "/api/admin/order/new", "submit_text": "Створити замовлення", "form_values": None}
-    script = f"<script>document.addEventListener('DOMContentLoaded',()=>{{if(typeof window.initializeForm==='function'&&!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}else if(!window.initializeForm){{document.addEventListener('formScriptLoaded',()=>{{if(!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}}});}}}});</script>"
-    body = ADMIN_ORDER_FORM_BODY + script
-    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
-    active_classes["orders_active"] = "active"
-    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Нове замовлення", body=body, site_title=settings.site_title or "Назва", **active_classes))
-
-@app.get("/admin/order/edit/{order_id}", response_class=HTMLResponse)
-async def get_edit_order_form(order_id: int, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
-    settings = await get_settings(session)
-    order = await session.get(Order, order_id, options=[joinedload(Order.status), selectinload(Order.items)])
-    if not order: raise HTTPException(404, "Замовлення не знайдено")
-
-    if order.status.is_completed_status or order.status.is_cancelled_status:
-        return HTMLResponse(f"""<div style="padding: 20px; font-family: sans-serif; max-width: 600px; margin: 20px auto; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;"><h2 style="color: #d32f2f;">⛔️ Замовлення #{order.id} закрите</h2><p>Редагування заборонено.</p><div style="margin-top: 20px;"><a href="/admin/orders" style="display: inline-block; padding: 10px 20px; background: #5a5a5a; color: white; text-decoration: none; border-radius: 5px;">⬅️ Назад</a><a href="/admin/order/manage/{order.id}" style="display: inline-block; padding: 10px 20px; background: #0d6efd; color: white; text-decoration: none; border-radius: 5px; margin-left: 10px;">⚙️ Керувати</a></div></div>""")
-
-    # Перетворення OrderItem в формат для JS
-    initial_items = {}
-    for item in order.items:
-        initial_items[item.product_id] = {"name": item.product_name, "price": item.price_at_moment, "quantity": item.quantity}
-
-    initial_data = {
-        "items": initial_items,
-        "action": f"/api/admin/order/edit/{order_id}",
-        "submit_text": "Зберегти зміни",
-        "form_values": {"phone_number": order.phone_number or "", "customer_name": order.customer_name or "", "is_delivery": order.is_delivery, "address": order.address or ""}
-    }
-    script = f"<script>document.addEventListener('DOMContentLoaded',()=>{{if(typeof window.initializeForm==='function'&&!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}else if(!window.initializeForm){{document.addEventListener('formScriptLoaded',()=>{{if(!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}}});}}}});</script>"
-    body = ADMIN_ORDER_FORM_BODY + script
-    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
-    active_classes["orders_active"] = "active"
-    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"Редагування замовлення #{order.id}", body=body, site_title=settings.site_title or "Назва", **active_classes))
-
-async def _process_and_save_order(order: Order, data: dict, session: AsyncSession):
-    is_new_order = order.id is None
-    order.customer_name = data.get("customer_name")
-    order.phone_number = data.get("phone_number")
-    order.is_delivery = data.get("delivery_type") == "delivery"
-    order.address = data.get("address") if order.is_delivery else None
-    order.order_type = "delivery" if order.is_delivery else "pickup"
-
-    items_from_js = data.get("items", {})
-    
-    # Якщо редагування існуючого замовлення - очищаємо старі товари
-    if order.id:
-        await session.execute(sa.delete(OrderItem).where(OrderItem.order_id == order.id))
-    
-    total_price = Decimal('0.00') 
-    new_items = []
-    
-    if items_from_js:
-        valid_product_ids = [int(pid) for pid in items_from_js.keys() if pid.isdigit()]
-        if valid_product_ids:
-            products_res = await session.execute(sa.select(Product).where(Product.id.in_(valid_product_ids)))
-            db_products_map = {p.id: p for p in products_res.scalars().all()}
-
-            for pid_str, item_data in items_from_js.items():
-                if not pid_str.isdigit(): continue
-                pid = int(pid_str)
-                product = db_products_map.get(pid)
-                if product:
-                    qty = int(item_data.get('quantity', 0))
-                    if qty > 0:
-                        total_price += product.price * qty
-                        new_items.append(OrderItem(
-                            product_id=pid,
-                            product_name=product.name,
-                            quantity=qty,
-                            price_at_moment=product.price, 
-                            preparation_area=product.preparation_area
-                        ))
-
-    order.total_price = total_price
-    
-    if is_new_order:
-        session.add(order)
-        if not order.status_id:
-            new_status_res = await session.execute(sa.select(OrderStatus.id).where(OrderStatus.name == "Новий").limit(1))
-            order.status_id = new_status_res.scalar_one_or_none() or 1
-        
-        await session.flush()
-        
-        for item in new_items:
-            item.order_id = order.id
-            session.add(item)
-    else:
-        for item in new_items:
-            item.order_id = order.id
-            session.add(item)
-
-    await session.commit()
-    await session.refresh(order)
-
-    if is_new_order:
-        try:
-             session.add(OrderStatusHistory(order_id=order.id, status_id=order.status_id, actor_info="Адміністративна панель"))
-             await session.commit()
-        except Exception as e: logging.error(f"History error: {e}")
-
-        admin_bot = app.state.admin_bot
-        if admin_bot:
-            await notify_new_order_to_staff(admin_bot, order, session)
-
-@app.post("/api/admin/order/new", response_class=JSONResponse)
-async def api_create_order(request: Request, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
-    try: data = await request.json()
-    except json.JSONDecodeError: raise HTTPException(400, "Invalid JSON")
-    try:
-        await _process_and_save_order(Order(), data, session)
-        return JSONResponse(content={"message": "Замовлення створено успішно", "redirect_url": "/admin/orders"})
-    except Exception as e:
-        logging.error(f"Create order error: {e}", exc_info=True)
-        raise HTTPException(500, "Failed to create order")
-
-@app.post("/api/admin/order/edit/{order_id}", response_class=JSONResponse)
-async def api_update_order(order_id: int, request: Request, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
-    try: data = await request.json()
-    except json.JSONDecodeError: raise HTTPException(400, "Invalid JSON")
-    
-    order = await session.get(Order, order_id, options=[joinedload(Order.status)])
-    if not order: raise HTTPException(404, "Order not found")
-    if order.status.is_completed_status or order.status.is_cancelled_status: raise HTTPException(400, "Order closed")
-
-    try:
-        await _process_and_save_order(order, data, session)
-        return JSONResponse(content={"message": "Замовлення оновлено успішно", "redirect_url": "/admin/orders"})
-    except Exception as e:
-        logging.error(f"Update order error: {e}", exc_info=True)
-        raise HTTPException(500, "Failed to update order")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
