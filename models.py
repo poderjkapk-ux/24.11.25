@@ -8,6 +8,7 @@ from typing import Optional, List
 from datetime import datetime
 import secrets
 import os
+from decimal import Decimal  # <--- ДОБАВЛЕНО: Важный импорт для точных вычислений
 
 # Читання DATABASE_URL з змінних оточення
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -68,8 +69,8 @@ class Employee(Base):
     role: Mapped["Role"] = relationship("Role", back_populates="employees", lazy='selectin')
     is_on_shift: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
     
-    # Баланс готівки "на руках" у співробітника
-    cash_balance: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00, server_default=text("0.00"), comment="Гроші, які співробітник винен касі")
+    # Баланс готівки "на руках" у співробітника (ИСПРАВЛЕНО float -> Decimal)
+    cash_balance: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.00, server_default=text("0.00"), comment="Гроші, які співробітник винен касі")
 
     current_order_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('orders.id', ondelete="SET NULL"), nullable=True)
     current_order: Mapped[Optional["Order"]] = relationship("Order", foreign_keys="Employee.current_order_id")
@@ -108,7 +109,8 @@ class Product(Base):
     name: Mapped[str] = mapped_column(sa.String(100))
     description: Mapped[str] = mapped_column(sa.String(500), nullable=True)
     image_url: Mapped[str] = mapped_column(sa.String(255), nullable=True)
-    price: Mapped[float] = mapped_column(sa.Numeric(10, 2), nullable=False) 
+    # ИСПРАВЛЕНО float -> Decimal
+    price: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False) 
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
     category_id: Mapped[int] = mapped_column(sa.ForeignKey('categories.id'))
     category: Mapped["Category"] = relationship("Category", back_populates="products")
@@ -144,13 +146,15 @@ class CashShift(Base):
     start_time: Mapped[datetime] = mapped_column(sa.DateTime, default=func.now())
     end_time: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, nullable=True)
     
-    start_cash: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Залишок на початок зміни")
-    end_cash_actual: Mapped[Optional[float]] = mapped_column(sa.Numeric(10, 2), nullable=True, comment="Фактичний залишок при закритті")
+    # ИСПРАВЛЕНО float -> Decimal
+    start_cash: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Залишок на початок зміни")
+    end_cash_actual: Mapped[Optional[Decimal]] = mapped_column(sa.Numeric(10, 2), nullable=True, comment="Фактичний залишок при закритті")
     
-    total_sales_cash: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Продажі готівкою")
-    total_sales_card: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Продажі карткою")
-    service_in: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Службове внесення")
-    service_out: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Службове вилучення/Інкасація")
+    # ИСПРАВЛЕНО float -> Decimal
+    total_sales_cash: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Продажі готівкою")
+    total_sales_card: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Продажі карткою")
+    service_in: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Службове внесення")
+    service_out: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Службове вилучення/Інкасація")
     
     is_closed: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     
@@ -164,7 +168,8 @@ class CashTransaction(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     shift_id: Mapped[int] = mapped_column(sa.ForeignKey('cash_shifts.id'), nullable=False)
     
-    amount: Mapped[float] = mapped_column(sa.Numeric(10, 2), nullable=False)
+    # ИСПРАВЛЕНО float -> Decimal
+    amount: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
     transaction_type: Mapped[str] = mapped_column(sa.String(20), nullable=False, comment="'in' - внесення, 'out' - вилучення, 'handover' - здача виручки")
     comment: Mapped[str] = mapped_column(sa.String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=func.now())
@@ -181,7 +186,8 @@ class OrderItem(Base):
     
     product_name: Mapped[str] = mapped_column(sa.String(100), nullable=False)
     quantity: Mapped[int] = mapped_column(sa.Integer, default=1, nullable=False)
-    price_at_moment: Mapped[float] = mapped_column(sa.Numeric(10, 2), nullable=False)
+    # ИСПРАВЛЕНО float -> Decimal
+    price_at_moment: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
     
     preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"))
 
@@ -197,7 +203,8 @@ class Order(Base):
     
     items: Mapped[list["OrderItem"]] = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan", lazy='selectin')
     
-    total_price: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00)
+    # ИСПРАВЛЕНО float -> Decimal
+    total_price: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.00)
     
     customer_name: Mapped[str] = mapped_column(sa.String(100), nullable=True)
     phone_number: Mapped[str] = mapped_column(sa.String(20), nullable=True, index=True)

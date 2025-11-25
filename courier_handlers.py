@@ -680,10 +680,15 @@ def register_courier_handlers(dp_admin: Dispatcher):
         
         # --- КАСОВА ЛОГІКА ---
         if new_status.is_completed_status:
-            # Прив'язуємо до поточної зміни
+            # 1. ФІКСАЦІЯ ВИКОНАВЦЯ (ДЛЯ ЗВІТІВ)
+            # Якщо це доставка і закриває кур'єр - записуємо його
+            if order.is_delivery:
+                order.completed_by_courier_id = employee.id
+
+            # 2. Прив'язуємо до поточної зміни
             await link_order_to_shift(session, order, employee.id)
             
-            # Якщо готівка - вішаємо борг на співробітника
+            # 3. Якщо готівка - вішаємо борг на співробітника
             if order.payment_method == 'cash':
                 await register_employee_debt(session, order, employee.id)
                 debt_message = f"\n\n💰 <b>Готівка: {order.total_price} грн</b> записана на ваш баланс. Здайте її касиру в кінці зміни."
@@ -919,26 +924,43 @@ def register_courier_handlers(dp_admin: Dispatcher):
         
         employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == callback.from_user.id))
         
-        # Розрахунок суми з використанням Decimal
-        total_price = Decimal('0.00')
+        # --- ИСПРАВЛЕНИЕ: Получаем актуальные цены и данные из БД ---
+        product_ids = [int(pid) for pid in cart.keys()]
+        if not product_ids:
+             return await callback.answer("Кошик порожній.", show_alert=True)
+
+        # Загружаем продукты из базы
+        products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
+        db_products = {p.id: p for p in products_res.scalars().all()}
         
-        # Створюємо тимчасовий список для OrderItems, щоб не ітерувати двічі
+        total_price = Decimal('0.00')
         items_to_create = []
 
-        for prod_id, item in cart.items():
-            # Конвертуємо ціну з float назад у Decimal через рядок для точності
-            price_decimal = Decimal(str(item['price']))
-            qty = item['quantity']
+        for prod_id_str, item_data in cart.items():
+            prod_id = int(prod_id_str)
+            product = db_products.get(prod_id)
             
-            total_price += price_decimal * qty
+            # Если товар был удален из базы, пока оформляли заказ - пропускаем
+            if not product:
+                continue
+                
+            # Используем АКТУАЛЬНУЮ цену и данные из базы, а не из кэша
+            qty = item_data['quantity']
+            actual_price = product.price
+            
+            total_price += actual_price * qty
             
             items_to_create.append({
-                "product_id": int(prod_id),
-                "name": item['name'],
+                "product_id": prod_id,
+                "name": product.name,
                 "quantity": qty,
-                "price": price_decimal,
-                "area": item.get('area', 'kitchen')
+                "price": actual_price,
+                "area": product.preparation_area # Берем актуальный цех
             })
+            
+        if not items_to_create:
+             return await callback.answer("Помилка: товари не знайдено (можливо видалені).", show_alert=True)
+        # ------------------------------------------------------------
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))
         status_id = new_status.id if new_status else 1
@@ -960,7 +982,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 product_id=item_data["product_id"],
                 product_name=item_data["name"],
                 quantity=item_data["quantity"],
-                price_at_moment=item_data["price"], # Decimal
+                price_at_moment=item_data["price"],
                 preparation_area=item_data["area"]
             )
             session.add(order_item)

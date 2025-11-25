@@ -86,8 +86,8 @@ async def register_employee_debt(session: AsyncSession, order: Order, employee_i
         logger.error(f"Співробітника {employee_id} не знайдено при реєстрації боргу.")
         return
 
-    # order.total_price це Decimal
-    amount = order.total_price
+    # Конвертуємо в Decimal для надійності
+    amount = Decimal(str(order.total_price))
     
     # Оновлюємо баланс співробітника
     employee.cash_balance += amount
@@ -120,21 +120,24 @@ async def process_handover(session: AsyncSession, cashier_shift_id: int, employe
     total_amount = Decimal('0.00')
     
     for order in orders:
-        amount = order.total_price
+        amount = Decimal(str(order.total_price))
         total_amount += amount
         
         # Гроші потрапили в касу
         order.is_cash_turned_in = True
         
-        # Якщо замовлення не було прив'язане до зміни (наприклад, стара зміна закрилась), прив'язуємо до поточної
-        # Це гарантує, що гроші потраплять у Z-звіт цієї зміни
+        # ВАЖНО: Якщо замовлення не було прив'язане до зміни (наприклад, стара зміна закрилась або її не було), 
+        # прив'язуємо до ПОТОЧНОЇ зміни касира. Це гарантує, що гроші потраплять у Z-звіт цієї зміни.
         if not order.cash_shift_id:
             order.cash_shift_id = shift.id
 
     # Зменшуємо борг співробітника
     employee.cash_balance -= total_amount
+    
+    # Захист від мінуса (якщо був розсинхрон)
     if employee.cash_balance < Decimal('0.00'):
-        employee.cash_balance = Decimal('0.00') # Захист від мінуса
+        logger.warning(f"Баланс співробітника {employee.id} пішов у мінус! Скидаємо в 0.")
+        employee.cash_balance = Decimal('0.00') 
 
     # Додаємо транзакцію в касу (просто як лог події, для балансу використовується is_cash_turned_in)
     tx = CashTransaction(
@@ -169,7 +172,7 @@ async def get_shift_statistics(session: AsyncSession, shift_id: int):
     total_card_sales = Decimal('0.00')
 
     for method, amount in sales_data:
-        amount_decimal = amount if amount is not None else Decimal('0.00')
+        amount_decimal = Decimal(str(amount)) if amount is not None else Decimal('0.00')
         if method == 'cash':
             total_sales_cash_orders += amount_decimal
         elif method == 'card':
@@ -191,7 +194,7 @@ async def get_shift_statistics(session: AsyncSession, shift_id: int):
     handover_in = Decimal('0.00')
 
     for t_type, amount in trans_data:
-        amount_decimal = amount if amount is not None else Decimal('0.00')
+        amount_decimal = Decimal(str(amount)) if amount is not None else Decimal('0.00')
         if t_type == 'in':
             service_in += amount_decimal
         elif t_type == 'out':
@@ -210,9 +213,9 @@ async def get_shift_statistics(session: AsyncSession, shift_id: int):
     )
     collected_cash_res = await session.execute(query_collected_cash)
     collected_cash_scalar = collected_cash_res.scalar()
-    total_collected_cash_orders = collected_cash_scalar if collected_cash_scalar is not None else Decimal('0.00')
+    total_collected_cash_orders = Decimal(str(collected_cash_scalar)) if collected_cash_scalar is not None else Decimal('0.00')
 
-    start_cash_decimal = shift.start_cash if shift.start_cash is not None else Decimal('0.00')
+    start_cash_decimal = Decimal(str(shift.start_cash)) if shift.start_cash is not None else Decimal('0.00')
     
     theoretical_cash = start_cash_decimal + total_collected_cash_orders + service_in - service_out
 
