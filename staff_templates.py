@@ -1,6 +1,6 @@
 # staff_templates.py
 
-# --- СТРАНИЦА ВХОДА ---
+# --- СТОРІНКА ВХОДУ ---
 STAFF_LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -87,7 +87,7 @@ STAFF_LOGIN_HTML = """
 </html>
 """
 
-# --- ГЛАВНАЯ ПАНЕЛЬ (DASHBOARD) ---
+# --- ГОЛОВНА ПАНЕЛЬ (DASHBOARD) ---
 STAFF_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -416,7 +416,8 @@ STAFF_DASHBOARD_HTML = """
             if (data.status === 'ok') location.reload();
         }}
 
-        async function openOrderEditModal(orderId) {{
+        // ПРАВКА: Добавлен параметр keepCart для сохранения состояния корзины при возврате
+        async function openOrderEditModal(orderId, keepCart = false) {{
             editingOrderId = orderId;
             const modal = document.getElementById('staff-modal');
             const body = document.getElementById('modal-body');
@@ -452,22 +453,38 @@ STAFF_DASHBOARD_HTML = """
                     </div>`;
                 }}
 
+                // Если мы НЕ сохраняем корзину (первое открытие), инициализируем из сервера
+                if (!keepCart) {{
+                    cart = {{}};
+                    data.items.forEach(i => cart[i.id] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price }});
+                }}
+
+                // Генерируем список на основе ЛОКАЛЬНОЙ корзины (cart)
                 let itemsHtml = `<div class="edit-list">`;
-                data.items.forEach(item => {{
-                    // Показываем контролы только если есть права
-                    const controls = data.can_edit_items ? `
-                        <div class="qty-ctrl-sm">
-                            <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, -1)">-</button>
-                            <span id="qty-${{item.id}}" style="font-weight:bold; min-width:20px; text-align:center;">${{item.qty}}</span>
-                            <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, 1)">+</button>
-                        </div>` : `<span>x${{item.qty}}</span>`;
-                        
-                    itemsHtml += `
-                    <div class="edit-item">
-                        <div><b>${{item.name}}</b><br><small>${{item.price}} грн</small></div>
-                        ${{controls}}
-                    </div>`;
-                }});
+                const currentItems = Object.values(cart);
+                let currentTotal = 0;
+                
+                if (currentItems.length > 0) {{
+                    currentItems.forEach(item => {{
+                        currentTotal += (item.price * item.qty);
+                        // Показываем контролы только если есть права
+                        const controls = data.can_edit_items ? `
+                            <div class="qty-ctrl-sm">
+                                <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, -1)">-</button>
+                                <span id="qty-${{item.id}}" style="font-weight:bold; min-width:20px; text-align:center;">${{item.qty}}</span>
+                                <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, 1)">+</button>
+                            </div>` : `<span>x${{item.qty}}</span>`;
+                            
+                        itemsHtml += `
+                        <div class="edit-item">
+                            <div><b>${{item.name}}</b><br><small>${{item.price}} грн</small></div>
+                            ${{controls}}
+                        </div>`;
+                    }});
+                }} else {{
+                    itemsHtml += `<div style="padding:10px; text-align:center; color:#999;">Кошик порожній</div>`;
+                }}
+                
                 itemsHtml += `</div>`;
                 
                 // Кнопка добавления (если есть права)
@@ -481,7 +498,7 @@ STAFF_DASHBOARD_HTML = """
                 }});
                 
                 // Кнопка сохранения (если есть права на редактирование состава)
-                const saveBtn = data.can_edit_items ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад</button>` : '';
+                const saveBtn = data.can_edit_items ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад (~${{currentTotal.toFixed(2)}} грн)</button>` : '';
 
                 body.innerHTML = `
                     <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{orderId}}</h3>
@@ -492,12 +509,10 @@ STAFF_DASHBOARD_HTML = """
                             ${{statusOptions}}
                         </select>
                     </div>
-                    <h4 style="margin:0 0 5px 0;">Склад (${{data.total}} грн):</h4>
+                    <h4 style="margin:0 0 5px 0;">Склад:</h4>
                     ${{itemsHtml}}
                     ${{saveBtn}}
                 `;
-                cart = {{}};
-                data.items.forEach(i => cart[i.id] = {{ qty: i.qty, id: i.id }});
             }} catch (e) {{
                 body.innerHTML = "Помилка: " + e.message;
             }}
@@ -521,8 +536,7 @@ STAFF_DASHBOARD_HTML = """
             if (cart[prodId]) {{
                 cart[prodId].qty += delta;
                 if (cart[prodId].qty <= 0) delete cart[prodId];
-                const qtySpan = document.getElementById(`qty-${{prodId}}`);
-                if (qtySpan) qtySpan.innerText = cart[prodId] ? cart[prodId].qty : 0;
+                openOrderEditModal(editingOrderId, true); // Перерисовка без сброса корзины
             }}
         }}
 
@@ -541,7 +555,7 @@ STAFF_DASHBOARD_HTML = """
                         <button class="big-btn" style="background:#27ae60; margin-bottom:10px;" onclick="finishStatusChange('cash')"><i class="fa-solid fa-money-bill-wave"></i> Готівка</button>
                         <button class="big-btn" style="background:#2980b9;" onclick="finishStatusChange('card')"><i class="fa-regular fa-credit-card"></i> Картка / Термінал</button>
                         <br>
-                        <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="openOrderEditModal(editingOrderId)">Скасувати</button>
+                        <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="openOrderEditModal(editingOrderId, true)">Скасувати</button>
                     </div>
                 `;
                 return;
@@ -603,10 +617,11 @@ STAFF_DASHBOARD_HTML = """
             const body = document.getElementById('modal-body');
             const lowerFilter = filterText.toLowerCase();
             
+            // ПРАВКА: Кнопка "Назад" викликає openOrderEditModal з true (keepCart)
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0;">Додати страву</h3>
-                    <button onclick="openOrderEditModal(editingOrderId)" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
+                    <button onclick="openOrderEditModal(editingOrderId, true)" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
                 </div>
                 <input type="text" id="search-input" placeholder="🔍 Пошук страви..." value="${{filterText}}" oninput="renderAddProductList(this.value)">
                 <div class="edit-list">`;
@@ -619,10 +634,11 @@ STAFF_DASHBOARD_HTML = """
                     hasItems = true;
                     html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
                     filteredProds.forEach(p => {{
+                        // Передаємо також ім'я та ціну, щоб вони збереглися у локальному кошику
                         html += `
                         <div class="edit-item">
                             <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}})</small></div>
-                            <button class="action-btn" style="padding:6px 12px;" onclick="addToEditCart(${{p.id}})">+</button>
+                            <button class="action-btn" style="padding:6px 12px;" onclick="addToEditCart(${{p.id}}, '${{p.name}}', ${{p.price}})">+</button>
                         </div>`;
                     }});
                 }}
@@ -636,13 +652,13 @@ STAFF_DASHBOARD_HTML = """
             const input = document.getElementById('search-input');
             if(input) {{
                 input.focus();
-                // Move cursor to end
                 const val = input.value; input.value = ''; input.value = val;
             }}
         }}
 
-        function addToEditCart(prodId) {{
-            if (!cart[prodId]) cart[prodId] = {{ id: prodId, qty: 0 }};
+        // ПРАВКА: Додано параметри name та price
+        function addToEditCart(prodId, name, price) {{
+            if (!cart[prodId]) cart[prodId] = {{ id: prodId, qty: 0, name: name, price: price }};
             cart[prodId].qty++;
             
             const btn = event.currentTarget;
@@ -769,7 +785,7 @@ STAFF_DASHBOARD_HTML = """
 </html>
 """
 
-# --- ШАБЛОН КАРТОЧКИ СТОЛИКА ---
+# --- ШАБЛОН КАРТКИ СТОЛИКА ---
 STAFF_TABLE_CARD = """
 <div class="card table-card" onclick="openTableModal({id}, '{name_esc}')" style="border: 2px solid {border_color}; background: {bg_color};">
     <div class="card-title"><i class="fa-solid fa-chair"></i> {name_esc}</div>
@@ -777,7 +793,7 @@ STAFF_TABLE_CARD = """
 </div>
 """
 
-# --- ШАБЛОН КАРТОЧКИ ЗАКАЗА ---
+# --- ШАБЛОН КАРТКИ ЗАМОВЛЕННЯ ---
 STAFF_ORDER_CARD = """
 <div class="order-card" id="order-{id}" style="border-left-color: {color}">
     <div class="card-header">

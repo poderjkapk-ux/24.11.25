@@ -476,14 +476,23 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
     """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
-    """Получает заказы для Кухни или Бара."""
+    """Получает заказы для Кухни или Бара с учетом галочки requires_kitchen_notify."""
     orders_data = []
     
     # --- КУХНЯ ---
     if employee.role.can_receive_kitchen_orders:
         status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))).scalars().all()
         if status_ids:
-            q = select(Order).options(joinedload(Order.table), selectinload(Order.items)).where(Order.status_id.in_(status_ids), Order.kitchen_done == False).order_by(Order.id.asc())
+            q = select(Order).options(
+                joinedload(Order.table), 
+                selectinload(Order.items), 
+                joinedload(Order.status)
+            ).where(
+                Order.status_id.in_(status_ids), 
+                Order.kitchen_done == False,
+                Order.status.has(requires_kitchen_notify=True) # <--- ВАЖНО: Фильтрация по галочке "На виробництво"
+            ).order_by(Order.id.asc())
+            
             orders = (await session.execute(q)).scalars().all()
             
             if orders:
@@ -510,7 +519,16 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
     if employee.role.can_receive_bar_orders:
         status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_bartender == True))).scalars().all()
         if status_ids:
-            q = select(Order).options(joinedload(Order.table), selectinload(Order.items)).where(Order.status_id.in_(status_ids), Order.bar_done == False).order_by(Order.id.asc())
+            q = select(Order).options(
+                joinedload(Order.table), 
+                selectinload(Order.items), 
+                joinedload(Order.status)
+            ).where(
+                Order.status_id.in_(status_ids), 
+                Order.bar_done == False,
+                Order.status.has(requires_kitchen_notify=True) # <--- ВАЖНО: Фильтрация по галочке "На виробництво"
+            ).order_by(Order.id.asc())
+            
             orders = (await session.execute(q)).scalars().all()
             
             if orders:
@@ -636,7 +654,7 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
 async def get_order_details(order_id: int, session: AsyncSession = Depends(get_db_session), employee: Employee = Depends(get_current_staff)):
     """Возвращает детали заказа для модального окна, включая список курьеров."""
     order = await session.get(Order, order_id, options=[selectinload(Order.items), joinedload(Order.status), joinedload(Order.courier)])
-    if not order: return JSONResponse({"error": "Not found"}, status_code=404)
+    if not order: return JSONResponse({"error": "Не знайдено"}, status_code=404)
     
     status_query = select(OrderStatus)
     if employee.role.can_manage_orders:
@@ -689,17 +707,17 @@ async def assign_courier_api(
 ):
     """Назначение курьера через PWA."""
     if not employee.role.can_manage_orders:
-        return JSONResponse({"error": "No permission"}, status_code=403)
+        return JSONResponse({"error": "Заборонено"}, status_code=403)
         
     data = await request.json()
     order_id = int(data.get("orderId"))
     courier_id = int(data.get("courierId")) # 0 если снять
     
     order = await session.get(Order, order_id)
-    if not order: return JSONResponse({"error": "Order not found"}, 404)
+    if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
     
     if order.status.is_completed_status:
-        return JSONResponse({"error": "Order closed"}, 400)
+        return JSONResponse({"error": "Замовлення закрите"}, 400)
 
     msg = ""
     if courier_id == 0:
@@ -707,7 +725,7 @@ async def assign_courier_api(
         msg = "Кур'єра знято"
     else:
         courier = await session.get(Employee, courier_id)
-        if not courier: return JSONResponse({"error": "Courier not found"}, 404)
+        if not courier: return JSONResponse({"error": "Кур'єра не знайдено"}, 404)
         order.courier_id = courier_id
         msg = f"Призначено: {courier.full_name}"
         
@@ -729,7 +747,7 @@ async def update_order_status_api(
     payment_method = data.get("paymentMethod")
     
     order = await session.get(Order, order_id, options=[joinedload(Order.status)])
-    if not order: return JSONResponse({"error": "Not found"}, 404)
+    if not order: return JSONResponse({"error": "Не знайдено"}, 404)
     
     # ПРОВЕРКА ПРАВ
     can_edit = False
@@ -779,7 +797,7 @@ async def update_order_items_api(
     items = data.get("items")
     
     order = await session.get(Order, order_id)
-    if not order: return JSONResponse({"error": "Not found"}, 404)
+    if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
     
     # 1. ПРОВЕРКА ПРАВ
     if not check_edit_permissions(employee, order):
@@ -787,7 +805,7 @@ async def update_order_items_api(
 
     # 2. ПРОВЕРКА СТАТУСА
     if order.status.is_completed_status or order.status.is_cancelled_status:
-        return JSONResponse({"error": "Order closed"}, 400)
+        return JSONResponse({"error": "Замовлення закрите"}, 400)
     
     # 3. ОБНОВЛЕНИЕ ТОВАРОВ
     await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
@@ -812,9 +830,24 @@ async def update_order_items_api(
                     price_at_moment=p.price,
                     preparation_area=p.preparation_area
                 ))
+    
+    # ВАЖНО: Сброс флагов готовности при изменении состава!
+    order.kitchen_done = False
+    order.bar_done = False
             
     order.total_price = total_price
     await session.commit()
+    
+    # Отправка уведомления о изменении заказа поварам и барменам
+    msg = f"🔄 Замовлення #{order.id} оновлено ({employee.full_name})"
+    
+    # Поварам
+    chefs = (await session.execute(
+        select(Employee).join(Role).where(Role.can_receive_kitchen_orders==True, Employee.is_on_shift==True)
+    )).scalars().all()
+    for c in chefs:
+        await create_staff_notification(session, c.id, msg)
+        
     return JSONResponse({"success": True})
 
 @router.post("/api/action")
@@ -830,7 +863,7 @@ async def handle_action_api(
         extra = data.get("extra")
 
         order = await session.get(Order, order_id, options=[joinedload(Order.status), joinedload(Order.table)])
-        if not order: return JSONResponse({"error": "Not found"}, status_code=404)
+        if not order: return JSONResponse({"error": "Не знайдено"}, status_code=404)
 
         if action == "chef_ready":
             # Проверка прав кухни/бара
@@ -845,7 +878,7 @@ async def handle_action_api(
 
         elif action == "accept_order":
             if not employee.role.can_serve_tables: return JSONResponse({"error": "Forbidden"}, 403)
-            if order.accepted_by_waiter_id: return JSONResponse({"error": "Уже занято"}, status_code=400)
+            if order.accepted_by_waiter_id: return JSONResponse({"error": "Вже зайнято"}, status_code=400)
             
             order.accepted_by_waiter_id = employee.id
             proc_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "В обробці").limit(1))
