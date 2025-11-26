@@ -1,7 +1,6 @@
 # staff_templates.py
 
 # --- СТОРІНКА ВХОДУ ---
-# Цей рядок НЕ використовує .format(), тому тут дужки залишаються одинарними.
 STAFF_LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -89,8 +88,6 @@ STAFF_LOGIN_HTML = """
 """
 
 # --- ГОЛОВНА ПАНЕЛЬ (DASHBOARD) ---
-# УВАГА: Цей рядок використовує .format(), тому всі дужки у CSS та JS мають бути подвійними {{ }}.
-# Змінні {site_title} та {content} залишаються в одинарних дужках для підстановки Python.
 STAFF_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -693,7 +690,7 @@ STAFF_DASHBOARD_HTML = """
                 
                 let displayName = product.name;
                 if (modifiers.length > 0) {{
-                    displayName += ` (+ ${modifiers.map(m => m.name).join(', ')})`;
+                    displayName += ` (+ ${{modifiers.map(m => m.name).join(', ')}})`;
                 }}
 
                 cart[key] = {{
@@ -715,7 +712,7 @@ STAFF_DASHBOARD_HTML = """
 
         function openTableModal(tableId, tableName) {{
             currentTableId = tableId;
-            cart = {};
+            cart = {{}};
             const modal = document.getElementById('staff-modal');
             // ВИПРАВЛЕНО: Подвійні дужки ${{tableName}}
             document.getElementById('modal-body').innerHTML = `
