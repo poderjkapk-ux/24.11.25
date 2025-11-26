@@ -36,7 +36,7 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import IntegrityError
 import sqlalchemy as sa
-from sqlalchemy import func, desc, or_
+from sqlalchemy import select, func, desc, or_  # <--- ВАЖНО: Добавлен импорт select
 
 # --- Локальні імпорти ---
 from templates import (
@@ -100,7 +100,7 @@ async def get_main_reply_keyboard(session: AsyncSession):
     builder.row(KeyboardButton(text="📋 Мої замовлення"), KeyboardButton(text="❓ Допомога"))
 
     menu_items_res = await session.execute(
-        sa.select(MenuItem).where(MenuItem.show_in_telegram == True).order_by(MenuItem.sort_order)
+        select(MenuItem).where(MenuItem.show_in_telegram == True).order_by(MenuItem.sort_order)
     )
     menu_items = menu_items_res.scalars().all()
     if menu_items:
@@ -112,7 +112,7 @@ async def get_main_reply_keyboard(session: AsyncSession):
 
 async def handle_dynamic_menu_item(message: Message, session: AsyncSession):
     menu_item_res = await session.execute(
-        sa.select(MenuItem.content).where(func.trim(MenuItem.title) == message.text, MenuItem.show_in_telegram == True)
+        select(MenuItem.content).where(func.trim(MenuItem.title) == message.text, MenuItem.show_in_telegram == True)
     )
     content = menu_item_res.scalar_one_or_none()
 
@@ -202,7 +202,7 @@ async def show_my_orders(message_or_callback: Message | CallbackQuery, session: 
     user_id = message_or_callback.from_user.id
 
     orders_result = await session.execute(
-        sa.select(Order).options(joinedload(Order.status), selectinload(Order.items)).where(Order.user_id == user_id).order_by(Order.id.desc())
+        select(Order).options(joinedload(Order.status), selectinload(Order.items)).where(Order.user_id == user_id).order_by(Order.id.desc())
     )
     orders = orders_result.scalars().all()
 
@@ -249,7 +249,7 @@ async def show_menu(message_or_callback: Message | CallbackQuery, session: Async
 
     keyboard = InlineKeyboardBuilder()
     categories_result = await session.execute(
-        sa.select(Category)
+        select(Category)
         .where(Category.show_on_delivery_site == True)
         .order_by(Category.sort_order, Category.name)
     )
@@ -295,8 +295,8 @@ async def show_category_paginated(callback: CallbackQuery, session: AsyncSession
         return
 
     offset = (page - 1) * PRODUCTS_PER_PAGE
-    query_total = sa.select(sa.func.count(Product.id)).where(Product.category_id == category_id, Product.is_active == True)
-    query_products = sa.select(Product).where(Product.category_id == category_id, Product.is_active == True).order_by(Product.name).offset(offset).limit(PRODUCTS_PER_PAGE)
+    query_total = select(func.count(Product.id)).where(Product.category_id == category_id, Product.is_active == True)
+    query_products = select(Product).where(Product.category_id == category_id, Product.is_active == True).order_by(Product.name).offset(offset).limit(PRODUCTS_PER_PAGE)
 
     total_products_res = await session.execute(query_total)
     total_products = total_products_res.scalar_one_or_none() or 0
@@ -452,7 +452,7 @@ async def confirm_add_to_cart_callback(callback: CallbackQuery, state: FSMContex
     
     selected_mods_objects = []
     if mod_ids:
-        selected_mods_objects = (await session.execute(sa.select(Modifier).where(Modifier.id.in_(mod_ids)))).scalars().all()
+        selected_mods_objects = (await session.execute(select(Modifier).where(Modifier.id.in_(mod_ids)))).scalars().all()
     
     await _add_item_to_db_cart(callback, product, selected_mods_objects, session)
     await state.clear()
@@ -490,7 +490,7 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
     message = message_or_callback.message if is_callback else message_or_callback
     user_id = message_or_callback.from_user.id
 
-    cart_items_result = await session.execute(sa.select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id).order_by(CartItem.id))
+    cart_items_result = await session.execute(select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id).order_by(CartItem.id))
     cart_items = cart_items_result.scalars().all()
 
     if not cart_items:
@@ -600,7 +600,7 @@ async def clear_cart(callback: CallbackQuery, session: AsyncSession):
 async def start_checkout(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     user_id = callback.from_user.id
     cart_items_result = await session.execute(
-        sa.select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id)
+        select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id)
     )
     cart_items = cart_items_result.scalars().all()
 
@@ -762,7 +762,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     admin_bot = message.bot 
     
     cart_items_res = await session.execute(
-        sa.select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id)
+        select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id)
     )
     cart_items = cart_items_res.scalars().all()
     
@@ -877,7 +877,7 @@ async def lifespan(app: FastAPI):
     # --- Инициализация данных (Статусы, Роли, Склад) ---
     async with async_session_maker() as session:
         # Статусы
-        result_status = await session.execute(sa.select(OrderStatus).limit(1))
+        result_status = await session.execute(select(OrderStatus).limit(1))
         if not result_status.scalars().first():
             default_statuses = {
                 "Новий": {"visible_to_operator": True, "visible_to_courier": False, "visible_to_waiter": True, "visible_to_chef": True, "visible_to_bartender": True, "requires_kitchen_notify": False},
@@ -891,7 +891,7 @@ async def lifespan(app: FastAPI):
                 session.add(OrderStatus(name=name, **props))
 
         # Роли
-        result_roles = await session.execute(sa.select(Role).limit(1))
+        result_roles = await session.execute(select(Role).limit(1))
         if not result_roles.scalars().first():
             session.add(Role(name="Адміністратор", can_manage_orders=True, can_be_assigned=True, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
             session.add(Role(name="Оператор", can_manage_orders=True, can_be_assigned=False, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
@@ -901,7 +901,7 @@ async def lifespan(app: FastAPI):
             session.add(Role(name="Бармен", can_manage_orders=False, can_be_assigned=False, can_serve_tables=False, can_receive_kitchen_orders=False, can_receive_bar_orders=True))
 
         # --- Инициализация Склада (Единицы измерения и Склады) ---
-        result_units = await session.execute(sa.select(Unit).limit(1))
+        result_units = await session.execute(select(Unit).limit(1))
         if not result_units.scalars().first():
             session.add_all([
                 Unit(name='кг', is_weighable=True),
@@ -910,7 +910,7 @@ async def lifespan(app: FastAPI):
                 Unit(name='порц', is_weighable=False)
             ])
             
-        result_warehouses = await session.execute(sa.select(Warehouse).limit(1))
+        result_warehouses = await session.execute(select(Warehouse).limit(1))
         if not result_warehouses.scalars().first():
             session.add_all([
                 Warehouse(name='Основной склад'),
@@ -1004,7 +1004,7 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
     logo_html = f'<img src="/{settings.logo_url}" alt="Логотип" class="header-logo">' if settings.logo_url else ''
 
     menu_items_res = await session.execute(
-        sa.select(MenuItem).where(MenuItem.show_on_website == True).order_by(MenuItem.sort_order)
+        select(MenuItem).where(MenuItem.show_on_website == True).order_by(MenuItem.sort_order)
     )
     menu_items = menu_items_res.scalars().all()
     menu_links_html = "".join(
@@ -1047,32 +1047,34 @@ async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(ge
         raise HTTPException(status_code=404, detail="Сторінку не знайдено")
     return {"title": menu_item.title, "content": menu_item.content}
 
+# --- ВИПРАВЛЕНА ФУНКЦІЯ ЗАВАНТАЖЕННЯ МЕНЮ ---
 @app.get("/api/menu")
 async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
     try:
+        # 1. Отримуємо категорії
         categories_res = await session.execute(
-            sa.select(Category)
+            select(Category)
             .where(Category.show_on_delivery_site == True)
             .order_by(Category.sort_order, Category.name)
         )
+        categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
         
-        # --- ЗМІНА: Завантажуємо продукти РАЗОМ з модифікаторами ---
+        # 2. Отримуємо продукти
+        # Використовуємо selectinload для модифікаторів та join(Category) без явних умов
         products_res = await session.execute(
-            sa.select(Product)
-            .options(selectinload(Product.modifiers)) # <-- Завантажуємо modifiers
-            .join(Category, Product.category_id == Category.id)
+            select(Product)
+            .options(selectinload(Product.modifiers)) 
+            .join(Category)
             .where(Product.is_active == True, Category.show_on_delivery_site == True)
         )
-
-        categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
         
         products = []
         for p in products_res.scalars().all():
             # Формуємо список модифікаторів для фронтенду
-            # --- ВИПРАВЛЕННЯ: Безпечне перетворення ціни (обробка None) ---
             mods_list = []
             if p.modifiers:
                 for m in p.modifiers:
+                    # Безпечна конвертація ціни (Decimal -> float)
                     price_val = m.price if m.price is not None else 0
                     mods_list.append({
                         "id": m.id, 
@@ -1090,15 +1092,17 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
                 "modifiers": mods_list 
             })
 
-        return {"categories": categories, "products": products}
+        # Повертаємо JSONResponse для правильної серіалізації
+        return JSONResponse(content={"categories": categories, "products": products})
     except Exception as e:
         logging.error(f"Error in /api/menu: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        # Повертаємо JSON з помилкою, а не 500 HTML
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error", "error": str(e)})
 
 @app.get("/api/customer_info/{phone_number}")
 async def get_customer_info(phone_number: str, session: AsyncSession = Depends(get_db_session)):
     result = await session.execute(
-        sa.select(Order).where(Order.phone_number == phone_number).order_by(Order.id.desc()).limit(1)
+        select(Order).where(Order.phone_number == phone_number).order_by(Order.id.desc()).limit(1)
     )
     last_order = result.scalars().first()
     if last_order:
@@ -1116,7 +1120,7 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Невірний формат ID товару (має бути число).")
 
-    products_res = await session.execute(sa.select(Product).where(Product.id.in_(product_ids)))
+    products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
     db_products = {str(p.id): p for p in products_res.scalars().all()}
 
     total_price = Decimal('0.00')
@@ -1172,9 +1176,9 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
     settings = await get_settings(session)
-    orders_res = await session.execute(sa.select(Order).order_by(Order.id.desc()).limit(5))
-    orders_count_res = await session.execute(sa.select(sa.func.count(Order.id)))
-    products_count_res = await session.execute(sa.select(sa.func.count(Product.id)))
+    orders_res = await session.execute(select(Order).order_by(Order.id.desc()).limit(5))
+    orders_count_res = await session.execute(select(func.count(Order.id)))
+    products_count_res = await session.execute(select(func.count(Product.id)))
     orders_count = orders_count_res.scalar_one_or_none() or 0
     products_count = products_count_res.scalar_one_or_none() or 0
 
@@ -1198,7 +1202,7 @@ async def admin_dashboard(session: AsyncSession = Depends(get_db_session), usern
 @app.get("/admin/categories", response_class=HTMLResponse)
 async def admin_categories(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
     settings = await get_settings(session)
-    categories_res = await session.execute(sa.select(Category).order_by(Category.sort_order, Category.name))
+    categories_res = await session.execute(select(Category).order_by(Category.sort_order, Category.name))
     categories = categories_res.scalars().all()
 
     def bool_to_icon(val): return '✅' if val else '❌'
@@ -1231,7 +1235,7 @@ async def edit_category(cat_id: int, name: Optional[str] = Form(None), sort_orde
 async def delete_category(cat_id: int, session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
     category = await session.get(Category, cat_id)
     if category:
-        products_exist_res = await session.execute(sa.select(sa.func.count(Product.id)).where(Product.category_id == cat_id))
+        products_exist_res = await session.execute(select(func.count(Product.id)).where(Product.category_id == cat_id))
         if products_exist_res.scalar_one_or_none() > 0:
              return RedirectResponse(url="/admin/categories?error=category_in_use", status_code=303)
         await session.delete(category)
@@ -1246,19 +1250,19 @@ async def admin_orders(page: int = Query(1, ge=1), q: str = Query(None, alias="s
     per_page = 15
     offset = (page - 1) * per_page
     
-    query = sa.select(Order).options(joinedload(Order.status), selectinload(Order.items)).order_by(Order.id.desc())
+    query = select(Order).options(joinedload(Order.status), selectinload(Order.items)).order_by(Order.id.desc())
     
     filters = []
     if q:
         search_term = q.replace('#', '')
         if search_term.isdigit():
-             filters.append(sa.or_(Order.id == int(search_term), Order.customer_name.ilike(f"%{q}%"), Order.phone_number.ilike(f"%{q}%")))
+             filters.append(or_(Order.id == int(search_term), Order.customer_name.ilike(f"%{q}%"), Order.phone_number.ilike(f"%{q}%")))
         else:
-             filters.append(sa.or_(Order.customer_name.ilike(f"%{q}%"), Order.phone_number.ilike(f"%{q}%")))
+             filters.append(or_(Order.customer_name.ilike(f"%{q}%"), Order.phone_number.ilike(f"%{q}%")))
     if filters:
         query = query.where(*filters)
 
-    count_query = sa.select(sa.func.count(Order.id))
+    count_query = select(func.count(Order.id))
     if filters:
         count_query = count_query.where(*filters)
         
@@ -1369,7 +1373,7 @@ async def _process_and_save_order(order: Order, data: dict, session: AsyncSessio
     if items_from_js:
         valid_product_ids = [int(pid) for pid in items_from_js.keys() if pid.isdigit()]
         if valid_product_ids:
-            products_res = await session.execute(sa.select(Product).where(Product.id.in_(valid_product_ids)))
+            products_res = await session.execute(select(Product).where(Product.id.in_(valid_product_ids)))
             db_products_map = {p.id: p for p in products_res.scalars().all()}
 
             for pid_str, item_data in items_from_js.items():
@@ -1393,7 +1397,7 @@ async def _process_and_save_order(order: Order, data: dict, session: AsyncSessio
     if is_new_order:
         session.add(order)
         if not order.status_id:
-            new_status_res = await session.execute(sa.select(OrderStatus.id).where(OrderStatus.name == "Новий").limit(1))
+            new_status_res = await session.execute(select(OrderStatus.id).where(OrderStatus.name == "Новий").limit(1))
             order.status_id = new_status_res.scalar_one_or_none() or 1
         
         await session.flush()

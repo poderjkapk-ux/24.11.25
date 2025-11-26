@@ -2590,7 +2590,7 @@ WEB_ORDER_HTML = """
                     
                     const div = document.createElement('div');
                     div.className = 'cart-item';
-                    const modStr = item.modifiers.map(m => m.name).join(', ');
+                    const modStr = (item.modifiers || []).map(m => m.name).join(', ');
                     
                     div.innerHTML = `
                         <div class="cart-item-info">
