@@ -1,6 +1,7 @@
 # staff_templates.py
 
 # --- СТОРІНКА ВХОДУ ---
+# Цей рядок НЕ використовує .format(), тому тут дужки залишаються одинарними.
 STAFF_LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -88,6 +89,8 @@ STAFF_LOGIN_HTML = """
 """
 
 # --- ГОЛОВНА ПАНЕЛЬ (DASHBOARD) ---
+# УВАГА: Цей рядок використовує .format(), тому всі дужки у CSS та JS мають бути подвійними {{ }}.
+# Змінні {site_title} та {content} залишаються в одинарних дужках для підстановки Python.
 STAFF_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -377,6 +380,7 @@ STAFF_DASHBOARD_HTML = """
             modal.classList.add('active');
             
             try {{
+                // ВИПРАВЛЕНО: Подвійні дужки ${{orderId}}
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
                 if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
                 const data = await res.json();
@@ -387,35 +391,24 @@ STAFF_DASHBOARD_HTML = """
                     let courierOptions = '<option value="0">Не призначено</option>';
                     if (data.couriers && data.couriers.length > 0) {{
                         data.couriers.forEach(c => {{
+                            // ВИПРАВЛЕНО: Подвійні дужки ${{c.id}}, ${{c.selected ...}}, ${{c.name}}
                             courierOptions += `<option value="${{c.id}}" ${{c.selected ? 'selected' : ''}}>${{c.name}}</option>`;
                         }});
                     }} else courierOptions = '<option value="0" disabled>Немає кур\\'єрів на зміні</option>';
+                    // ВИПРАВЛЕНО: Подвійні дужки ${{courierOptions}}
                     courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
                 }}
 
                 if (!keepCart) {{
                     cart = {{}};
                     data.items.forEach(i => {{
-                        // Створюємо ключ так само, як при додаванні (або використовуємо унікальний ID, якщо він є)
-                        // Для редагування існуючих, якщо немає ID унікального рядка кошика, використовуємо productID.
-                        // АЛЕ! Оскільки ми тепер підтримуємо модифікатори, нам потрібен унікальний ключ.
-                        // Спрощуємо: якщо це завантаження з сервера, просто додаємо в cart за індексом або генеруємо ключ.
-                        const modIds = i.name.includes('+') ? 'from_db' : ''; // Спрощення, насправді треба ID
-                        // Для редагування вже збережених товарів ми просто відображаємо їх. 
-                        // Повноцінне редагування (додавання/видалення) робимо через перестворення списку.
-                        
-                        // Тимчасово: для простоти редагування існуючого замовлення, 
-                        // ми просто додаємо їх у cart як єдиний список об'єктів.
-                        // Ключем буде timestamp + random для унікальності.
+                        // ВИПРАВЛЕНО: Подвійні дужки ${{i.id}}, ${{Math.random()}}
                         const key = `exist_${{i.id}}_${{Math.random()}}`;
                         cart[key] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price, modifiers: [] }}; 
-                        // Примітка: сервер повертає назву вже з модифікаторами, тому modifiers тут пустий, 
-                        // але назва повна. Це компроміс для редагування.
                     }});
                 }}
 
                 renderEditCart(data.can_edit_items, data.statuses);
-                // Додаємо кнопки статусу і збереження в renderEditCart або після
                 
             }} catch (e) {{ body.innerHTML = "Помилка: " + e.message; }}
         }}
@@ -429,6 +422,7 @@ STAFF_DASHBOARD_HTML = """
             if (currentItems.length > 0) {{
                 Object.entries(cart).forEach(([key, item]) => {{
                     currentTotal += (item.price * item.qty);
+                    // ВИПРАВЛЕНО: Подвійні дужки ${{key}}, ${{item.qty}}, ${{item.name}}, ${{item.price.toFixed(2)}}
                     const controls = canEdit ? `
                         <div class="qty-ctrl-sm">
                             <button class="qty-btn-sm" onclick="updateCartItemQty('${{key}}', -1, true)">-</button>
@@ -443,17 +437,18 @@ STAFF_DASHBOARD_HTML = """
             
             let statusOptions = "";
             statuses.forEach(s => {{
+                // ВИПРАВЛЕНО: Подвійні дужки ${{s.id}}, ${{s.selected ...}}, ${{s.is_completed}}, ${{s.name}}
                 statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
             }});
             
             const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
+            // ВИПРАВЛЕНО: Подвійні дужки ${{currentTotal.toFixed(2)}}
             const saveBtn = canEdit ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад (~${{currentTotal.toFixed(2)}} грн)</button>` : '';
 
-            // Зберігаємо HTML в modal-body (але треба зберегти courierHtml якщо він був)
-            // Для простоти просто перезаписуємо нижню частину
             const courierDiv = body.querySelector('div[style*="background:#e3f2fd"]');
             const courierHtml = courierDiv ? courierDiv.outerHTML : '';
 
+            // ВИПРАВЛЕНО: Подвійні дужки для всіх JS змінних у template literals
             body.innerHTML = `
                 <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{editingOrderId}}</h3>
                 ${{courierHtml}}
@@ -473,6 +468,8 @@ STAFF_DASHBOARD_HTML = """
         async function assignCourier(courierId) {{
             if(!confirm("Змінити кур'єра?")) return;
             try {{
+                // ВИПРАВЛЕНО: Подвійні дужки в JSON об'єкті всередині .format() не потрібні, якщо вони не є частиною рядка форматування, 
+                // але оскільки це JS код всередині Python рядка, то для Python дужки JSON об'єкта треба подвоїти!
                 const res = await fetch('/staff/api/order/assign_courier', {{
                     method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ orderId: editingOrderId, courierId: courierId }})
@@ -487,13 +484,13 @@ STAFF_DASHBOARD_HTML = """
             if (cart[key]) {{
                 cart[key].qty += delta;
                 if (cart[key].qty <= 0) delete cart[key];
-                if(isEditing) {
-                    // Перемальовуємо тільки кошик, не робимо запит на сервер
-                    // Але нам потрібні статуси... Для простоти викликаємо openOrderEditModal з keepCart=true
+                
+                // ВИПРАВЛЕНО: Подвійні дужки для блоків if/else
+                if(isEditing) {{
                     openOrderEditModal(editingOrderId, true); 
-                } else {
-                    renderNewOrderMenu(); // Оновлюємо меню створення
-                }
+                }} else {{
+                    renderNewOrderMenu(); 
+                }}
             }}
         }}
 
@@ -523,6 +520,7 @@ STAFF_DASHBOARD_HTML = """
         }}
 
         async function updateStatusAPI(statusId, paymentMethod) {{
+            // ВИПРАВЛЕНО: Подвійні дужки для JSON об'єкта
             const res = await fetch('/staff/api/order/update_status', {{
                 method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, statusId: statusId, paymentMethod: paymentMethod }})
@@ -533,7 +531,8 @@ STAFF_DASHBOARD_HTML = """
         }}
 
         async function saveOrderChanges() {{
-            const items = Object.values(cart); // Список об'єктів
+            const items = Object.values(cart);
+            // ВИПРАВЛЕНО: Подвійні дужки для JSON об'єкта
             const res = await fetch('/staff/api/order/update_items', {{
                 method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, items: items }})
@@ -559,15 +558,18 @@ STAFF_DASHBOARD_HTML = """
         function renderProductList(filterText = "", isEditing = false) {{
             const body = document.getElementById('modal-body');
             const lowerFilter = filterText.toLowerCase();
-            let backFn = isEditing ? `openOrderEditModal(${editingOrderId}, true)` : `openTableModal(${currentTableId}, '${document.getElementById('modal-title')?.innerText || ''}')`; // Fix title later
-            if(!isEditing) backFn = `createNewOrderMenu()`; // Simplification
+            // ВИПРАВЛЕНО: Подвійні дужки ${{editingOrderId}}, ${{currentTableId}}, ${{document...}}
+            let backFn = isEditing ? `openOrderEditModal(${{editingOrderId}}, true)` : `openTableModal(${{currentTableId}}, '${{document.getElementById('modal-title')?.innerText || ''}}')`; 
+            
+            if(!isEditing) backFn = `renderNewOrderMenu()`; 
 
+            // ВИПРАВЛЕНО: Подвійні дужки ${{backFn}}, ${{isEditing ? ...}}
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0;">${isEditing ? 'Додати страву' : 'Нове замовлення'}</h3>
-                    <button onclick="${backFn}" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
+                    <h3 style="margin:0;">${{isEditing ? 'Додати страву' : 'Нове замовлення'}}</h3>
+                    <button onclick="${{backFn}}" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
                 </div>
-                <input type="text" id="search-input" placeholder="🔍 Пошук..." value="${filterText}" oninput="renderProductList(this.value, ${isEditing})">
+                <input type="text" id="search-input" placeholder="🔍 Пошук..." value="${{filterText}}" oninput="renderProductList(this.value, ${{isEditing}})">
                 <div class="edit-list">`;
                 
             let hasItems = false;
@@ -575,17 +577,15 @@ STAFF_DASHBOARD_HTML = """
                 const filteredProds = cat.products.filter(p => p.name.toLowerCase().includes(lowerFilter));
                 if (filteredProds.length > 0) {{
                     hasItems = true;
-                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${cat.name}</div>`;
+                    // ВИПРАВЛЕНО: Подвійні дужки ${{cat.name}}
+                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
                     filteredProds.forEach(p => {{
-                        // Зберігаємо об'єкт продукту в атрибут для доступу
                         const pData = JSON.stringify(p).replace(/"/g, '&quot;');
-                        const key = p.id; // Simple key for check, not for cart
-                        
-                        // Кнопка додавання
+                        // ВИПРАВЛЕНО: Подвійні дужки ${{p.name}}, ${{p.price}}, ${{pData}}, ${{isEditing}}
                         html += `
                         <div class="edit-item">
-                            <div style="flex-grow:1;">${p.name} <small>(${p.price} грн)</small></div>
-                            <button class="action-btn" style="padding:6px 12px;" onclick="handleProductClick(this)" data-product="${pData}" data-editing="${isEditing}">+</button>
+                            <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}} грн)</small></div>
+                            <button class="action-btn" style="padding:6px 12px;" onclick="handleProductClick(this)" data-product="${{pData}}" data-editing="${{isEditing}}">+</button>
                         </div>`;
                     }});
                 }}
@@ -593,18 +593,21 @@ STAFF_DASHBOARD_HTML = """
             if(!hasItems) html += `<div style="padding:20px; text-align:center; color:#999;">Нічого не знайдено</div>`;
             html += `</div>`;
             
-            if(!isEditing) {
-                 // Show cart summary or button
+            // ВИПРАВЛЕНО: Подвійні дужки для if
+            if(!isEditing) {{
                  const count = Object.keys(cart).length;
                  const total = Object.values(cart).reduce((sum, i) => sum + i.price * i.qty, 0);
-                 if (count > 0) {
-                     html += `<button class="big-btn" onclick="submitNewOrder()">✅ Замовити (${count} поз. - ${total} грн)</button>`;
-                 }
-            }
+                 // ВИПРАВЛЕНО: Подвійні дужки для if
+                 if (count > 0) {{
+                     // ВИПРАВЛЕНО: Подвійні дужки ${{count}}, ${{total}}
+                     html += `<button class="big-btn" onclick="submitNewOrder()">✅ Замовити (${{count}} поз. - ${{total}} грн)</button>`;
+                 }}
+            }}
 
             body.innerHTML = html;
             const input = document.getElementById('search-input');
-            if(input) { input.focus(); input.value = ''; input.value = filterText; }
+            // ВИПРАВЛЕНО: Подвійні дужки для if
+            if(input) {{ input.focus(); input.value = ''; input.value = filterText; }}
         }}
 
         window.handleProductClick = (btn) => {{
@@ -618,7 +621,6 @@ STAFF_DASHBOARD_HTML = """
             }}
         }};
 
-        // --- MODIFIER MODAL FOR STAFF ---
         function openModifierModal(product, isEditing) {{
             selectedProduct = product;
             selectedModifiers.clear();
@@ -627,23 +629,25 @@ STAFF_DASHBOARD_HTML = """
             let modListHtml = `<div class="mod-list" style="overflow-y:auto; max-height:300px; margin:10px 0;">`;
             
             product.modifiers.forEach(mod => {{
+                // ВИПРАВЛЕНО: Подвійні дужки ${{mod.id}}, ${{mod.name}}, ${{mod.price}}
                 modListHtml += `
-                <div class="mod-item" onclick="toggleStaffMod(${mod.id}, this)">
+                <div class="mod-item" onclick="toggleStaffMod(${{mod.id}}, this)">
                     <div class="mod-info">
-                        <div class="mod-checkbox"></div> <span>${mod.name}</span>
+                        <div class="mod-checkbox"></div> <span>${{mod.name}}</span>
                     </div>
-                    <b>+${mod.price} грн</b>
+                    <b>+${{mod.price}} грн</b>
                 </div>`;
             }});
             modListHtml += `</div>`;
             
+            // ВИПРАВЛЕНО: Подвійні дужки ${{product.name}}, ${{product.price}}, ${{isEditing}}, ${{isEditing}}
             body.innerHTML = `
-                <h3 style="text-align:center; margin-top:0;">${product.name}</h3>
+                <h3 style="text-align:center; margin-top:0;">${{product.name}}</h3>
                 <p style="text-align:center; color:#666;">Оберіть добавки:</p>
-                ${modListHtml}
+                ${{modListHtml}}
                 <div style="margin-top:auto; padding-top:10px; border-top:1px solid #eee;">
-                    <button class="big-btn" id="staff-mod-add-btn" onclick="addStaffWithMods(${isEditing})">Додати (<span>${product.price}</span> грн)</button>
-                    <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="renderProductList('', ${isEditing})">Скасувати</button>
+                    <button class="big-btn" id="staff-mod-add-btn" onclick="addStaffWithMods(${{isEditing}})">Додати (<span>${{product.price}}</span> грн)</button>
+                    <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="renderProductList('', ${{isEditing}})">Скасувати</button>
                 </div>
             `;
         }}
@@ -678,7 +682,8 @@ STAFF_DASHBOARD_HTML = """
 
         function addToCart(product, modifiers, isEditing) {{
             const modIds = modifiers.map(m => m.id).sort().join('-');
-            const key = `${product.id}-${modIds}`;
+            // ВИПРАВЛЕНО: Подвійні дужки ${{product.id}}, ${{modIds}}
+            const key = `${{product.id}}-${{modIds}}`;
             
             if (cart[key]) {{
                 cart[key].qty++;
@@ -686,18 +691,17 @@ STAFF_DASHBOARD_HTML = """
                 let unitPrice = product.price;
                 modifiers.forEach(m => unitPrice += m.price);
                 
-                // Формуємо назву з модифікаторами для відображення
                 let displayName = product.name;
                 if (modifiers.length > 0) {{
                     displayName += ` (+ ${modifiers.map(m => m.name).join(', ')})`;
                 }}
 
                 cart[key] = {{
-                    id: product.id, // Backend product ID
+                    id: product.id, 
                     name: displayName,
                     price: unitPrice,
                     qty: 1,
-                    modifiers: modifiers // Full objects for backend
+                    modifiers: modifiers
                 }};
             }}
             
@@ -713,8 +717,9 @@ STAFF_DASHBOARD_HTML = """
             currentTableId = tableId;
             cart = {};
             const modal = document.getElementById('staff-modal');
+            // ВИПРАВЛЕНО: Подвійні дужки ${{tableName}}
             document.getElementById('modal-body').innerHTML = `
-                <h3 style="text-align:center;">${tableName}</h3>
+                <h3 style="text-align:center;">${{tableName}}</h3>
                 <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:15px;">
                     <button class="big-btn" onclick="openAddProductModal(false)">📝 Нове замовлення</button>
                     <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="closeModal()">Закрити</button>
@@ -732,6 +737,7 @@ STAFF_DASHBOARD_HTML = """
             btn.innerText = "Створення...";
             
             try {{
+                // ВИПРАВЛЕНО: Подвійні дужки в JSON
                 const res = await fetch('/staff/api/order/create', {{
                     method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ tableId: currentTableId, cart: items }})
@@ -749,6 +755,7 @@ STAFF_DASHBOARD_HTML = """
 
         function performAction(action, orderId, extra=null) {{
             if(action === 'chef_ready' && !confirm("Підтвердити готовність?")) return;
+            // ВИПРАВЛЕНО: Подвійні дужки в JSON
             fetch('/staff/api/action', {{
                 method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ action, orderId, extra }})
@@ -763,6 +770,10 @@ STAFF_DASHBOARD_HTML = """
 
         function closeModal() {{
             document.getElementById('staff-modal').classList.remove('active');
+        }}
+        
+        function renderNewOrderMenu() {{
+             renderProductList("", false);
         }}
     </script>
 </body>
