@@ -37,6 +37,8 @@ async def admin_employees(
         error_msg = "<div class='card' style='background:#fee2e2; color:#991b1b; margin-bottom:20px; border:1px solid #fecaca;'>⚠️ Неможливо видалити: співробітник має активні замовлення або відкриту зміну.</div>"
     elif error == "integrity":
         error_msg = "<div class='card' style='background:#fee2e2; color:#991b1b; margin-bottom:20px; border:1px solid #fecaca;'>⚠️ Неможливо видалити: співробітник пов'язаний з архівними даними (замовленнями).</div>"
+    elif error == "has_debt":
+        error_msg = "<div class='card' style='background:#fee2e2; color:#991b1b; margin-bottom:20px; border:1px solid #fecaca;'>⚠️ Неможливо видалити: у співробітника є борг (готівка на руках). Спочатку прийміть кошти в розділі Каса.</div>"
 
     # Завантажуємо співробітників з ролями
     employees_res = await session.execute(select(Employee).options(joinedload(Employee.role)).order_by(Employee.id.desc()))
@@ -55,10 +57,18 @@ async def admin_employees(
         # Роль (бейдж)
         role_badge = f"<span class='role-tag'>{html.escape(e.role.name if e.role else 'N/A')}</span>"
         
+        # Індикатор боргу (якщо є)
+        debt_info = ""
+        if e.cash_balance > 0:
+            debt_info = f"<div style='color:#c0392b; font-size:0.85em; font-weight:bold; margin-top:2px;'>Борг: {e.cash_balance:.2f} грн</div>"
+        
         rows += f"""
         <tr>
             <td style="text-align:center; color:#888;">{e.id}</td>
-            <td style="font-weight:600;">{html.escape(e.full_name)}</td>
+            <td style="font-weight:600;">
+                {html.escape(e.full_name)}
+                {debt_info}
+            </td>
             <td>{html.escape(e.phone_number or '-')}</td>
             <td>{role_badge}</td>
             <td>{status_badge}</td>
@@ -155,7 +165,6 @@ async def admin_employees(
     </div>
     """
 
-    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
@@ -240,7 +249,6 @@ async def get_edit_employee_form(
         </form>
     </div>"""
     
-    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
@@ -290,7 +298,11 @@ async def delete_employee(
 ):
     employee = await session.get(Employee, employee_id)
     if employee:
-        # 1. Перевірка на активні замовлення (Кур'єр або Офіціант)
+        # 1. Перевірка на борг (Cash Balance) - ЗАХИСТ ВІД ВТРАТИ ГРОШЕЙ
+        if employee.cash_balance > 0:
+             return RedirectResponse(url="/admin/employees?error=has_debt", status_code=303)
+
+        # 2. Перевірка на активні замовлення (Кур'єр або Офіціант)
         final_statuses_res = await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))
         final_status_ids = final_statuses_res.scalars().all()
 
@@ -304,7 +316,7 @@ async def delete_employee(
             )
         )
         
-        # 2. Перевірка на відкриту касову зміну
+        # 3. Перевірка на відкриту касову зміну
         active_shift = await session.execute(
             select(func.count(CashShift.id)).where(
                 CashShift.employee_id == employee_id,
@@ -446,7 +458,6 @@ async def admin_roles(
     </div>
     """
     
-    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
@@ -528,7 +539,6 @@ async def get_edit_role_form(
         </form>
     </div>"""
     
-    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     

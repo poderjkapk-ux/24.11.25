@@ -9,32 +9,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload, joinedload
 
 from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotification
-# --- СКЛАД: Імпорт функції списання ---
-from inventory_service import deduct_products_by_tech_card
+# --- СКЛАД: Импорт функций списания и возврата ---
+from inventory_service import deduct_products_by_tech_card, reverse_deduction
 
 logger = logging.getLogger(__name__)
 
 async def create_staff_notification(session: AsyncSession, employee_id: int, message: str):
     """
-    Створює запис сповіщення в БД для PWA (щоб у співробітника з'явилась червона крапка та Toast).
-    Використовується скрізь, де треба повідомити персонал.
+    Создает запись уведомления в БД для PWA (красная точка и Toast).
     """
     try:
         session.add(StaffNotification(employee_id=employee_id, message=message))
-        # Важливо: робимо коміт одразу, щоб поллінг PWA побачив нове сповіщення
+        # Важно: делаем коммит сразу, чтобы поллинг PWA увидел новое уведомление
         await session.commit() 
     except Exception as e:
         logger.error(f"Error creating PWA notification for emp {employee_id}: {e}")
 
 async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: AsyncSession):
     """
-    Надсилає сповіщення про НОВЕ замовлення:
-    1. PWA: Операторам (червона крапка).
-    2. Telegram: В адмін-чат та операторам в особисті.
+    Отправляет уведомление о НОВОМ заказе:
+    1. PWA: Операторам.
+    2. Telegram: В админ-чат и операторам в личные.
     """
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     
-    # Завантажуємо зв'язки для відображення
+    # Загружаем связи
     query = select(Order).where(Order.id == order.id).options(
         selectinload(Order.items),
         joinedload(Order.status),
@@ -43,11 +42,10 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
     result = await session.execute(query)
     order = result.scalar_one()
 
-    # --- 1. PWA NOTIFICATION (Сповіщаємо операторів) ---
+    # --- 1. PWA NOTIFICATION (Операторам) ---
     operator_roles_res = await session.execute(select(Role.id).where(Role.can_manage_orders == True))
     operator_role_ids = operator_roles_res.scalars().all()
     
-    # Знаходимо операторів на зміні
     if operator_role_ids:
         operators = (await session.execute(
             select(Employee).where(Employee.role_id.in_(operator_role_ids), Employee.is_on_shift == True)
@@ -56,7 +54,7 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
         pwa_msg = f"🆕 Нове замовлення #{order.id} ({order.total_price} грн)"
         for emp in operators:
             await create_staff_notification(session, emp.id, pwa_msg)
-    # ---------------------------------------------------
+    # ---------------------------------------
 
     # --- 2. TELEGRAM NOTIFICATION ---
     is_delivery = order.is_delivery 
@@ -74,7 +72,6 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
     status_name = order.status.name if order.status else 'Невідомий'
     time_info = f"Час: {html.quote(order.delivery_time)}"
     
-    # Формуємо список товарів
     products_formatted = ""
     if order.items:
         products_formatted = "\n".join([f"- {html.quote(item.product_name)} x {item.quantity}" for item in order.items])
@@ -88,7 +85,6 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
                   f"<b>Сума:</b> {order.total_price} грн\n\n"
                   f"<b>Статус:</b> {status_name}")
 
-    # Клавіатура для Telegram
     kb_admin = InlineKeyboardBuilder()
     statuses_res = await session.execute(
         select(OrderStatus).where(OrderStatus.visible_to_operator == True).order_by(OrderStatus.id)
@@ -102,7 +98,6 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
     kb_admin.row(InlineKeyboardButton(text="👤 Призначити кур'єра", callback_data=f"select_courier_{order.id}"))
     kb_admin.row(InlineKeyboardButton(text="✏️ Редагувати замовлення", callback_data=f"edit_order_{order.id}"))
 
-    # Відправка в Telegram (Оператори + Адмін чат)
     target_chat_ids = set()
     if admin_chat_id_str:
         try:
@@ -127,7 +122,7 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
         except Exception as e:
             logger.error(f"Не вдалося відправити нове замовлення в TG {chat_id}: {e}")
 
-    # 3. РОЗПОДІЛ НА ВИРОБНИЦТВО (Кухня/Бар)
+    # 3. РОЗПОДІЛ НА ВИРОБНИЦТВО
     if order.status and order.status.requires_kitchen_notify:
         await distribute_order_to_production(admin_bot, order, session)
     else:
@@ -136,8 +131,7 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
 
 async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncSession):
     """
-    Розподіляє товари замовлення між Кухнею та Баром.
-    Надсилає PWA та Telegram сповіщення відповідним працівникам.
+    Распределяет товары заказа между Кухней и Баром.
     """
     query = select(Order).where(Order.id == order.id).options(
         selectinload(Order.items).joinedload(OrderItem.product)
@@ -150,8 +144,6 @@ async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncS
 
     for item in loaded_order.items:
         item_str = f"- {html.quote(item.product_name)} x {item.quantity}"
-        
-        # Визначаємо цех (з OrderItem або Product)
         area = item.preparation_area
         
         if area == 'bar':
@@ -159,7 +151,7 @@ async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncS
         else:
             kitchen_items.append(item_str)
 
-    # --- 1. PWA NOTIFICATION (Кухня і Бар) ---
+    # --- PWA NOTIFICATION ---
     if kitchen_items:
         chefs = (await session.execute(
             select(Employee).join(Role).where(Role.can_receive_kitchen_orders==True, Employee.is_on_shift==True)
@@ -173,41 +165,28 @@ async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncS
         )).scalars().all()
         for emp in barmen:
             await create_staff_notification(session, emp.id, f"🍹 Бар: Нове замовлення #{order.id}")
-    # -----------------------------------------
 
-    # --- 2. TELEGRAM NOTIFICATION ---
+    # --- TELEGRAM NOTIFICATION ---
     if kitchen_items:
         await send_group_notification(
-            bot=bot,
-            order=loaded_order,
-            items=kitchen_items,
+            bot=bot, order=loaded_order, items=kitchen_items,
             role_filter=Role.can_receive_kitchen_orders == True,
-            title="🧑‍🍳 ЗАМОВЛЕННЯ НА КУХНЮ",
-            session=session,
-            area="kitchen"
+            title="🧑‍🍳 ЗАМОВЛЕННЯ НА КУХНЮ", session=session, area="kitchen"
         )
 
     if bar_items:
         await send_group_notification(
-            bot=bot,
-            order=loaded_order,
-            items=bar_items,
+            bot=bot, order=loaded_order, items=bar_items,
             role_filter=Role.can_receive_bar_orders == True,
-            title="🍹 ЗАМОВЛЕННЯ НА БАР",
-            session=session,
-            area="bar"
+            title="🍹 ЗАМОВЛЕННЯ НА БАР", session=session, area="bar"
         )
 
 
 async def send_group_notification(bot: Bot, order: Order, items: list, role_filter, title: str, session: AsyncSession, area: str = "kitchen"):
-    """
-    Допоміжна функція для відправки чека в Telegram групі співробітників.
-    """
     roles_res = await session.execute(select(Role.id).where(role_filter))
     role_ids = roles_res.scalars().all()
 
-    if not role_ids:
-        return
+    if not role_ids: return
 
     employees_res = await session.execute(
         select(Employee).where(
@@ -255,38 +234,29 @@ async def notify_station_completion(bot: Bot, order: Order, area: str, session: 
     message_text = f"✅ <b>{source_label} ГОТОВА!</b>\n{order_info}\n<i>Можна забирати.</i>"
     pwa_msg = f"✅ {source_label} готов: Заказ #{order.id}"
 
-    # --- 1. PWA NOTIFICATION (Офіціант / Кур'єр) ---
+    # PWA
     if order.accepted_by_waiter_id:
         await create_staff_notification(session, order.accepted_by_waiter_id, pwa_msg)
     if order.courier_id:
         await create_staff_notification(session, order.courier_id, pwa_msg)
-    # ----------------------------------------------
 
-    # --- 2. TELEGRAM NOTIFICATION ---
+    # Telegram
     target_chat_ids = set()
-
-    # Офіціант
     if order.order_type == 'in_house' and order.accepted_by_waiter and order.accepted_by_waiter.telegram_user_id:
         target_chat_ids.add(order.accepted_by_waiter.telegram_user_id)
-    
-    # Кур'єр
     if order.is_delivery and order.courier and order.courier.telegram_user_id:
         target_chat_ids.add(order.courier.telegram_user_id)
 
-    # Якщо нікого не закріплено - шлемо адміну
     if not target_chat_ids:
         admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
         if admin_chat_id_str:
              message_text = f"⚠️ {message_text}\n(Виконавець не призначений)"
-             try:
-                 target_chat_ids.add(int(admin_chat_id_str))
+             try: target_chat_ids.add(int(admin_chat_id_str))
              except ValueError: pass
 
     for chat_id in target_chat_ids:
-        try:
-            await bot.send_message(chat_id, message_text)
-        except Exception as e:
-            logger.error(f"Error sending station completion TG msg: {e}")
+        try: await bot.send_message(chat_id, message_text)
+        except Exception: pass
 
 
 async def notify_all_parties_on_status_change(
@@ -298,72 +268,68 @@ async def notify_all_parties_on_status_change(
     session: AsyncSession
 ):
     """
-    Централізована функція сповіщень при зміні статусу.
+    Централизованная функция уведомлений и логики склада при смене статуса.
     """
     await session.refresh(order, ['status', 'courier', 'accepted_by_waiter', 'table'])
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     
     new_status = order.status
     
-    # --- 1. PWA NOTIFICATION (Офіціант / Кур'єр) ---
-    pwa_msg = f"ℹ️ Заказ #{order.id}: Статус -> '{new_status.name}'"
+    # --- 1. ЛОГИКА СКЛАДА (Списание и Возврат) ---
     
+    # А. Возврат на склад при Отмене (если уже было списано)
+    if new_status.is_cancelled_status and order.is_inventory_deducted:
+        try:
+            await reverse_deduction(session, order)
+            # Логируем в админку, что произошел возврат
+            if admin_chat_id_str:
+                try: await admin_bot.send_message(admin_chat_id_str, f"♻️ <b>[Склад]</b> Товари замовлення #{order.id} повернуто на склад.")
+                except Exception: pass
+        except Exception as e:
+            logger.error(f"Помилка повернення на склад для #{order.id}: {e}")
+
+    # Б. Списание при готовности
+    if new_status.name == "Готовий до видачі":
+        is_deducted = getattr(order, 'is_inventory_deducted', False)
+        if not is_deducted:
+            try:
+                await deduct_products_by_tech_card(session, order)
+                order.is_inventory_deducted = True
+                await session.commit()
+                logger.info(f"Склад списан для заказа #{order.id}")
+            except Exception as e:
+                logger.error(f"Помилка списання складу для #{order.id}: {e}")
+    # --------------------------------------------
+
+    # --- 2. PWA NOTIFICATION ---
+    pwa_msg = f"ℹ️ Заказ #{order.id}: Статус -> '{new_status.name}'"
     if order.accepted_by_waiter_id:
         await create_staff_notification(session, order.accepted_by_waiter_id, pwa_msg)
-        
     if order.courier_id:
         await create_staff_notification(session, order.courier_id, pwa_msg)
-    # ----------------------------------------------
 
-    # --- 2. LOG TO ADMIN CHAT ---
+    # --- 3. LOG TO ADMIN CHAT ---
     if admin_chat_id_str:
         log_message = (
             f"🔄 <b>[Статус змінено]</b> Замовлення #{order.id}\n"
             f"<b>Ким:</b> {html.quote(actor_info)}\n"
             f"<b>Статус:</b> `{html.quote(old_status_name)}` → `{html.quote(new_status.name)}`"
         )
-        try:
-            await admin_bot.send_message(admin_chat_id_str, log_message)
+        try: await admin_bot.send_message(admin_chat_id_str, log_message)
         except Exception: pass
 
-    # --- 3. DISTRIBUTE TO PRODUCTION ---
+    # --- 4. DISTRIBUTE TO PRODUCTION ---
     if new_status.requires_kitchen_notify:
         await distribute_order_to_production(admin_bot, order, session)
 
-    # --- 4. READY FOR PICKUP NOTIFICATION & INVENTORY DEDUCTION ---
+    # --- 5. READY FOR PICKUP MSG ---
     if new_status.name == "Готовий до видачі":
-        # --- СКЛАД: Списание ингредиентов (ВИПРАВЛЕНО) ---
-        # Перевіряємо, чи є в моделі флаг списання (потрібно додати в models.py: is_inventory_deducted = Column(Boolean, default=False))
-        # Якщо моделі ще не оновлені, використовуємо getattr з дефолтом False, але це не збереже стан в БД без міграції.
-        # Припускаємо, що модель Order має поле is_inventory_deducted.
-        
-        is_deducted = getattr(order, 'is_inventory_deducted', False)
-        
-        if not is_deducted:
-            try:
-                await deduct_products_by_tech_card(session, order)
-                
-                # Встановлюємо прапор списання, щоб уникнути подвійного списання
-                if hasattr(order, 'is_inventory_deducted'):
-                    order.is_inventory_deducted = True
-                    await session.commit()
-                    logger.info(f"Склад успешно списан для заказа #{order.id}")
-                else:
-                    logger.warning(f"Модель Order не має поля 'is_inventory_deducted'. Ризик подвійного списання для #{order.id}")
-                    
-            except Exception as e:
-                logger.error(f"Помилка списання складу для замовлення #{order.id}: {e}")
-        else:
-            logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше. Пропускаємо.")
-        # -----------------------------------------------------
-
         source_label = ""
         if "Кухня" in actor_info: source_label = " (🍳 КУХНЯ)"
         elif "Бар" in actor_info: source_label = " (🍹 БАР)"
         
         ready_message = f"📢 <b>ГОТОВО ДО ВИДАЧІ{source_label}: #{order.id}</b>! \n"
         
-        # Попередження, якщо готова лише частина
         if not (order.kitchen_done and order.bar_done) and (order.kitchen_done or order.bar_done):
              ready_message += "⚠️ <b>УВАГА: Це лише частина замовлення!</b> Перевірте інший цех.\n"
 
@@ -376,7 +342,7 @@ async def notify_all_parties_on_status_change(
             target_employees.append(order.courier)
             ready_message += f"Кур'єр: {html.quote(order.courier.full_name)}"
 
-        # Якщо виконавця немає, сповіщаємо операторів
+        # Если исполнителя нет, уведомляем операторов
         if not target_employees:
              operator_roles_res = await session.execute(select(Role.id).where(Role.can_manage_orders == True))
              op_ids = operator_roles_res.scalars().all()
@@ -387,18 +353,16 @@ async def notify_all_parties_on_status_change(
              
         for employee in target_employees:
             if employee.telegram_user_id:
-                try:
-                    await admin_bot.send_message(employee.telegram_user_id, ready_message)
+                try: await admin_bot.send_message(employee.telegram_user_id, ready_message)
                 except Exception: pass
 
-    # --- 5. NOTIFY COURIER (Status Change) ---
+    # --- 6. NOTIFY STAFF (Status Change) ---
     if order.courier and order.courier.telegram_user_id and "Кур'єр" not in actor_info and new_status.name != "Готовий до видачі":
         if new_status.visible_to_courier:
             courier_text = f"❗️ Статус замовлення #{order.id} змінено на: <b>{new_status.name}</b>"
             try: await admin_bot.send_message(order.courier.telegram_user_id, courier_text)
             except Exception: pass
 
-    # --- 6. NOTIFY WAITER (Status Change) ---
     if order.order_type != 'delivery' and order.accepted_by_waiter and order.accepted_by_waiter.telegram_user_id and "Офіціант" not in actor_info and new_status.name != "Готовий до видачі":
         waiter_text = f"📢 Замовлення #{order.id} (Стіл: {html.quote(order.table.name if order.table else 'N/A')}) має новий статус: <b>{new_status.name}</b>"
         try: await admin_bot.send_message(order.accepted_by_waiter.telegram_user_id, waiter_text)

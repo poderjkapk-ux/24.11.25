@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from models import Order, Product, Category, OrderStatus, Employee, Role, Settings, OrderStatusHistory, OrderItem
 from courier_handlers import _generate_waiter_order_view
-# --- ИЗМЕНЕНИЕ: Добавлен импорт create_staff_notification ---
+# --- ЗМІНА: Додано імпорт create_staff_notification ---
 from notification_manager import notify_all_parties_on_status_change, create_staff_notification
 # ------------------------------------------------------------
 # --- КАСА: Імпорт функції прив'язки ---
@@ -404,6 +404,13 @@ def register_admin_handlers(dp: Dispatcher):
         if order.status.is_completed_status or order.status.is_cancelled_status: 
             return await callback.answer("🚫 Замовлення закрите.", show_alert=True)
 
+        # --- ВАЖЛИВО: Перевірка на списання складу ---
+        # Використовуємо getattr на випадок відсутності поля
+        is_deducted = getattr(order, 'is_inventory_deducted', False)
+        if is_deducted:
+            return await callback.answer("🚫 Редагування заборонено: продукти вже списані. Спочатку змініть статус.", show_alert=True)
+        # ---------------------------------------------
+
         if "change_qnt" in callback.data:
             change = int(parts[5])
             item.quantity += change
@@ -467,6 +474,12 @@ def register_admin_handlers(dp: Dispatcher):
         
         if order.status.is_completed_status or order.status.is_cancelled_status: 
             return await callback.answer("🚫 Замовлення закрите.", show_alert=True)
+
+        # --- ВАЖЛИВО: Перевірка на списання складу ---
+        is_deducted = getattr(order, 'is_inventory_deducted', False)
+        if is_deducted:
+            return await callback.answer("🚫 Редагування заборонено: продукти вже списані. Спочатку змініть статус.", show_alert=True)
+        # ---------------------------------------------
 
         # Перевіряємо, чи вже є цей товар в замовленні
         existing_item_res = await session.execute(
@@ -556,9 +569,9 @@ def register_admin_handlers(dp: Dispatcher):
             order.courier_id = courier_id
             new_courier_name = new_courier.full_name
             
-            # --- ДОБАВЛЕНО: PWA Уведомление ---
+            # --- PWA Уведомление ---
             await create_staff_notification(session, new_courier.id, f"📦 Вам призначено замовлення #{order.id}!")
-            # ----------------------------------
+            # -----------------------
 
             if new_courier.telegram_user_id:
                 try:

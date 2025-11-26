@@ -416,11 +416,16 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
             badge_class = "success" if o.status.name == "Готовий до видачі" else "info"
             color = "#27ae60" if o.status.name == "Готовий до видачі" else "#333"
 
+            # --- UX FIX: Показываем иконки готовности, даже если статус еще не сменился ---
+            status_display = o.status.name
+            if o.kitchen_done: status_display += " 🍳"
+            if o.bar_done: status_display += " 🍹"
+
             html_out += STAFF_ORDER_CARD.format(
                 id=o.id, 
                 time=o.created_at.strftime('%H:%M'), 
                 badge_class=badge_class, 
-                status=o.status.name, 
+                status=status_display, 
                 content=content, 
                 buttons=btns, 
                 color=color

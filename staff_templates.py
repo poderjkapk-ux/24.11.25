@@ -357,6 +357,14 @@ STAFF_DASHBOARD_HTML = """
             if (currentView === 'notifications') return;
             try {{
                 const response = await fetch(`/staff/api/data?view=${{currentView}}`);
+                
+                // --- FIX: Автоматический редирект при истечении токена ---
+                if (response.status === 401) {{
+                    window.location.href = "/staff/login";
+                    return;
+                }}
+                // --------------------------------------------------------
+
                 if (!response.ok) throw new Error("Server error");
                 const data = await response.json();
                 
@@ -368,6 +376,14 @@ STAFF_DASHBOARD_HTML = """
         async function updateNotifications() {{
             try {{
                 const res = await fetch('/staff/api/notifications');
+                
+                // --- FIX: Редирект при 401 ---
+                if (res.status === 401) {{
+                    // window.location.href = "/staff/login"; // Можно включить редирект и тут, но обычно достаточно основного fetchData
+                    return;
+                }}
+                // -----------------------------
+
                 const data = await res.json();
                 const badge = document.getElementById('nav-notify-badge');
                 
@@ -412,11 +428,13 @@ STAFF_DASHBOARD_HTML = """
         async function toggleShift() {{
             if(!confirm("Змінити статус зміни?")) return;
             const res = await fetch('/staff/api/shift/toggle', {{ method: 'POST' }});
+            
+            if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+            
             const data = await res.json();
             if (data.status === 'ok') location.reload();
         }}
 
-        // ПРАВКА: Добавлен параметр keepCart для сохранения состояния корзины при возврате
         async function openOrderEditModal(orderId, keepCart = false) {{
             editingOrderId = orderId;
             const modal = document.getElementById('staff-modal');
@@ -426,6 +444,9 @@ STAFF_DASHBOARD_HTML = """
             
             try {{
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
+                
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+                
                 const data = await res.json();
                 
                 if(data.error) {{
@@ -433,7 +454,6 @@ STAFF_DASHBOARD_HTML = """
                     return;
                 }}
                 
-                // Блок курьеров
                 let courierHtml = "";
                 if (data.can_assign_courier && data.is_delivery) {{
                     let courierOptions = '<option value="0">Не призначено</option>';
@@ -453,13 +473,11 @@ STAFF_DASHBOARD_HTML = """
                     </div>`;
                 }}
 
-                // Если мы НЕ сохраняем корзину (первое открытие), инициализируем из сервера
                 if (!keepCart) {{
                     cart = {{}};
                     data.items.forEach(i => cart[i.id] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price }});
                 }}
 
-                // Генерируем список на основе ЛОКАЛЬНОЙ корзины (cart)
                 let itemsHtml = `<div class="edit-list">`;
                 const currentItems = Object.values(cart);
                 let currentTotal = 0;
@@ -467,7 +485,6 @@ STAFF_DASHBOARD_HTML = """
                 if (currentItems.length > 0) {{
                     currentItems.forEach(item => {{
                         currentTotal += (item.price * item.qty);
-                        // Показываем контролы только если есть права
                         const controls = data.can_edit_items ? `
                             <div class="qty-ctrl-sm">
                                 <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, -1)">-</button>
@@ -487,7 +504,6 @@ STAFF_DASHBOARD_HTML = """
                 
                 itemsHtml += `</div>`;
                 
-                // Кнопка добавления (если есть права)
                 if (data.can_edit_items) {{
                     itemsHtml += `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal()"><i class="fa-solid fa-plus"></i> Додати страву</button>`;
                 }}
@@ -497,7 +513,6 @@ STAFF_DASHBOARD_HTML = """
                     statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
                 }});
                 
-                // Кнопка сохранения (если есть права на редактирование состава)
                 const saveBtn = data.can_edit_items ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад (~${{currentTotal.toFixed(2)}} грн)</button>` : '';
 
                 body.innerHTML = `
@@ -526,6 +541,9 @@ STAFF_DASHBOARD_HTML = """
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ orderId: editingOrderId, courierId: courierId }})
                 }});
+                
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+                
                 const data = await res.json();
                 if(data.success) showToast(data.message);
                 else alert(data.error);
@@ -536,7 +554,7 @@ STAFF_DASHBOARD_HTML = """
             if (cart[prodId]) {{
                 cart[prodId].qty += delta;
                 if (cart[prodId].qty <= 0) delete cart[prodId];
-                openOrderEditModal(editingOrderId, true); // Перерисовка без сброса корзины
+                openOrderEditModal(editingOrderId, true);
             }}
         }}
 
@@ -579,6 +597,9 @@ STAFF_DASHBOARD_HTML = """
                     paymentMethod: paymentMethod 
                 }})
             }});
+            
+            if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+            
             const data = await res.json();
             if(data.error) alert(data.error);
             else showToast("Статус оновлено");
@@ -591,6 +612,9 @@ STAFF_DASHBOARD_HTML = """
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, items: items }})
             }});
+            
+            if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+            
             const data = await res.json();
             if(data.success) {{
                 closeModal();
@@ -607,6 +631,7 @@ STAFF_DASHBOARD_HTML = """
             
             if (menuData.length === 0) {{
                 const res = await fetch('/staff/api/menu/full');
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
                 menuData = await res.json();
             }}
             
@@ -617,7 +642,6 @@ STAFF_DASHBOARD_HTML = """
             const body = document.getElementById('modal-body');
             const lowerFilter = filterText.toLowerCase();
             
-            // ПРАВКА: Кнопка "Назад" викликає openOrderEditModal з true (keepCart)
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0;">Додати страву</h3>
@@ -634,7 +658,6 @@ STAFF_DASHBOARD_HTML = """
                     hasItems = true;
                     html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
                     filteredProds.forEach(p => {{
-                        // Передаємо також ім'я та ціну, щоб вони збереглися у локальному кошику
                         html += `
                         <div class="edit-item">
                             <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}})</small></div>
@@ -656,7 +679,6 @@ STAFF_DASHBOARD_HTML = """
             }}
         }}
 
-        // ПРАВКА: Додано параметри name та price
         function addToEditCart(prodId, name, price) {{
             if (!cart[prodId]) cart[prodId] = {{ id: prodId, qty: 0, name: name, price: price }};
             cart[prodId].qty++;
@@ -678,9 +700,12 @@ STAFF_DASHBOARD_HTML = """
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ action, orderId, extra }})
-            }}).then(res => res.json()).then(data => {{
-                if(data.success) fetchData();
-                else alert("Помилка: " + (data.error || "Unknown"));
+            }}).then(res => {{
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+                return res.json();
+            }}).then(data => {{
+                if(data && data.success) fetchData();
+                else if (data) alert("Помилка: " + (data.error || "Unknown"));
             }});
         }}
         
@@ -703,6 +728,7 @@ STAFF_DASHBOARD_HTML = """
              body.innerHTML = '<div style="text-align:center; padding:20px;">Завантаження...</div>';
              if (menuData.length === 0) {{
                 const res = await fetch('/staff/api/menu/full');
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
                 menuData = await res.json();
             }}
             renderNewOrderMenu("");
@@ -763,11 +789,14 @@ STAFF_DASHBOARD_HTML = """
             btn.innerText = "Створення...";
             
             try {{
-                await fetch('/staff/api/order/create', {{
+                const res = await fetch('/staff/api/order/create', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ tableId: currentTableId, cart: items }})
                 }});
+                
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+                
                 closeModal();
                 fetchData();
                 showToast("Замовлення створено");
