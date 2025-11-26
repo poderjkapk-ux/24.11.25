@@ -2,7 +2,7 @@
 
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from decimal import Decimal
 from sqlalchemy.orm import joinedload
 
@@ -64,6 +64,7 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
     """
     Проводит документ: обновляет остатки на складах на основе позиций документа.
     Устанавливает флаг is_processed = True.
+    Также пересчитывает себестоимость по средней (Weighted Average) при приходе.
     """
     doc = await session.get(InventoryDoc, doc_id, options=[joinedload(InventoryDoc.items)])
     if not doc: raise ValueError("Документ не найден")
@@ -74,12 +75,41 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
         
         if doc.doc_type == 'supply': # Приход
             if not doc.target_warehouse_id: raise ValueError("Не указан склад получателя")
+            
+            # --- ЛОГИКА СРЕДНЕВЗВЕШЕННОЙ СЕБЕСТОИМОСТИ ---
+            # Формула: (Остаток * СтараяЦена + Приход * НоваяЦена) / (Остаток + Приход)
+            if item.price > 0:
+                # 1. Получаем текущий общий остаток ингредиента по ВСЕМ складам
+                # (т.к. себестоимость в модели Ingredient одна на всю систему)
+                total_qty_res = await session.execute(
+                    select(func.sum(Stock.quantity)).where(Stock.ingredient_id == item.ingredient_id)
+                )
+                total_existing_qty = total_qty_res.scalar() or Decimal(0)
+                
+                # Если остаток отрицательный (пересорт/ошибка), считаем его как 0 для расчета цены, 
+                # чтобы не искажать новую партию.
+                calc_existing_qty = total_existing_qty if total_existing_qty > 0 else Decimal(0)
+
+                # 2. Получаем текущую себестоимость
+                ingredient = await session.get(Ingredient, item.ingredient_id)
+                if ingredient:
+                    old_cost = Decimal(str(ingredient.current_cost))
+                    new_supply_price = Decimal(str(item.price))
+                    
+                    current_value = calc_existing_qty * old_cost
+                    new_supply_value = qty * new_supply_price
+                    
+                    total_new_qty = calc_existing_qty + qty
+                    
+                    if total_new_qty > 0:
+                        new_avg_cost = (current_value + new_supply_value) / total_new_qty
+                        # Обновляем цену в базе
+                        ingredient.current_cost = new_avg_cost
+                        session.add(ingredient)
+            # ---------------------------------------------
+
             stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             stock.quantity += qty
-            
-            # Обновляем себестоимость ингредиента (упрощенно - по последнему приходу)
-            if item.price > 0:
-                await session.execute(update(Ingredient).where(Ingredient.id == item.ingredient_id).values(current_cost=item.price))
 
         elif doc.doc_type == 'transfer': # Перемещение
             if not doc.source_warehouse_id or not doc.target_warehouse_id: raise ValueError("Нужны оба склада (источник и цель)")

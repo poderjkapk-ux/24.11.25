@@ -265,7 +265,9 @@ async def handover_form(
                 Order.accepted_by_waiter_id == employee.id,
                 Order.completed_by_courier_id == employee.id
             )
-        ).order_by(Order.id.desc())
+        )
+        .options(joinedload(Order.table))  # <--- ИСПРАВЛЕНИЕ: Добавлена подгрузка стола
+        .order_by(Order.id.desc())
     )
     orders = orders_res.scalars().all()
     

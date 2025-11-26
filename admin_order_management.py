@@ -127,8 +127,10 @@ async def get_manage_order_page(
         payment_method_text=payment_method_text 
     )
 
-    active_classes = {key: "" for key in ["clients_active", "main_active", "products_active", "categories_active", "statuses_active", "settings_active", "employees_active", "reports_active", "menu_active", "tables_active", "design_active"]}
+    # --- ВИПРАВЛЕНО: Додано inventory_active в список ключів ---
+    active_classes = {key: "" for key in ["clients_active", "main_active", "products_active", "categories_active", "statuses_active", "settings_active", "employees_active", "reports_active", "menu_active", "tables_active", "design_active", "inventory_active"]}
     active_classes["orders_active"] = "active"
+    
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
         title=f"Керування замовленням #{order.id}", 
         body=body, 

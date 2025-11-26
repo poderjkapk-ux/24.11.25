@@ -496,17 +496,22 @@ async def create_doc_page(session: AsyncSession = Depends(get_db_session), user=
 @router.post("/docs/create")
 async def create_doc_action(
     doc_type: str = Form(...), 
-    supplier_id: int = Form(None),
-    source_warehouse_id: int = Form(None),
-    target_warehouse_id: int = Form(None),
+    supplier_id: str = Form(None), # Змінено на str
+    source_warehouse_id: str = Form(None), # Змінено на str
+    target_warehouse_id: str = Form(None), # Змінено на str
     comment: str = Form(None),
     session: AsyncSession = Depends(get_db_session)
 ):
+    # Перетворення порожніх рядків у None або int
+    s_id = int(supplier_id) if supplier_id and supplier_id.strip().isdigit() else None
+    src_id = int(source_warehouse_id) if source_warehouse_id and source_warehouse_id.strip().isdigit() else None
+    tgt_id = int(target_warehouse_id) if target_warehouse_id and target_warehouse_id.strip().isdigit() else None
+
     doc = InventoryDoc(
         doc_type=doc_type,
-        supplier_id=supplier_id,
-        source_warehouse_id=source_warehouse_id,
-        target_warehouse_id=target_warehouse_id,
+        supplier_id=s_id,
+        source_warehouse_id=src_id,
+        target_warehouse_id=tgt_id,
         comment=comment,
         is_processed=False
     )
