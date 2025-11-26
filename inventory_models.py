@@ -3,77 +3,90 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import text
 from datetime import datetime
-from models import Base, Product  # Імпортуємо Base та Product з основного файлу
+from models import Base, Product  # Импортируем Base и Product из основного файла models.py
 
-# --- ДОВІДНИКИ ---
+# --- СПРАВОЧНИКИ ---
 
 class Unit(Base):
-    """Одиниці виміру (кг, л, шт)"""
+    """Единицы измерения (кг, л, шт)"""
     __tablename__ = 'units'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(sa.String(20), unique=True)  # кг, л, шт
-    is_weighable: Mapped[bool] = mapped_column(sa.Boolean, default=True) # Чи можна ділити (кг - так, банка - ні)
+    name: Mapped[str] = mapped_column(sa.String(20), unique=True)
+    is_weighable: Mapped[bool] = mapped_column(sa.Boolean, default=True) # Можно ли делить (кг - да, банка - нет)
 
 class Warehouse(Base):
-    """Склади (Кухня, Бар, Основний склад)"""
+    """Склады (Кухня, Бар, Основной склад)"""
     __tablename__ = 'warehouses'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
-    
     stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="warehouse")
 
 class Supplier(Base):
-    """Контрагенти (Постачальники)"""
+    """Контрагенты (Поставщики)"""
     __tablename__ = 'suppliers'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
     phone: Mapped[str] = mapped_column(sa.String(50), nullable=True)
     contact_person: Mapped[str] = mapped_column(sa.String(100), nullable=True)
+    comment: Mapped[str] = mapped_column(sa.String(255), nullable=True)
 
 class Ingredient(Base):
-    """Інгредієнти (Сировина: Борошно, Томати, М'ясо)"""
+    """Ингредиенты (Сырье: Мука, Томаты, Мясо)"""
     __tablename__ = 'ingredients'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
     unit_id: Mapped[int] = mapped_column(sa.ForeignKey('units.id'))
     
-    # Поточна собівартість (середня або остання ціна закупівлі)
+    # Текущая себестоимость (обновляется при приходе)
     current_cost: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00)
     
     unit: Mapped["Unit"] = relationship("Unit")
     stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="ingredient")
 
-# --- ТЕХНОЛОГІЧНІ КАРТИ ---
+class Modifier(Base):
+    """Модификаторы (Добавки к блюдам: Сыр, Сироп, Молоко)"""
+    __tablename__ = 'modifiers'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(sa.String(100))
+    price: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00) # Цена продажи
+    
+    # Привязка к ингредиенту для списания со склада
+    ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'), nullable=True)
+    ingredient_qty: Mapped[float] = mapped_column(sa.Numeric(10, 3), default=0.000) # Сколько списывать
+    
+    ingredient: Mapped["Ingredient"] = relationship("Ingredient")
+
+# --- ТЕХНОЛОГИЧЕСКИЕ КАРТЫ ---
 
 class TechCard(Base):
-    """Технологічна карта страви (Зв'язок Продукт -> Набір інгредієнтів)"""
+    """Технологическая карта блюда (Связь Продукт -> Набор ингредиентов)"""
     __tablename__ = 'tech_cards'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     product_id: Mapped[int] = mapped_column(sa.ForeignKey('products.id'), unique=True)
     
-    # Інструкція (технологія приготування) для кухаря
+    # Инструкция (технология приготовления) для повара
     cooking_method: Mapped[str] = mapped_column(sa.Text, nullable=True) 
     
     product: Mapped["Product"] = relationship("Product")
     components: Mapped[list["TechCardItem"]] = relationship("TechCardItem", back_populates="tech_card", cascade="all, delete-orphan")
 
 class TechCardItem(Base):
-    """Рядок технологічної карти (Інгредієнт + кількість)"""
+    """Строка технологической карты (Ингредиент + количество)"""
     __tablename__ = 'tech_card_items'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     tech_card_id: Mapped[int] = mapped_column(sa.ForeignKey('tech_cards.id'))
     ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'))
     
-    gross_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3)) # Брутто (скільки списати зі складу)
-    net_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3))   # Нетто (скільки йде в готову страву)
+    gross_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3)) # Брутто
+    net_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3))   # Нетто
     
     tech_card: Mapped["TechCard"] = relationship("TechCard", back_populates="components")
     ingredient: Mapped["Ingredient"] = relationship("Ingredient")
 
-# --- СКЛАДСЬКИЙ ОБЛІК ---
+# --- СКЛАДСКОЙ УЧЕТ ---
 
 class Stock(Base):
-    """Залишки на складах"""
+    """Остатки на складах"""
     __tablename__ = 'stocks'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     warehouse_id: Mapped[int] = mapped_column(sa.ForeignKey('warehouses.id'))
@@ -84,15 +97,15 @@ class Stock(Base):
     ingredient: Mapped["Ingredient"] = relationship("Ingredient", back_populates="stocks")
 
 class InventoryDoc(Base):
-    """Документ руху (Накладна)"""
+    """Документ движения (Накладная)"""
     __tablename__ = 'inventory_docs'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # Типи: supply (прихід), transfer (переміщення), writeoff (списання), deduction (авто-списання по чеку)
+    # Типы: supply (приход), transfer (перемещение), writeoff (списание), deduction (авто-списание по чеку)
     doc_type: Mapped[str] = mapped_column(sa.String(20)) 
     
     created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=datetime.now)
     
-    # Прапорець: чи проведено документ (чи вплинув він на залишки)
+    # Флаг: проведен ли документ (повлиял ли он на остатки)
     is_processed: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
     supplier_id: Mapped[int | None] = mapped_column(sa.ForeignKey('suppliers.id'), nullable=True)
@@ -100,8 +113,11 @@ class InventoryDoc(Base):
     target_warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
     comment: Mapped[str] = mapped_column(sa.String(255), nullable=True)
-    # Якщо це списання на основі продажу, тут буде ID замовлення
+    # Если это списание на основе продажи, здесь будет ID заказа
     linked_order_id: Mapped[int | None] = mapped_column(sa.ForeignKey('orders.id'), nullable=True) 
+    
+    # Сумма, которая была оплачена из кассы за эту накладную (для учета расходов)
+    paid_amount: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00, server_default=text("0.00"))
     
     items: Mapped[list["InventoryDocItem"]] = relationship("InventoryDocItem", back_populates="doc", cascade="all, delete-orphan")
     
@@ -110,13 +126,13 @@ class InventoryDoc(Base):
     target_warehouse: Mapped["Warehouse"] = relationship("Warehouse", foreign_keys=[target_warehouse_id])
 
 class InventoryDocItem(Base):
-    """Позиція в накладній"""
+    """Позиция в накладной"""
     __tablename__ = 'inventory_doc_items'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     doc_id: Mapped[int] = mapped_column(sa.ForeignKey('inventory_docs.id'))
     ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'))
     quantity: Mapped[float] = mapped_column(sa.Numeric(10, 3))
-    price: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00) # Ціна закупівлі (для приходу)
+    price: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00) # Цена закупки (для прихода)
     
     doc: Mapped["InventoryDoc"] = relationship("InventoryDoc", back_populates="items")
     ingredient: Mapped["Ingredient"] = relationship("Ingredient")

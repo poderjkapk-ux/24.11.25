@@ -2,6 +2,7 @@
 
 import html
 import logging
+import json
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, delete
 from sqlalchemy.orm import joinedload, selectinload
 
-# Импорт моделей и зависимостей
+# Імпорт моделей та залежностей
 from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
@@ -17,13 +18,13 @@ from models import (
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
-# Импорт шаблонов (обратите внимание: используются staff_templates, как в вашем файле)
+# Імпорт шаблонів
 from staff_templates import (
     STAFF_LOGIN_HTML, STAFF_DASHBOARD_HTML, 
     STAFF_TABLE_CARD, STAFF_ORDER_CARD
 )
 
-# Импорт менеджеров уведомлений и кассы
+# Імпорт менеджерів сповіщень та каси
 from notification_manager import (
     notify_all_parties_on_status_change, 
     notify_new_order_to_staff, 
@@ -32,42 +33,42 @@ from notification_manager import (
 )
 from cash_service import link_order_to_shift, register_employee_debt
 
-# Настройка роутера и логгера
+# Налаштування роутера та логера
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
 logger = logging.getLogger(__name__)
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- ДОПОМІЖНІ ФУНКЦІЇ ---
 
 def check_edit_permissions(employee: Employee, order: Order) -> bool:
     """
-    Проверяет, имеет ли сотрудник право редактировать состав заказа.
+    Перевіряє, чи має співробітник право редагувати склад замовлення.
     """
-    # 1. Админ/Оператор может всё
+    # 1. Адмін/Оператор може все
     if employee.role.can_manage_orders:
         return True
     
-    # 2. Официант может редактировать только СВОИ заказы (или заказы со своих столов, если еще не приняты)
+    # 2. Офіціант може редагувати тільки СВОЇ замовлення (або замовлення зі своїх столів, якщо ще не прийняті)
     if employee.role.can_serve_tables:
-        # Если заказ "in_house" и принят этим официантом
+        # Якщо замовлення "in_house" і прийняте цим офіціантом
         if order.accepted_by_waiter_id == employee.id:
             return True
-        # Если заказ "in_house", никем не принят (разрешаем редактировать/принимать)
+        # Якщо замовлення "in_house", ніким не прийняте (дозволяємо редагувати/приймати)
         if order.order_type == 'in_house' and order.accepted_by_waiter_id is None:
             return True
             
-    # 3. Курьеры, Повара, Бармены не могут менять состав заказа
+    # 3. Кур'єри, Повара, Бармени не можуть змінювати склад замовлення
     return False
 
-# --- АВТОРИЗАЦИЯ ---
+# --- АВТОРИЗАЦІЯ ---
 
 @router.get("/", include_in_schema=False)
 async def staff_root_redirect():
-    """Перенаправление с корня на дашборд."""
+    """Перенаправлення з кореня на дашборд."""
     return RedirectResponse(url="/staff/dashboard")
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    """Страница входа. Если есть токен - редирект на дашборд."""
+    """Сторінка входу. Якщо є токен - редірект на дашборд."""
     token = request.cookies.get("staff_access_token")
     if token:
         return RedirectResponse(url="/staff/dashboard")
@@ -80,7 +81,7 @@ async def login_action(
     password: str = Form(...), 
     session: AsyncSession = Depends(get_db_session)
 ):
-    """Обработка входа сотрудника."""
+    """Обробка входу співробітника."""
     clean_phone = ''.join(filter(str.isdigit, phone))
     
     result = await session.execute(
@@ -111,16 +112,16 @@ async def login_action(
 
 @router.get("/logout")
 async def logout():
-    """Выход из системы."""
+    """Вихід із системи."""
     response = RedirectResponse(url="/staff/login", status_code=303)
     response.delete_cookie("staff_access_token")
     return response
 
-# --- ГЛАВНАЯ ПАНЕЛЬ (DASHBOARD) ---
+# --- ГОЛОВНА ПАНЕЛЬ (DASHBOARD) ---
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, session: AsyncSession = Depends(get_db_session)):
-    """Отображение главной панели сотрудника."""
+    """Відображення головної панелі співробітника."""
     try:
         employee = await get_current_staff(request, session)
     except HTTPException:
@@ -136,22 +137,22 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
     shift_btn_class = "on" if employee.is_on_shift else "off"
     shift_btn_text = "🟢 На зміні" if employee.is_on_shift else "🔴 Почати зміну"
 
-    # --- ГЕНЕРАЦИЯ ВКЛАДОК (TABS) СТРОГО ПО РОЛЯМ ---
+    # --- ГЕНЕРАЦІЯ ВКЛАДОК (TABS) СТРОГО ЗА РОЛЯМИ ---
     tabs_html = ""
     
-    # Роли (флаги)
+    # Ролі (прапорці)
     is_admin_operator = employee.role.can_manage_orders
     is_waiter = employee.role.can_serve_tables
     is_courier = employee.role.can_be_assigned
     is_kitchen = employee.role.can_receive_kitchen_orders
     is_bar = employee.role.can_receive_bar_orders
 
-    # 1. ОПЕРАТОР / АДМИН
+    # 1. ОПЕРАТОР / АДМІН
     if is_admin_operator:
         tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-check"></i> Замовлення</button>'
         tabs_html += '<button class="nav-item" onclick="switchTab(\'delivery_admin\')"><i class="fa-solid fa-truck-fast"></i> Доставка (Всі)</button>'
     
-    # 2. ОФИЦИАНТ
+    # 2. ОФІЦІАНТ
     if is_waiter:
         if not is_admin_operator:
             tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Мої замовлення</button>'
@@ -162,16 +163,16 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
         active_cls = "active" if not (is_admin_operator or is_waiter) else ""
         tabs_html += f'<button class="nav-item {active_cls}" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
     
-    # 4. КУРЬЕР
+    # 4. КУР'ЄР
     if is_courier and not is_admin_operator:
         active_cls = "active" if not (is_waiter or is_kitchen or is_bar) else ""
         tabs_html += f'<button class="nav-item {active_cls}" onclick="switchTab(\'delivery_courier\')"><i class="fa-solid fa-motorcycle"></i> Мої доставки</button>'
     
-    # 5. ФИНАНСЫ (Каса)
+    # 5. ФІНАНСИ (Каса)
     if is_waiter or is_courier or is_admin_operator:
         tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
 
-    # Уведомления (для всех)
+    # Сповіщення (для всіх)
     tabs_html += '<button class="nav-item" onclick="switchTab(\'notifications\')" style="position:relative;"><i class="fa-solid fa-bell"></i> Інфо<span id="nav-notify-badge" class="notify-dot" style="display:none;"></span></button>'
 
     content = f"""
@@ -216,7 +217,7 @@ async def get_manifest(session: AsyncSession = Depends(get_db_session)):
         ]
     })
 
-# --- API МЕТОДЫ ДЛЯ JS ---
+# --- API МЕТОДИ ДЛЯ JS ---
 
 @router.post("/api/shift/toggle")
 async def toggle_shift_api(session: AsyncSession = Depends(get_db_session), employee: Employee = Depends(get_current_staff)):
@@ -257,16 +258,16 @@ async def get_staff_data(
     session: AsyncSession = Depends(get_db_session),
     employee: Employee = Depends(get_current_staff)
 ):
-    """Основной метод получения HTML-контента для вкладок."""
+    """Основний метод отримання HTML-контенту для вкладок."""
     try:
         if not employee.is_on_shift:
             return JSONResponse({"html": "<div class='empty-state'><i class='fa-solid fa-power-off'></i>🔴 Ви не на зміні. <br>Натисніть кнопку зверху для початку роботи.</div>"})
 
-        # --- Вкладка СТОЛЫ ---
+        # --- Вкладка СТОЛИ ---
         if view == "tables" and employee.role.can_serve_tables:
             return await _render_tables_view(session, employee)
 
-        # --- Вкладка ЗАКАЗЫ ---
+        # --- Вкладка ЗАМОВЛЕННЯ ---
         elif view == "orders":
             if employee.role.can_manage_orders:
                 orders_data = await _get_general_orders(session, employee)
@@ -277,7 +278,7 @@ async def get_staff_data(
             else:
                 return JSONResponse({"html": "<div class='empty-state'>Немає доступу до списку замовлень.</div>"})
 
-        # --- Вкладка ФИНАНСЫ (Каса) ---
+        # --- Вкладка ФІНАНСИ (Каса) ---
         elif view == "finance":
             if employee.role.can_serve_tables or employee.role.can_be_assigned or employee.role.can_manage_orders:
                 finance_html = await _get_finance_details(session, employee)
@@ -285,7 +286,7 @@ async def get_staff_data(
             else:
                 return JSONResponse({"html": "<div class='empty-state'>Доступ заборонено.</div>"})
 
-        # --- Вкладка ПРОИЗВОДСТВО (Кухня/Бар) ---
+        # --- Вкладка ВИРОБНИЦТВО (Кухня/Бар) ---
         elif view == "production":
             if employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders:
                 orders_data = await _get_production_orders(session, employee)
@@ -293,7 +294,7 @@ async def get_staff_data(
             else:
                 return JSONResponse({"html": "<div class='empty-state'>У вас немає прав доступу до кухні/бару.</div>"})
 
-        # --- Вкладка ДОСТАВКА (КУРЬЕР) ---
+        # --- Вкладка ДОСТАВКА (КУР'ЄР) ---
         elif view == "delivery_courier":
             if employee.role.can_be_assigned:
                 orders_data = await _get_my_courier_orders(session, employee)
@@ -301,7 +302,7 @@ async def get_staff_data(
             else:
                 return JSONResponse({"html": "<div class='empty-state'>Ви не кур'єр.</div>"})
 
-        # --- Вкладка ДОСТАВКА (АДМИН) ---
+        # --- Вкладка ДОСТАВКА (АДМІН) ---
         elif view == "delivery_admin":
             if employee.role.can_manage_orders:
                 orders_data = await _get_all_delivery_orders_for_admin(session, employee)
@@ -318,7 +319,7 @@ async def get_staff_data(
         logger.error(f"API Error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- РЕНДЕРИНГ КОНТЕНТА ---
+# --- РЕНДЕРИНГ КОНТЕНТУ ---
 
 async def _render_tables_view(session: AsyncSession, employee: Employee):
     tables = (await session.execute(
@@ -359,7 +360,8 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
     tables_sub = select(Table.id).where(Table.assigned_waiters.any(Employee.id == employee.id))
     
     q = select(Order).options(
-        joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter)
+        joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter),
+        selectinload(Order.items)
     ).where(
         Order.status_id.not_in(final_ids),
         or_(Order.accepted_by_waiter_id == employee.id, Order.table_id.in_(tables_sub))
@@ -388,9 +390,21 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
         """
 
         for o in group['orders']:
+            # Формування списку страв з модифікаторами
+            items_html_list = []
+            for item in o.items:
+                mods_str = ""
+                if item.modifiers:
+                    mods_names = [m['name'] for m in item.modifiers]
+                    mods_str = f" <small style='color:#666;'>({', '.join(mods_names)})</small>"
+                items_html_list.append(f"<li>{html.escape(item.product_name)}{mods_str} x{item.quantity}</li>")
+            
+            items_html = f"<ul style='margin:5px 0; padding-left:20px; font-size:0.9rem;'>{''.join(items_html_list)}</ul>"
+
             content = f"""
             <div class="info-row"><i class="fa-solid fa-clock"></i> {o.created_at.strftime('%H:%M')}</div>
             <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> <b>{o.total_price} грн</b></div>
+            {items_html}
             """
             
             btns = ""
@@ -466,6 +480,14 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
 async def _get_production_orders(session: AsyncSession, employee: Employee):
     orders_data = []
     
+    # Допоміжна функція для форматування рядка
+    def format_prod_item(item):
+        mods_html = ""
+        if item.modifiers:
+            names = [m['name'] for m in item.modifiers]
+            mods_html = f"<div style='font-size:0.85em; color:#555; padding-left:10px;'>+ {', '.join(names)}</div>"
+        return f"<li><b>{html.escape(item.product_name)}</b> x{item.quantity}{mods_html}</li>"
+
     # --- КУХНЯ ---
     if employee.role.can_receive_kitchen_orders:
         status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))).scalars().all()
@@ -487,11 +509,10 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                 for o in orders:
                     items = [i for i in o.items if i.preparation_area != 'bar'] 
                     if items:
-                        items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
+                        items_html = "".join([format_prod_item(i) for i in items])
                         table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                         content = f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
                         
-                        # Кнопки: Видача + Печать чека
                         btns = f"""
                         <div style="display:flex; gap:5px;">
                             <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'kitchen')\" style="flex-grow:1;">✅ Готово</button>
@@ -530,11 +551,10 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                 for o in orders:
                     items = [i for i in o.items if i.preparation_area == 'bar'] 
                     if items:
-                        items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
+                        items_html = "".join([format_prod_item(i) for i in items])
                         table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                         content = f"<div class='info-row'><i class='fa-solid fa-martini-glass'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
                         
-                        # Кнопки
                         btns = f"""
                         <div style="display:flex; gap:5px;">
                             <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'bar')\" style="flex-grow:1;">✅ Готово</button>
@@ -670,7 +690,21 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
 
     status_list = [{"id": s.id, "name": s.name, "selected": s.id == order.status_id, "is_completed": s.is_completed_status} for s in statuses]
 
-    items = [{"id": i.product_id, "name": i.product_name, "qty": i.quantity, "price": float(i.price_at_moment)} for i in order.items]
+    items = []
+    for i in order.items:
+        # Збираємо модифікатори в читабельну строку
+        modifiers_str = ""
+        if i.modifiers:
+            mod_names = [m['name'] for m in i.modifiers]
+            if mod_names:
+                modifiers_str = f" + {', '.join(mod_names)}"
+        
+        items.append({
+            "id": i.product_id, 
+            "name": i.product_name + modifiers_str, # Додаємо назви модифікаторів до імені товару для відображення
+            "qty": i.quantity, 
+            "price": float(i.price_at_moment)
+        })
     
     couriers_list = []
     if employee.role.can_manage_orders and order.is_delivery:
@@ -755,16 +789,13 @@ async def update_order_status_api(
     if payment_method:
         order.payment_method = payment_method
 
-    # Логика кассы и фиксации курьера
+    # Логика каси та фіксації кур'єра
     if new_status.is_completed_status:
-        # --- ИСПРАВЛЕНИЕ: Фиксация выполнившего курьера ---
         if order.is_delivery:
-             # Если заказ уже имеет курьера, фиксируем его. Если нет, и закрывает курьер - фиксируем его.
              if order.courier_id:
                  order.completed_by_courier_id = order.courier_id
              elif employee.role.can_be_assigned:
                  order.completed_by_courier_id = employee.id
-        # -------------------------------------------------
 
         await link_order_to_shift(session, order, employee.id)
         if order.payment_method == 'cash':
@@ -792,7 +823,7 @@ async def update_order_items_api(
 ):
     data = await request.json()
     order_id = int(data.get("orderId"))
-    items = data.get("items")
+    items = data.get("items") # Очікується список об'єктів, що може містити modifiers
     
     order = await session.get(Order, order_id)
     if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
@@ -816,14 +847,26 @@ async def update_order_items_api(
             qty = int(item['qty'])
             if pid in prod_map and qty > 0:
                 p = prod_map[pid]
-                total_price += p.price * qty
+                
+                # Підтримка збереження модифікаторів при редагуванні
+                # item може містити поле modifiers (якщо фронтенд його передає)
+                modifiers_data = item.get('modifiers', [])
+                
+                # Розрахунок ціни
+                item_price = p.price
+                for mod in modifiers_data:
+                    item_price += Decimal(str(mod.get('price', 0)))
+                
+                total_price += item_price * qty
+                
                 session.add(OrderItem(
                     order_id=order_id,
                     product_id=p.id,
                     product_name=p.name,
                     quantity=qty,
-                    price_at_moment=p.price,
-                    preparation_area=p.preparation_area
+                    price_at_moment=item_price,
+                    preparation_area=p.preparation_area,
+                    modifiers=modifiers_data
                 ))
     
     order.kitchen_done = False
@@ -907,13 +950,15 @@ async def create_waiter_order(
     try:
         data = await request.json()
         table_id = int(data.get("tableId"))
-        cart = data.get("cart")
+        cart = data.get("cart") # Очікуємо список об'єктів: [{id, qty, modifiers: [...]}, ...]
         
         table = await session.get(Table, table_id)
         if not table or not cart: return JSONResponse({"error": "Invalid data"}, status_code=400)
         
         total = Decimal(0)
         items_obj = []
+        
+        # Завантажуємо продукти для отримання актуальних цін
         prod_ids = [int(item['id']) for item in cart]
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
@@ -921,15 +966,25 @@ async def create_waiter_order(
         for item in cart:
             pid = int(item['id'])
             qty = int(item['qty'])
+            
             if pid in products_map and qty > 0:
                 prod = products_map[pid]
-                total += prod.price * qty
+                
+                # Розрахунок ціни з урахуванням модифікаторів
+                # cart item format: {id: 1, qty: 2, modifiers: [{name: 'Cheese', price: 5, id: 10}, ...]}
+                modifiers_data = item.get('modifiers', [])
+                modifiers_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
+                
+                item_price = prod.price + modifiers_price
+                total += item_price * qty
+                
                 items_obj.append(OrderItem(
                     product_id=prod.id, 
                     product_name=prod.name, 
                     quantity=qty, 
-                    price_at_moment=prod.price, 
-                    preparation_area=prod.preparation_area
+                    price_at_moment=item_price, 
+                    preparation_area=prod.preparation_area,
+                    modifiers=modifiers_data # Зберігаємо модифікатори
                 ))
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))
@@ -956,14 +1011,12 @@ async def create_waiter_order(
         await notify_new_order_to_staff(request.app.state.admin_bot, order, session)
         return JSONResponse({"success": True, "orderId": order.id})
     except Exception as e:
+        logger.error(f"Order create error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПЕЧАТИ РЕЦЕПТА ---
-@router.get("/staff/print_recipe/{order_id}")
+@router.get("/print_recipe/{order_id}")
 async def print_recipe(order_id: int, session: AsyncSession = Depends(get_db_session)):
-    """Генерация HTML чека/рецепта для повара"""
-    # Импорт внутри функции, чтобы избежать циклических зависимостей, 
-    # если inventory_service импортирует что-то из этого модуля (хотя сейчас нет)
+    """Генерація HTML чека/бігунка для повара"""
     from inventory_service import generate_cook_ticket 
     
     try:

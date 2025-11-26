@@ -3,27 +3,26 @@
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy import event, text, func, ForeignKey, Numeric
+from sqlalchemy import text, ForeignKey, JSON, func
 from typing import Optional, List
 from datetime import datetime
 import secrets
 import os
-from decimal import Decimal  # <--- ДОБАВЛЕНО: Важный импорт для точных вычислений
+from decimal import Decimal
 
-# Читання DATABASE_URL з змінних оточення
+# Чтение DATABASE_URL из переменных окружения
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     raise ValueError("Помилка: Змінна оточення DATABASE_URL не встановлена.")
 
 engine = create_async_engine(DATABASE_URL)
-
 async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
     pass
 
-# Асоціативна таблиця для зв'язку "багато-до-багатьох"
+# Асоціативна таблиця для зв'язку "багато-до-багатьох" (Офіціанти <-> Столи)
 waiter_table_association = sa.Table(
     'waiter_table_association',
     Base.metadata,
@@ -46,6 +45,8 @@ class Role(Base):
     __tablename__ = 'roles'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(50), nullable=False, unique=True)
+    
+    # Права доступу
     can_manage_orders: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     can_be_assigned: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     can_serve_tables: Mapped[bool] = mapped_column(sa.Boolean, default=False)
@@ -54,6 +55,7 @@ class Role(Base):
     
     employees: Mapped[list["Employee"]] = relationship("Employee", back_populates="role")
 
+
 class Employee(Base):
     __tablename__ = 'employees'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -61,16 +63,16 @@ class Employee(Base):
     full_name: Mapped[str] = mapped_column(sa.String(100), nullable=False)
     phone_number: Mapped[Optional[str]] = mapped_column(sa.String(20), nullable=True, unique=True)
     
-    # --- НОВЕ ПОЛЕ ДЛЯ PWA АВТОРИЗАЦІЇ ---
+    # Для входу в PWA
     password_hash: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
-    # -------------------------------------
 
     role_id: Mapped[int] = mapped_column(sa.ForeignKey('roles.id'), nullable=False)
     role: Mapped["Role"] = relationship("Role", back_populates="employees", lazy='selectin')
-    is_on_shift: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
     
-    # Баланс готівки "на руках" у співробітника (ИСПРАВЛЕНО float -> Decimal)
-    cash_balance: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.00, server_default=text("0.00"), comment="Гроші, які співробітник винен касі")
+    is_on_shift: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    
+    # Баланс готівки "на руках" (борг перед касою)
+    cash_balance: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.00, server_default=text("0.00"))
 
     current_order_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('orders.id', ondelete="SET NULL"), nullable=True)
     current_order: Mapped[Optional["Order"]] = relationship("Order", foreign_keys="Employee.current_order_id")
@@ -78,12 +80,12 @@ class Employee(Base):
     assigned_tables: Mapped[List["Table"]] = relationship("Table", secondary=waiter_table_association, back_populates="assigned_waiters")
     accepted_orders: Mapped[List["Order"]] = relationship("Order", back_populates="accepted_by_waiter", foreign_keys="Order.accepted_by_waiter_id")
     
-    # Зв'язок з повідомленнями (для PWA)
+    # Зв'язок зі сповіщеннями
     notifications: Mapped[List["StaffNotification"]] = relationship("StaffNotification", back_populates="employee")
 
 
 class StaffNotification(Base):
-    """Сповіщення для PWA"""
+    """Сповіщення для PWA (червона крапка, тости)"""
     __tablename__ = 'staff_notifications'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     employee_id: Mapped[int] = mapped_column(sa.ForeignKey('employees.id'), nullable=False, index=True)
@@ -99,9 +101,10 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
     sort_order: Mapped[int] = mapped_column(sa.Integer, default=100, server_default=text("100"))
-    show_on_delivery_site: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"), nullable=False)
-    show_in_restaurant: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"), nullable=False)
+    show_on_delivery_site: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
+    show_in_restaurant: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
     products: Mapped[list["Product"]] = relationship("Product", back_populates="category")
+
 
 class Product(Base):
     __tablename__ = 'products'
@@ -109,31 +112,38 @@ class Product(Base):
     name: Mapped[str] = mapped_column(sa.String(100))
     description: Mapped[str] = mapped_column(sa.String(500), nullable=True)
     image_url: Mapped[str] = mapped_column(sa.String(255), nullable=True)
-    # ИСПРАВЛЕНО float -> Decimal
     price: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False) 
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
     category_id: Mapped[int] = mapped_column(sa.ForeignKey('categories.id'))
+    
+    # Цех приготування: 'kitchen' або 'bar'
+    preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"))
+    
     category: Mapped["Category"] = relationship("Category", back_populates="products")
     cart_items: Mapped[list["CartItem"]] = relationship("CartItem", back_populates="product")
-    preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"), nullable=False)
 
 
 class OrderStatus(Base):
     __tablename__ = 'order_statuses'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(50), nullable=False)
-    notify_customer: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"), nullable=False)
-    visible_to_operator: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"), nullable=False)
-    visible_to_courier: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
-    visible_to_waiter: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
-    visible_to_chef: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
-    visible_to_bartender: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
-    requires_kitchen_notify: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
-    is_completed_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
-    is_cancelled_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), nullable=False)
+    
+    # Налаштування видимості та логіки
+    notify_customer: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
+    visible_to_operator: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
+    visible_to_courier: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    visible_to_waiter: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    visible_to_chef: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    visible_to_bartender: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    requires_kitchen_notify: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    
+    # Фінальні статуси
+    is_completed_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    is_cancelled_status: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
 
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="status")
     history_entries: Mapped[list["OrderStatusHistory"]] = relationship("OrderStatusHistory", back_populates="status")
+
 
 # --- КАСОВІ ЗМІНИ ---
 
@@ -146,15 +156,13 @@ class CashShift(Base):
     start_time: Mapped[datetime] = mapped_column(sa.DateTime, default=func.now())
     end_time: Mapped[Optional[datetime]] = mapped_column(sa.DateTime, nullable=True)
     
-    # ИСПРАВЛЕНО float -> Decimal
-    start_cash: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Залишок на початок зміни")
-    end_cash_actual: Mapped[Optional[Decimal]] = mapped_column(sa.Numeric(10, 2), nullable=True, comment="Фактичний залишок при закритті")
+    start_cash: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0)
+    end_cash_actual: Mapped[Optional[Decimal]] = mapped_column(sa.Numeric(10, 2), nullable=True)
     
-    # ИСПРАВЛЕНО float -> Decimal
-    total_sales_cash: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Продажі готівкою")
-    total_sales_card: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Продажі карткою")
-    service_in: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Службове внесення")
-    service_out: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0, comment="Службове вилучення/Інкасація")
+    total_sales_cash: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0)
+    total_sales_card: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0)
+    service_in: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0)
+    service_out: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.0)
     
     is_closed: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     
@@ -162,21 +170,20 @@ class CashShift(Base):
     transactions: Mapped[list["CashTransaction"]] = relationship("CashTransaction", back_populates="shift")
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="cash_shift")
 
+
 class CashTransaction(Base):
-    """Службові операції з готівкою (внесення/вилучення)"""
+    """Службові операції з готівкою"""
     __tablename__ = 'cash_transactions'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     shift_id: Mapped[int] = mapped_column(sa.ForeignKey('cash_shifts.id'), nullable=False)
     
-    # ИСПРАВЛЕНО float -> Decimal
     amount: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
-    transaction_type: Mapped[str] = mapped_column(sa.String(20), nullable=False, comment="'in' - внесення, 'out' - вилучення, 'handover' - здача виручки")
+    transaction_type: Mapped[str] = mapped_column(sa.String(20), nullable=False) # 'in', 'out', 'handover'
     comment: Mapped[str] = mapped_column(sa.String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=func.now())
     
     shift: Mapped["CashShift"] = relationship("CashShift", back_populates="transactions")
 
-# -----------------------------------
 
 class OrderItem(Base):
     __tablename__ = 'order_items'
@@ -186,10 +193,13 @@ class OrderItem(Base):
     
     product_name: Mapped[str] = mapped_column(sa.String(100), nullable=False)
     quantity: Mapped[int] = mapped_column(sa.Integer, default=1, nullable=False)
-    # ИСПРАВЛЕНО float -> Decimal
     price_at_moment: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
-    
     preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"))
+    
+    # --- МОДИФІКАТОРИ (JSON) ---
+    # Зберігає список обраних модифікаторів:
+    # [{"id": 1, "name": "Сир", "price": 10.0, "ingredient_id": 5, "ingredient_qty": 0.05}, ...]
+    modifiers: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     order: Mapped["Order"] = relationship("Order", back_populates="items")
     product: Mapped["Product"] = relationship("Product")
@@ -203,16 +213,18 @@ class Order(Base):
     
     items: Mapped[list["OrderItem"]] = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan", lazy='selectin')
     
-    # ИСПРАВЛЕНО float -> Decimal
     total_price: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.00)
     
     customer_name: Mapped[str] = mapped_column(sa.String(100), nullable=True)
     phone_number: Mapped[str] = mapped_column(sa.String(20), nullable=True, index=True)
     address: Mapped[str] = mapped_column(sa.String(255), nullable=True)
+    
     status_id: Mapped[int] = mapped_column(sa.ForeignKey('order_statuses.id'), default=1, nullable=False)
     status: Mapped["OrderStatus"] = relationship("OrderStatus", back_populates="orders", lazy='selectin')
+    
     is_delivery: Mapped[bool] = mapped_column(default=True)
     delivery_time: Mapped[str] = mapped_column(sa.String(50), nullable=True, default="Якнайшвидше")
+    
     courier_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('employees.id', ondelete="SET NULL"), nullable=True)
     courier: Mapped[Optional["Employee"]] = relationship("Employee", foreign_keys="Order.courier_id")
     
@@ -221,22 +233,26 @@ class Order(Base):
     
     completed_by_courier_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('employees.id'), nullable=True)
     completed_by_courier: Mapped[Optional["Employee"]] = relationship("Employee", foreign_keys="Order.completed_by_courier_id")
+    
     history: Mapped[list["OrderStatusHistory"]] = relationship("OrderStatusHistory", back_populates="order", cascade="all, delete-orphan", lazy='selectin')
+    
     table_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('tables.id'), nullable=True)
     table: Mapped[Optional["Table"]] = relationship("Table", back_populates="orders")
-    order_type: Mapped[str] = mapped_column(sa.String(20), default='delivery', server_default=text("'delivery'"), nullable=False)
+    order_type: Mapped[str] = mapped_column(sa.String(20), default='delivery', server_default=text("'delivery'"))
+    
     accepted_by_waiter_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('employees.id'), nullable=True)
     accepted_by_waiter: Mapped[Optional["Employee"]] = relationship("Employee", back_populates="accepted_orders", foreign_keys="Order.accepted_by_waiter_id")
     
     cancellation_reason: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     
-    # --- КАСА ---
-    payment_method: Mapped[str] = mapped_column(sa.String(20), default='cash', server_default=text("'cash'"), nullable=False, comment="'cash' або 'card'")
+    # --- КАСА ТА ОПЛАТА ---
+    payment_method: Mapped[str] = mapped_column(sa.String(20), default='cash', server_default=text("'cash'"))
     cash_shift_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('cash_shifts.id'), nullable=True)
     cash_shift: Mapped[Optional["CashShift"]] = relationship("CashShift", back_populates="orders")
     
-    is_cash_turned_in: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"), comment="Чи здана готівка касиру")
-
+    is_cash_turned_in: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    
+    # Статуси готовності по цехах
     kitchen_done: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     bar_done: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
 
@@ -244,7 +260,16 @@ class Order(Base):
     def products_text(self) -> str:
         if not self.items:
             return ""
-        return ", ".join([f"{item.product_name} x {item.quantity}" for item in self.items])
+        lines = []
+        for item in self.items:
+            txt = f"{item.product_name} x {item.quantity}"
+            # Відображення модифікаторів у тексті замовлення
+            if item.modifiers:
+                mods_names = [m.get('name', '') for m in item.modifiers]
+                if mods_names:
+                    txt += f" ({', '.join(mods_names)})"
+            lines.append(txt)
+        return ", ".join(lines)
 
 
 class OrderStatusHistory(Base):
@@ -266,6 +291,7 @@ class Customer(Base):
     phone_number: Mapped[str] = mapped_column(sa.String(20), nullable=True)
     address: Mapped[str] = mapped_column(sa.String(255), nullable=True)
 
+
 class CartItem(Base):
     __tablename__ = 'cart_items'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -273,6 +299,7 @@ class CartItem(Base):
     product_id: Mapped[int] = mapped_column(sa.ForeignKey('products.id'))
     quantity: Mapped[int] = mapped_column(default=1)
     product: Mapped["Product"] = relationship("Product", back_populates="cart_items", lazy='selectin')
+
 
 class Table(Base):
     __tablename__ = 'tables'
@@ -291,6 +318,8 @@ class Settings(Base):
     site_title: Mapped[Optional[str]] = mapped_column(sa.String(100), default="Назва")
     seo_description: Mapped[Optional[str]] = mapped_column(sa.String(255))
     seo_keywords: Mapped[Optional[str]] = mapped_column(sa.String(255))
+    
+    # Дизайн
     primary_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#5a5a5a")
     secondary_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#eeeeee")
     background_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#f4f4f4")
@@ -299,6 +328,11 @@ class Settings(Base):
     footer_text_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#ffffff")
     font_family_sans: Mapped[Optional[str]] = mapped_column(sa.String(100), default="Golos Text")
     font_family_serif: Mapped[Optional[str]] = mapped_column(sa.String(100), default="Playfair Display")
+    header_image_url: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
+    category_nav_bg_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#ffffff")
+    category_nav_text_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#333333")
+    
+    # Тексти та контакти
     telegram_welcome_message: Mapped[Optional[str]] = mapped_column(sa.Text)
     footer_address: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     footer_phone: Mapped[Optional[str]] = mapped_column(sa.String(50), nullable=True)
@@ -306,17 +340,16 @@ class Settings(Base):
     instagram_url: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     facebook_url: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     
-    # --- НОВІ ПОЛЯ ---
-    header_image_url: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
+    # Wi-Fi
     wifi_ssid: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
     wifi_password: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
-    category_nav_bg_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#ffffff")
-    category_nav_text_color: Mapped[Optional[str]] = mapped_column(sa.String(7), default="#333333")
 
 
 async def create_db_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    # Ініціалізація базових даних (ролі, статуси)
     async with async_session_maker() as session:
         result_status = await session.execute(sa.select(OrderStatus).limit(1))
         if not result_status.scalars().first():

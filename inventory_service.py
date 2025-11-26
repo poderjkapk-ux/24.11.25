@@ -1,4 +1,5 @@
 # inventory_service.py
+
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -7,7 +8,7 @@ from sqlalchemy.orm import joinedload
 
 from inventory_models import (
     Stock, InventoryDoc, InventoryDocItem, TechCard, 
-    TechCardItem, Ingredient, Warehouse
+    TechCardItem, Ingredient, Warehouse, Modifier
 )
 from models import Order, OrderItem
 
@@ -15,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 async def get_stock(session: AsyncSession, warehouse_id: int, ingredient_id: int) -> Stock:
     """
-    Отримує запис про залишки товару на складі.
-    Якщо запису немає, створює новий з нульовим залишком.
+    Получает запись об остатках товара на складе.
+    Если записи нет, создает новую с нулевым остатком.
     """
     res = await session.execute(
         select(Stock).where(Stock.warehouse_id == warehouse_id, Stock.ingredient_id == ingredient_id)
@@ -25,14 +26,14 @@ async def get_stock(session: AsyncSession, warehouse_id: int, ingredient_id: int
     if not stock:
         stock = Stock(warehouse_id=warehouse_id, ingredient_id=ingredient_id, quantity=0)
         session.add(stock)
-        await session.flush() # Щоб отримати ID
+        await session.flush() # Чтобы получить ID
     return stock
 
 async def process_movement(session: AsyncSession, doc_type: str, items: list, 
                            source_wh_id: int = None, target_wh_id: int = None, 
                            supplier_id: int = None, comment: str = "", order_id: int = None):
     """
-    Універсальна функція для автоматичного створення та проведення документа.
+    Универсальная функция для автоматического создания и проведения документа.
     items = [{'ingredient_id': 1, 'qty': 1.5, 'price': 100}, ...]
     """
     doc = InventoryDoc(
@@ -42,7 +43,7 @@ async def process_movement(session: AsyncSession, doc_type: str, items: list,
         supplier_id=supplier_id,
         comment=comment,
         linked_order_id=order_id,
-        is_processed=False # Спочатку створюємо непроведений документ
+        is_processed=False # Сначала создаем непроведенный документ
     )
     session.add(doc)
     await session.flush()
@@ -55,40 +56,40 @@ async def process_movement(session: AsyncSession, doc_type: str, items: list,
         doc_item = InventoryDocItem(doc_id=doc.id, ingredient_id=ing_id, quantity=qty, price=price)
         session.add(doc_item)
 
-    # Відразу проводимо документ (оновлюємо залишки)
+    # Сразу проводим документ (обновляем остатки)
     await apply_doc_stock_changes(session, doc.id)
     return doc
 
 async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
     """
-    Проводить документ: оновлює залишки на складах на основі позицій документа.
-    Встановлює прапорець is_processed = True.
+    Проводит документ: обновляет остатки на складах на основе позиций документа.
+    Устанавливает флаг is_processed = True.
     """
     doc = await session.get(InventoryDoc, doc_id, options=[joinedload(InventoryDoc.items)])
-    if not doc: raise ValueError("Документ не знайдено")
-    if doc.is_processed: raise ValueError("Документ вже проведено")
+    if not doc: raise ValueError("Документ не найден")
+    if doc.is_processed: raise ValueError("Документ уже проведен")
 
     for item in doc.items:
         qty = Decimal(str(item.quantity))
         
-        if doc.doc_type == 'supply': # Прихід
-            if not doc.target_warehouse_id: raise ValueError("Не вказано склад отримувача")
+        if doc.doc_type == 'supply': # Приход
+            if not doc.target_warehouse_id: raise ValueError("Не указан склад получателя")
             stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             stock.quantity += qty
             
-            # Оновлюємо собівартість інгредієнта (спрощено - за останнім приходом)
+            # Обновляем себестоимость ингредиента (упрощенно - по последнему приходу)
             if item.price > 0:
                 await session.execute(update(Ingredient).where(Ingredient.id == item.ingredient_id).values(current_cost=item.price))
 
-        elif doc.doc_type == 'transfer': # Переміщення
-            if not doc.source_warehouse_id or not doc.target_warehouse_id: raise ValueError("Потрібні обидва склади (джерело та ціль)")
+        elif doc.doc_type == 'transfer': # Перемещение
+            if not doc.source_warehouse_id or not doc.target_warehouse_id: raise ValueError("Нужны оба склада (источник и цель)")
             src_stock = await get_stock(session, doc.source_warehouse_id, item.ingredient_id)
             tgt_stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             src_stock.quantity -= qty
             tgt_stock.quantity += qty
 
-        elif doc.doc_type in ['writeoff', 'deduction']: # Списання (в т.ч. по продажу)
-            if not doc.source_warehouse_id: raise ValueError("Не вказано склад списання")
+        elif doc.doc_type in ['writeoff', 'deduction']: # Списание (в т.ч. по продаже)
+            if not doc.source_warehouse_id: raise ValueError("Не указан склад списания")
             stock = await get_stock(session, doc.source_warehouse_id, item.ingredient_id)
             stock.quantity -= qty
 
@@ -97,50 +98,56 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
 
 async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
-    Списання продуктів по замовленню на основі техкарт.
-    Викликається при готовності/продажу страви.
+    Автоматическое списание продуктов (и модификаторов) со склада на основе техкарт.
+    Вызывается при готовности/продаже блюда.
     """
     if not order.items: return
 
-    # Визначаємо склад списания.
-    # Завантажуємо маппінг складів (Пошук за назвою)
+    # Определяем склады списания (Поиск по названию)
     kitchen_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Кухня%')).limit(1))
     bar_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Бар%')).limit(1))
     
+    # Маппинг зон приготовления к ID складов
     wh_map = {
-        'kitchen': kitchen_wh.id if kitchen_wh else None,
-        'bar': bar_wh.id if bar_wh else None
+        'kitchen': kitchen_wh.id if kitchen_wh else (1 if not bar_wh else bar_wh.id),
+        'bar': bar_wh.id if bar_wh else (1 if not kitchen_wh else kitchen_wh.id)
     }
 
-    deduction_items_by_wh = {} # {warehouse_id: [{ing_id, qty}, ...]}
+    deduction_items_by_wh = {} # {warehouse_id: [{ingredient_id, qty}, ...]}
+
+    def add_deduction(wh_id, ing_id, qty):
+        if not wh_id: wh_id = 1 # Fallback
+        if wh_id not in deduction_items_by_wh: deduction_items_by_wh[wh_id] = []
+        deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
 
     for order_item in order.items:
-        # Шукаємо техкарту для продукту
+        wh_id = wh_map.get(order_item.preparation_area)
+        
+        # 1. Списание компонентов блюда (по Техкарте)
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
             .options(select(TechCardItem).joinedload(TechCardItem.ingredient))
         )
         
-        if not tech_card:
-            logger.warning(f"Немає техкарти для {order_item.product_name}. Списання не проведено.")
-            continue
+        if tech_card:
+            for component in tech_card.components:
+                total_qty = Decimal(component.gross_amount) * order_item.quantity
+                add_deduction(wh_id, component.ingredient_id, total_qty)
+        
+        # 2. Списание компонентов МОДИФИКАТОРОВ
+        if order_item.modifiers:
+            # modifiers это список dict: [{'id':..., 'name':..., 'ingredient_id':..., 'ingredient_qty':...}]
+            for mod_data in order_item.modifiers:
+                ing_id = mod_data.get('ingredient_id')
+                ing_qty = mod_data.get('ingredient_qty')
+                
+                if ing_id and ing_qty:
+                    # Модификатор списывается 1 раз на 1 порцию блюда.
+                    # Если блюда 2 шт, то и модификаторов 2 шт.
+                    total_mod_qty = Decimal(str(ing_qty)) * order_item.quantity
+                    add_deduction(wh_id, ing_id, total_mod_qty)
 
-        wh_id = wh_map.get(order_item.preparation_area)
-        if not wh_id: 
-            # Якщо не знайшли склад по зоні, списуємо з "Кухні" або першого-ліпшого (fallback)
-            wh_id = kitchen_wh.id if kitchen_wh else 1 
-
-        if wh_id not in deduction_items_by_wh:
-            deduction_items_by_wh[wh_id] = []
-
-        for component in tech_card.components:
-            total_qty = Decimal(component.gross_amount) * order_item.quantity
-            deduction_items_by_wh[wh_id].append({
-                'ingredient_id': component.ingredient_id,
-                'qty': total_qty
-            })
-
-    # Проводимо документи списання для кожного складу
+    # Проводим документы списания для каждого склада
     for wh_id, items in deduction_items_by_wh.items():
         if items:
             await process_movement(
@@ -149,9 +156,9 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                 comment=f"Замовлення #{order.id}", 
                 order_id=order.id
             )
-            
+
 async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
-    """Генерує HTML бігунка для кухаря (з рецептом)"""
+    """Генерирует HTML бегунка для повара (с рецептом и модификаторами)"""
     order = await session.get(Order, order_id)
     query = select(OrderItem).where(OrderItem.order_id == order_id)
     items = (await session.execute(query)).scalars().all()
@@ -164,10 +171,18 @@ async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
     """
     
     for item in items:
-        # Підтягуємо рецепт
+        # Подтягиваем рецепт
         tc = await session.scalar(select(TechCard).where(TechCard.product_id == item.product_id))
         
+        # Формируем строку модификаторов
+        mods_html = ""
+        if item.modifiers:
+            mods_names = [m.get('name', '') for m in item.modifiers]
+            if mods_names:
+                mods_html = f"<div style='font-size:0.9em; font-weight:bold; margin-top:2px;'>+ {', '.join(mods_names)}</div>"
+
         html += f"<div style='font-size:1.2em; font-weight:bold; margin-top:10px;'>{item.product_name}</div>"
+        html += f"{mods_html}"
         html += f"<div style='font-size:1.1em;'>К-сть: {item.quantity}</div>"
         
         if tc and tc.cooking_method:
