@@ -57,7 +57,17 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     # Формуємо список продуктів з модифікаторами
     products = []
     for p in products_res.scalars().all():
-        mods_list = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in p.modifiers]
+        # --- ВИПРАВЛЕННЯ: Безпечне перетворення ціни (обробка None) ---
+        mods_list = []
+        if p.modifiers:
+            for m in p.modifiers:
+                price_val = m.price if m.price is not None else 0
+                mods_list.append({
+                    "id": m.id, 
+                    "name": m.name, 
+                    "price": float(price_val)
+                })
+
         products.append({
             "id": p.id, 
             "name": p.name, 
@@ -374,7 +384,13 @@ async def place_in_house_order(
             
             # --- Обробка модифікаторів ---
             modifiers_data = item.get('modifiers', [])
-            mods_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
+            # --- ВИПРАВЛЕННЯ: Обробка None ---
+            mods_price = Decimal(0)
+            if modifiers_data:
+                for m in modifiers_data:
+                    price_val = m.get('price', 0)
+                    if price_val is None: price_val = 0
+                    mods_price += Decimal(str(price_val))
             
             item_price = product.price + mods_price
             total_price += item_price * qty

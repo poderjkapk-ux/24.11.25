@@ -872,7 +872,10 @@ async def update_order_items_api(
                 modifiers_data = item.get('modifiers', [])
                 item_price = p.price
                 for mod in modifiers_data:
-                    item_price += Decimal(str(mod.get('price', 0)))
+                    # --- ВИПРАВЛЕННЯ: Обробка None ---
+                    price_val = mod.get('price', 0)
+                    if price_val is None: price_val = 0
+                    item_price += Decimal(str(price_val))
                 
                 total_price += item_price * qty
                 
@@ -962,7 +965,12 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
         prod_list = []
         for p in prods:
             # Формуємо список модифікаторів для продукту
-            p_mods = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in p.modifiers]
+            # --- ВИПРАВЛЕННЯ: Безпечне перетворення ціни (обробка None) ---
+            p_mods = []
+            if p.modifiers:
+                for m in p.modifiers:
+                    price_val = m.price if m.price is not None else 0
+                    p_mods.append({"id": m.id, "name": m.name, "price": float(price_val)})
             
             prod_list.append({
                 "id": p.id, 
@@ -1012,7 +1020,13 @@ async def create_waiter_order(
                 prod = products_map[pid]
                 
                 modifiers_data = item.get('modifiers', [])
-                modifiers_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
+                # --- ВИПРАВЛЕННЯ: Обробка None ---
+                modifiers_price = Decimal(0)
+                if modifiers_data:
+                    for m in modifiers_data:
+                        price_val = m.get('price', 0)
+                        if price_val is None: price_val = 0
+                        modifiers_price += Decimal(str(price_val))
                 
                 item_price = prod.price + modifiers_price
                 total += item_price * qty

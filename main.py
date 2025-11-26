@@ -461,7 +461,8 @@ async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifi
     user_id = callback.from_user.id
     
     # Формируем список словарей для JSON
-    mods_json = [{"id": m.id, "name": m.name, "price": float(m.price), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty)} for m in modifiers]
+    # --- ВИПРАВЛЕННЯ: Використовуємо float(m.price or 0) для уникнення помилки якщо price NULL ---
+    mods_json = [{"id": m.id, "name": m.name, "price": float(m.price or 0), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty or 0)} for m in modifiers]
     
     cart_item = CartItem(
         user_id=user_id, 
@@ -514,7 +515,10 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
             
             if item.modifiers:
                 for m in item.modifiers:
-                    mods_price += Decimal(str(m.get('price', 0)))
+                    # --- ВИПРАВЛЕННЯ: Перевірка на None перед конвертацією ---
+                    price_val = m.get('price', 0)
+                    if price_val is None: price_val = 0
+                    mods_price += Decimal(str(price_val))
                 
                 mod_names = [m.get('name', '') for m in item.modifiers]
                 mods_str = f" (+ {', '.join(mod_names)})"
@@ -609,7 +613,7 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
         if item.product:
             item_price = item.product.price
             if item.modifiers:
-                item_price += sum(Decimal(str(m.get('price', 0))) for m in item.modifiers)
+                item_price += sum(Decimal(str(m.get('price', 0) or 0)) for m in item.modifiers)
             total_price += item_price * item.quantity
     
     await state.update_data(
@@ -775,7 +779,10 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
             # Считаем стоимость модификаторов
             if cart_item.modifiers:
                 for m in cart_item.modifiers:
-                    item_price += Decimal(str(m.get('price', 0)))
+                    # --- ВИПРАВЛЕННЯ: Обробка None ---
+                    p_val = m.get('price', 0)
+                    if p_val is None: p_val = 0
+                    item_price += Decimal(str(p_val))
             
             total_price += item_price * cart_item.quantity
             
@@ -1042,38 +1049,51 @@ async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(ge
 
 @app.get("/api/menu")
 async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
-    categories_res = await session.execute(
-        sa.select(Category)
-        .where(Category.show_on_delivery_site == True)
-        .order_by(Category.sort_order, Category.name)
-    )
-    
-    # --- ЗМІНА: Завантажуємо продукти РАЗОМ з модифікаторами ---
-    products_res = await session.execute(
-        sa.select(Product)
-        .options(selectinload(Product.modifiers)) # <-- Завантажуємо modifiers
-        .join(Category, Product.category_id == Category.id)
-        .where(Product.is_active == True, Category.show_on_delivery_site == True)
-    )
-
-    categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
-    
-    products = []
-    for p in products_res.scalars().all():
-        # Формуємо список модифікаторів для фронтенду
-        mods_list = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in p.modifiers]
+    try:
+        categories_res = await session.execute(
+            sa.select(Category)
+            .where(Category.show_on_delivery_site == True)
+            .order_by(Category.sort_order, Category.name)
+        )
         
-        products.append({
-            "id": p.id, 
-            "name": p.name, 
-            "description": p.description, 
-            "price": float(p.price), 
-            "image_url": p.image_url, 
-            "category_id": p.category_id,
-            "modifiers": mods_list # <-- Додаємо список модифікаторів
-        })
+        # --- ЗМІНА: Завантажуємо продукти РАЗОМ з модифікаторами ---
+        products_res = await session.execute(
+            sa.select(Product)
+            .options(selectinload(Product.modifiers)) # <-- Завантажуємо modifiers
+            .join(Category, Product.category_id == Category.id)
+            .where(Product.is_active == True, Category.show_on_delivery_site == True)
+        )
 
-    return {"categories": categories, "products": products}
+        categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
+        
+        products = []
+        for p in products_res.scalars().all():
+            # Формуємо список модифікаторів для фронтенду
+            # --- ВИПРАВЛЕННЯ: Безпечне перетворення ціни (обробка None) ---
+            mods_list = []
+            if p.modifiers:
+                for m in p.modifiers:
+                    price_val = m.price if m.price is not None else 0
+                    mods_list.append({
+                        "id": m.id, 
+                        "name": m.name, 
+                        "price": float(price_val)
+                    })
+            
+            products.append({
+                "id": p.id, 
+                "name": p.name, 
+                "description": p.description, 
+                "price": float(p.price), 
+                "image_url": p.image_url, 
+                "category_id": p.category_id,
+                "modifiers": mods_list 
+            })
+
+        return {"categories": categories, "products": products}
+    except Exception as e:
+        logging.error(f"Error in /api/menu: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @app.get("/api/customer_info/{phone_number}")
 async def get_customer_info(phone_number: str, session: AsyncSession = Depends(get_db_session)):
@@ -1110,7 +1130,7 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
             
             # Поддержка модификаторов
             modifiers_data = item.get('modifiers', [])
-            mods_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
+            mods_price = sum(Decimal(str(m.get('price', 0) or 0)) for m in modifiers_data)
             
             item_total_price = (product.price + mods_price)
             total_price += item_total_price * qty
