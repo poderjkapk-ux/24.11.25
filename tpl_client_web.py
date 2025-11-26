@@ -5,7 +5,7 @@ WEB_ORDER_HTML = """
 <html lang="uk">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>{site_title}</title>
     <meta name="description" content="{seo_description}">
     <meta name="keywords" content="{seo_keywords}">
@@ -17,303 +17,522 @@ WEB_ORDER_HTML = """
     <link rel="shortcut icon" href="/static/favicons/favicon.ico">
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family={font_family_serif_encoded}:wght@400;700&family={font_family_sans_encoded}:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family={font_family_serif_encoded}:wght@400;600;700&family={font_family_sans_encoded}:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
     <style>
       :root {{
-        --primary-color: {primary_color_val};
-        --secondary-color: {secondary_color_val};
-        --background-color: {background_color_val};
-        --text-color: {text_color_val};
-        --footer-bg-color: {footer_bg_color_val};
-        --footer-text-color: {footer_text_color_val};
+        /* --- Dynamic Variables --- */
+        --primary: {primary_color_val};
+        --secondary: {secondary_color_val};
+        --bg-color: {background_color_val};
+        --text-main: {text_color_val};
+        --footer-bg: {footer_bg_color_val};
+        --footer-text: {footer_text_color_val};
+        --nav-bg: {category_nav_bg_color};
+        --nav-text: {category_nav_text_color};
+        --header-img: url('/{header_image_url}');
         
-        /* Navigation settings */
-        --nav-bg-color: {category_nav_bg_color};
-        --nav-text-color: {category_nav_text_color};
+        /* --- System Colors & Shadows --- */
+        --surface: #ffffff;
+        --surface-glass: rgba(255, 255, 255, 0.85);
+        --border-light: rgba(0, 0, 0, 0.06);
         
-        --header-bg-image: url('/{header_image_url}');
+        --shadow-sm: 0 2px 8px rgba(0,0,0,0.04);
+        --shadow-md: 0 8px 24px rgba(0,0,0,0.08);
+        --shadow-lg: 0 15px 40px rgba(0,0,0,0.12);
         
-        --primary-hover-color: color-mix(in srgb, {primary_color_val}, black 10%);
-        --primary-glow-color: {primary_color_val}26;
-        --success-color: #28a745;
-        --dark-text-for-accent: #ffffff;
-        --side-padding: 20px;
+        /* --- Geometry --- */
+        --radius-lg: 20px;
+        --radius-md: 14px;
+        --radius-sm: 8px;
         
-        /* Common fonts */
-        --font-sans: '{font_family_sans_val}', sans-serif;
+        /* --- Animation --- */
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+        
+        /* --- Fonts --- */
+        --font-sans: '{font_family_sans_val}', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         --font-serif: '{font_family_serif_val}', serif;
       }}
       
-      body, .category-nav a, .add-to-cart-btn, .action-btn, #checkout-form, .radio-group label {{
-        font-family: var(--font-sans);
-      }}
-      header h1, .category-title, .product-name, .product-price, .cart-header h2, .modal-content h2, #page-modal-title {{
-        font-family: var(--font-serif);
-      }}
-
-      /* --- GLOBAL LAYOUT --- */
-      @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-      @keyframes popIn {{ from {{ opacity: 0; transform: scale(0.95); }} to {{ opacity: 1; transform: scale(1); }} }}
-      @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-
-      html {{ scroll-behavior: smooth; }}
+      html {{ scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }}
+      * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }}
+      
       body {{
         margin: 0;
-        background-color: var(--background-color);
-        color: var(--text-color);
+        background-color: var(--bg-color);
+        /* Subtle Mesh Gradient */
+        background-image: 
+            radial-gradient(at 0% 0%, color-mix(in srgb, var(--primary), transparent 96%), transparent 50%),
+            radial-gradient(at 100% 100%, color-mix(in srgb, var(--secondary), transparent 96%), transparent 50%);
+        background-attachment: fixed;
+        color: var(--text-main);
+        font-family: var(--font-sans);
         display: flex; flex-direction: column; min-height: 100vh;
+        -webkit-font-smoothing: antialiased;
+        font-size: 15px;
       }}
-      .container {{ width: 100%; margin: 0 auto; padding: 0; }}
+
+      h1, h2, h3, .serif {{ font-family: var(--font-serif); margin: 0; }}
+      button, input {{ font-family: var(--font-sans); }}
+
+      /* --- PREMIUM HEADER --- */
+      header {{
+          position: relative;
+          height: 40vh; min-height: 300px; max-height: 450px;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          text-align: center; color: white;
+          border-radius: 0 0 40px 40px;
+          overflow: hidden;
+          box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+          margin-bottom: 20px;
+      }}
+      .header-bg {{
+          position: absolute; inset: 0;
+          background-image: var(--header-img);
+          background-size: cover; background-position: center;
+          z-index: 0; transition: transform 10s ease;
+      }}
+      header:hover .header-bg {{ transform: scale(1.05); }}
+      header::after {{
+          content: ''; position: absolute; inset: 0;
+          background: linear-gradient(to bottom, rgba(0,0,0,0.2), rgba(0,0,0,0.6));
+          z-index: 1;
+      }}
       
-      /* --- HEADER --- */
-      header {{ 
-          text-align: center; padding: 60px var(--side-padding) 40px; position: relative;
-          background-image: var(--header-bg-image); background-size: cover; background-position: center;
-          color: white;
+      .header-content {{ position: relative; z-index: 2; width: 90%; max-width: 800px; animation: fadeUp 0.8s var(--ease-out); }}
+      .header-logo {{ 
+          height: 100px; width: auto; margin-bottom: 15px; 
+          filter: drop-shadow(0 8px 20px rgba(0,0,0,0.25)); 
       }}
-      header::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 0; }}
-      .header-logo-container, header h1, .main-nav {{ position: relative; z-index: 1; }}
-      .header-logo {{ height: 100px; width: auto; margin-bottom: 25px; }}
-      header h1 {{ font-size: clamp(3em, 6vw, 4em); margin: 0; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }}
+      header h1 {{ 
+          font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; 
+          text-shadow: 0 4px 20px rgba(0,0,0,0.3); line-height: 1.1;
+      }}
 
-      /* --- TOP NAV (PAGES) --- */
-      .main-nav {{ text-align: center; padding: 10px var(--side-padding); margin-bottom: 20px; position: relative; }}
-      .main-nav a {{ color: var(--text-color); text-decoration: none; margin: 0 15px; font-size: 1.1em; font-weight: 500; transition: color 0.3s; cursor: pointer; }}
-      .main-nav a:hover {{ color: var(--primary-color); }}
-
-      /* --- CATEGORY NAV --- */
+      /* --- NAVIGATION --- */
+      .category-nav-wrapper {{
+          position: sticky; top: 15px; z-index: 90;
+          display: flex; justify-content: center;
+          padding: 0 15px; margin-bottom: 30px;
+      }}
       .category-nav {{
-        display: flex; position: sticky; top: -1px; background: var(--nav-bg-color); backdrop-filter: blur(12px);
-        z-index: 100; overflow-x: auto; padding: 15px 0; box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        border-top: 1px solid var(--secondary-color); border-bottom: 1px solid var(--secondary-color);
+          display: flex; gap: 6px; overflow-x: auto; 
+          padding: 6px; border-radius: 100px;
+          background: rgba(255, 255, 255, 0.8); 
+          backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px);
+          border: 1px solid rgba(255,255,255,0.5);
+          box-shadow: var(--shadow-md);
+          scrollbar-width: none; max-width: 100%;
       }}
       .category-nav::-webkit-scrollbar {{ display: none; }}
+      
       .category-nav a {{
-        color: var(--nav-text-color); text-decoration: none; padding: 10px 25px; border-radius: 20px;
-        margin: 0 10px; background: rgba(255,255,255,0.1); transition: all 0.3s ease; font-weight: 500; white-space: nowrap;
+          color: var(--nav-text); text-decoration: none; padding: 8px 20px; 
+          border-radius: 50px; font-weight: 600; white-space: nowrap; font-size: 0.9rem;
+          transition: all 0.3s var(--ease-out);
       }}
-      .category-nav a:first-child {{ margin-left: var(--side-padding); }}
-      .category-nav a:hover, .category-nav a.active {{
-        background: var(--primary-color); color: var(--dark-text-for-accent); transform: scale(1.05); font-weight: 600;
+      .category-nav a:hover {{ background: rgba(0,0,0,0.05); }}
+      .category-nav a.active {{ 
+          background: var(--primary); color: white; 
+          box-shadow: 0 4px 15px color-mix(in srgb, var(--primary), transparent 60%);
       }}
 
-      /* --- MENU GRID --- */
-      #menu {{ display: grid; grid-template-columns: 1fr; gap: 40px; padding: 0 var(--side-padding); margin-bottom: 40px; }}
-      .category-section {{ margin-bottom: 30px; padding-top: 90px; margin-top: -90px; }}
-      .category-title {{
-        text-align: center; font-size: 2.5em; color: var(--primary-color); margin-bottom: 40px;
-        padding-bottom: 15px; border-bottom: 1px solid var(--secondary-color);
-      }}
-      .products-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 30px; }}
+      /* --- MAIN CONTENT --- */
+      .container {{ max-width: 1200px; margin: 0 auto; padding: 0 20px; }}
       
+      .category-section {{ margin-bottom: 50px; scroll-margin-top: 100px; }}
+      .category-title {{ 
+          font-size: 1.8rem; color: var(--text-main); margin-bottom: 20px; 
+          font-weight: 700; display: flex; align-items: center; gap: 15px;
+      }}
+      .category-title::after {{ 
+          content: ''; height: 1px; background: var(--secondary); flex-grow: 1; opacity: 0.6; 
+      }}
+
+      /* --- PRODUCT GRID (Adaptive) --- */
+      .products-grid {{ 
+          display: grid; 
+          /* PC: 3-4 items, Mobile: 2 items (min 160px) */
+          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); 
+          gap: 24px; 
+      }}
+
+      /* --- PRODUCT CARD --- */
       .product-card {{
-        background: var(--card-bg, #fff); border-radius: 8px; overflow: hidden;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05); transition: transform 0.3s, box-shadow 0.3s;
-        display: flex; flex-direction: column; animation: fadeIn 0.5s ease-out;
+          background: var(--surface); border-radius: var(--radius-md);
+          overflow: hidden; display: flex; flex-direction: column;
+          box-shadow: var(--shadow-sm); border: 1px solid var(--border-light);
+          transition: transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+          height: 100%; position: relative;
       }}
-      .product-card:hover {{ transform: translateY(-10px); box-shadow: 0 15px 30px rgba(0,0,0,0.1); border: 1px solid var(--primary-color); }}
-      
-      .product-image-wrapper {{ width: 100%; height: 220px; overflow: hidden; position: relative; }}
-      .product-image {{ width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s; }}
-      .product-card:hover .product-image {{ transform: scale(1.1); }}
-      
-      .product-info {{ padding: 25px; flex-grow: 1; display: flex; flex-direction: column; }}
-      .product-name {{ font-size: 1.5em; margin: 0 0 10px; font-weight: 700; }}
-      .product-desc {{ font-size: 0.9em; color: #777; margin-bottom: 20px; flex-grow: 1; }}
-      .product-footer {{ display: flex; justify-content: space-between; align-items: center; }}
-      .product-price {{ font-size: 1.5em; font-weight: 700; color: var(--primary-color); }}
-      
-      .add-to-cart-btn {{
-        background: var(--primary-color); color: var(--dark-text-for-accent); border: none;
-        padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: 600;
-        transition: all 0.3s;
+      .product-card:hover {{ 
+          transform: translateY(-5px); box-shadow: var(--shadow-md); z-index: 2;
       }}
-      .add-to-cart-btn:hover {{ background: var(--primary-hover-color); transform: scale(1.05); }}
-      .add-to-cart-btn.added {{ background: var(--success-color); }}
 
-      /* --- CART SIDEBAR --- */
-      #cart-sidebar {{
-        position: fixed; top: 0; right: -100%; width: 100%; max-width: 400px; height: 100%;
-        background: rgba(255,255,255,0.95); backdrop-filter: blur(15px);
-        box-shadow: -5px 0 25px rgba(0,0,0,0.1); transition: right 0.4s ease-in-out;
-        z-index: 1000; display: flex; flex-direction: column; color: #333;
+      .product-image-wrapper {{ 
+          width: 100%; aspect-ratio: 4/3; overflow: hidden; 
+          background: #f5f5f7; position: relative;
       }}
-      #cart-sidebar.open {{ right: 0; }}
-      .cart-header {{ padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }}
-      .cart-items {{ flex-grow: 1; overflow-y: auto; padding: 20px; }}
-      .cart-item {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee; animation: popIn 0.3s; }}
-      .cart-item-info {{ flex-grow: 1; }}
-      .cart-item-name {{ font-weight: 600; display: block; }}
-      .cart-item-mods {{ font-size: 0.8em; color: #666; display: block; }}
-      .cart-item-controls button {{ width: 25px; height: 25px; border-radius: 50%; border: 1px solid #ddd; background: #fff; cursor: pointer; }}
-      .cart-footer {{ padding: 20px; background: rgba(255,255,255,0.8); border-top: 1px solid #eee; }}
-      #checkout-btn {{ width: 100%; padding: 15px; background: var(--primary-color); color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }}
-      #checkout-btn:disabled {{ background: #ccc; cursor: not-allowed; }}
+      .product-image {{ 
+          width: 100%; height: 100%; object-fit: cover; 
+          transition: transform 0.5s var(--ease-out); 
+      }}
+      .product-card:hover .product-image {{ transform: scale(1.08); }}
 
-      /* --- FLOATING BUTTONS --- */
+      .product-info {{ 
+          padding: 16px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; 
+      }}
+      .product-name {{ 
+          font-size: 1.1rem; font-weight: 700; margin: 0 0 6px; 
+          line-height: 1.25; color: var(--text-main);
+      }}
+      .product-desc {{ 
+          font-size: 0.85rem; color: #64748b; line-height: 1.5; margin-bottom: 12px; 
+          display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+      }}
+
+      .product-footer {{ 
+          display: flex; justify-content: space-between; align-items: center; 
+          margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-light);
+      }}
+      .product-price {{ font-size: 1.15rem; font-weight: 800; color: var(--text-main); }}
+      
+      .add-btn {{
+          background: var(--primary); color: white; border: none;
+          padding: 8px 16px; border-radius: var(--radius-sm);
+          font-weight: 600; cursor: pointer; font-size: 0.9rem;
+          display: flex; align-items: center; gap: 6px;
+          transition: all 0.2s var(--ease-out);
+      }}
+      .add-btn:hover {{ background: color-mix(in srgb, var(--primary), black 10%); transform: translateY(-1px); }}
+      .add-btn:active {{ transform: scale(0.95); }}
+      .add-btn i {{ font-size: 0.9rem; }}
+
+      /* --- MOBILE SPECIFIC OVERRIDES (Compact) --- */
+      @media (max-width: 768px) {{
+          header {{ height: 30vh; min-height: 220px; border-radius: 0 0 25px 25px; margin-bottom: 15px; }}
+          header h1 {{ font-size: 2rem; }}
+          .header-logo {{ height: 60px; margin-bottom: 10px; }}
+          
+          .category-nav-wrapper {{ padding: 0 10px; top: 10px; margin-bottom: 20px; }}
+          .category-nav a {{ padding: 8px 16px; font-size: 0.85rem; }}
+          .category-title {{ font-size: 1.5rem; margin-bottom: 15px; }}
+          
+          /* Two columns on mobile */
+          .products-grid {{ 
+              grid-template-columns: repeat(2, 1fr); 
+              gap: 12px; padding: 0 5px;
+          }}
+          
+          .product-info {{ padding: 12px; }}
+          .product-name {{ font-size: 0.95rem; margin-bottom: 4px; }}
+          .product-desc {{ font-size: 0.75rem; margin-bottom: 10px; -webkit-line-clamp: 2; }}
+          .product-price {{ font-size: 1rem; }}
+          
+          /* Icon only button on mobile to save space */
+          .add-btn {{ padding: 0; width: 32px; height: 32px; border-radius: 50%; justify-content: center; }}
+          .add-btn span {{ display: none; }}
+          .add-btn i {{ font-size: 1rem; }}
+          
+          .container {{ padding: 0 10px; }}
+          .category-section {{ margin-bottom: 40px; }}
+      }}
+
+      /* --- FLOATING CART --- */
       #cart-toggle {{
-        position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px;
-        background: var(--primary-color); color: white; border-radius: 50%; border: none;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2); cursor: pointer; z-index: 1001;
-        display: flex; justify-content: center; align-items: center; transition: transform 0.3s;
+          position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px;
+          background: var(--primary); color: white; border-radius: 50%; border: none;
+          box-shadow: 0 12px 30px rgba(0,0,0,0.25); cursor: pointer; z-index: 99;
+          display: flex; justify-content: center; align-items: center; 
+          transition: transform 0.3s var(--ease-out);
       }}
       #cart-toggle:hover {{ transform: scale(1.1); }}
-      #cart-count {{ position: absolute; top: -5px; right: -5px; background: #e74c3c; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8em; font-weight: bold; border: 2px solid white; }}
-      
-      #scroll-to-top {{
-        position: fixed; bottom: 90px; right: 20px; width: 50px; height: 50px;
-        background: var(--primary-color); color: white; border-radius: 50%; border: none;
-        cursor: pointer; z-index: 999; display: none; justify-content: center; align-items: center; font-size: 1.2em;
-        transition: opacity 0.3s;
+      #cart-toggle i {{ font-size: 1.6rem; }}
+      #cart-count {{ 
+          position: absolute; top: 0; right: 0; background: white; color: var(--primary);
+          width: 24px; height: 24px; border-radius: 50%; font-size: 0.8rem; font-weight: 800; 
+          display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
       }}
-      #scroll-to-top.visible {{ display: flex; }}
+      
+      @media (max-width: 768px) {{
+          #cart-toggle {{ width: 56px; height: 56px; bottom: 20px; right: 20px; }}
+          #cart-toggle i {{ font-size: 1.4rem; }}
+      }}
 
-      /* --- MODALS (Checkout & Modifiers) --- */
+      /* --- SIDEBAR (Cart) --- */
+      #cart-sidebar {{
+          position: fixed; top: 0; right: -100%; width: 100%; max-width: 420px; height: 100%;
+          z-index: 1000; display: flex; flex-direction: column;
+          transition: right 0.4s var(--ease-out);
+          box-shadow: -10px 0 40px rgba(0,0,0,0.15);
+      }}
+      #cart-sidebar.open {{ right: 0; }}
+      @media (max-width: 768px) {{ #cart-sidebar {{ max-width: 100%; }} }}
+      
+      .cart-content-wrapper {{
+          height: 100%; display: flex; flex-direction: column;
+          background: rgba(255, 255, 255, 0.95); 
+          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      }}
+      
+      .cart-header {{ 
+          padding: 20px 25px; display: flex; justify-content: space-between; align-items: center; 
+          background: rgba(255,255,255,0.6); border-bottom: 1px solid var(--border-light);
+      }}
+      .cart-header h3 {{ font-size: 1.3rem; font-weight: 700; }}
+      
+      .cart-items {{ flex-grow: 1; overflow-y: auto; padding: 20px; }}
+      
+      .cart-item {{ 
+          display: flex; justify-content: space-between; align-items: center; 
+          margin-bottom: 15px; padding: 15px; background: white; 
+          border-radius: 12px; box-shadow: var(--shadow-sm);
+          animation: fadeUp 0.3s ease;
+      }}
+      
+      .cart-item-info {{ flex-grow: 1; padding-right: 10px; }}
+      .cart-item-name {{ font-weight: 600; font-size: 0.95rem; display: block; margin-bottom: 4px; }}
+      .cart-item-mods {{ font-size: 0.8rem; color: #888; }}
+      .cart-item-price {{ color: var(--primary); font-weight: 700; font-size: 0.95rem; margin-top: 4px; display: block; }}
+      
+      .qty-control {{ display: flex; align-items: center; gap: 8px; background: #f8fafc; padding: 4px; border-radius: 8px; }}
+      .qty-btn {{ 
+          width: 28px; height: 28px; background: white; border-radius: 6px; border: 1px solid #eee; 
+          cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: 700;
+      }}
+      
+      .cart-footer {{ padding: 25px; background: white; box-shadow: 0 -5px 20px rgba(0,0,0,0.03); }}
+      .cart-total-row {{ display: flex; justify-content: space-between; font-size: 1.3rem; font-weight: 800; margin-bottom: 20px; }}
+      
+      .main-btn {{ 
+          width: 100%; padding: 16px; background: var(--primary); color: white; 
+          border: none; border-radius: var(--radius-md); font-size: 1.1rem; font-weight: 600; 
+          cursor: pointer; transition: all 0.2s; display: flex; justify-content: center; align-items: center; gap: 10px;
+      }}
+      .main-btn:active {{ transform: scale(0.98); }}
+      .main-btn:disabled {{ background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }}
+
+      /* --- MODALS (Desktop Center / Mobile Bottom Sheet) --- */
       .modal-overlay {{
-        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0,0,0,0.7); z-index: 2000; display: none; justify-content: center; align-items: center;
-        backdrop-filter: blur(5px); opacity: 0; transition: opacity 0.3s;
+          position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+          background: rgba(0,0,0,0.5); backdrop-filter: blur(5px);
+          z-index: 2000; display: none; justify-content: center; align-items: center;
+          opacity: 0; transition: opacity 0.3s ease;
       }}
       .modal-overlay.visible {{ display: flex; opacity: 1; }}
-      .modal-content {{
-        background: #fff; padding: 30px; border-radius: 12px; width: 90%; max-width: 500px;
-        max-height: 90vh; overflow-y: auto; position: relative; transform: scale(0.95); transition: transform 0.3s; color: #333;
-      }}
-      .modal-overlay.visible .modal-content {{ transform: scale(1); }}
       
-      .form-group {{ margin-bottom: 15px; }}
-      .form-group label {{ display: block; margin-bottom: 5px; font-weight: 600; font-size: 0.9em; }}
-      .form-group input {{ width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; }}
+      .modal-content {{
+          background: #fff; padding: 30px; border-radius: 24px; 
+          width: 90%; max-width: 480px; max-height: 85vh; overflow-y: auto; 
+          transform: scale(0.95); opacity: 0; transition: all 0.3s var(--ease-out);
+          box-shadow: var(--shadow-lg);
+      }}
+      .modal-overlay.visible .modal-content {{ transform: scale(1); opacity: 1; }}
+      
+      @media (max-width: 768px) {{
+          .modal-overlay {{ align-items: flex-end; }}
+          .modal-content {{ 
+              width: 100%; max-width: 100%; border-radius: 24px 24px 0 0; 
+              padding: 25px; max-height: 85vh; transform: translateY(100%);
+          }}
+          .modal-overlay.visible .modal-content {{ transform: translateY(0); }}
+      }}
+      
+      /* Inputs & Forms */
+      .form-group {{ margin-bottom: 20px; }}
+      .form-group label {{ display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }}
+      
+      .form-control {{ 
+          width: 100%; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; 
+          font-size: 1rem; font-family: var(--font-sans); background: #f8fafc;
+      }}
+      .form-control:focus {{ outline: none; background: white; border-color: var(--primary); }}
       
       .radio-group {{ display: flex; gap: 10px; }}
-      .radio-group input {{ display: none; }}
-      .radio-group label {{
-        flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; text-align: center; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      .radio-group label {{ 
+          flex: 1; padding: 12px; text-align: center; cursor: pointer; 
+          border-radius: 12px; border: 1px solid #f1f5f9; background: white;
+          color: #64748b; font-weight: 500; transition: all 0.2s;
+          display: flex; flex-direction: column; gap: 5px; font-size: 0.9rem;
       }}
-      .radio-group input:checked + label {{ background: var(--primary-color); color: white; border-color: var(--primary-color); }}
-      
-      .close-modal {{ position: absolute; top: 15px; right: 20px; font-size: 1.5em; cursor: pointer; color: #999; }}
+      .radio-group input {{ display: none; }}
+      .radio-group input:checked + label {{ 
+          background: color-mix(in srgb, var(--primary), white 95%); 
+          border-color: var(--primary); color: var(--primary); font-weight: 700;
+      }}
+
+      .modifier-item {{
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 12px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer;
+      }}
+      .checkbox-circle {{
+          width: 22px; height: 22px; border: 2px solid #cbd5e1; border-radius: 6px;
+          display: flex; align-items: center; justify-content: center; margin-right: 12px;
+          transition: all 0.2s;
+      }}
+      .modifier-item.selected .checkbox-circle {{ border-color: var(--primary); background: var(--primary); }}
+      .modifier-item.selected .checkbox-circle::after {{ content: '✓'; color: white; font-size: 12px; font-weight: 900; }}
 
       /* --- FOOTER --- */
-      footer {{ background: var(--footer-bg-color); color: var(--footer-text-color); padding: 50px var(--side-padding) 30px; margin-top: auto; border-top: 1px solid var(--secondary-color); }}
-      .footer-content {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 40px; max-width: 1200px; margin: 0 auto; }}
-      .footer-section h4 {{ font-size: 1.3em; margin-bottom: 20px; font-weight: 700; border-bottom: 2px solid var(--primary-color); display: inline-block; padding-bottom: 5px; color: var(--footer-text-color); }}
-      .footer-contact-item {{ margin-bottom: 10px; display: flex; gap: 10px; }}
-      .footer-contact-item i {{ color: var(--primary-color); }}
-      .footer-contact-item a {{ color: inherit; text-decoration: none; }}
-      .footer-social a {{ display: inline-flex; width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 50%; align-items: center; justify-content: center; margin-right: 10px; color: inherit; text-decoration: none; transition: background 0.3s; }}
-      .footer-social a:hover {{ background: var(--primary-color); color: white; }}
+      footer {{ 
+          background: var(--footer-bg); color: var(--footer-text); 
+          padding: 60px 20px 30px; margin-top: auto; 
+      }}
+      .footer-content {{ 
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+          gap: 40px; max-width: var(--container-width); margin: 0 auto; 
+      }}
+      .footer-section h4 {{ 
+          font-size: 0.9rem; margin-bottom: 20px; opacity: 0.6; 
+          text-transform: uppercase; font-weight: 700; letter-spacing: 1px;
+      }}
+      .footer-link {{ 
+          display: flex; align-items: center; gap: 10px; margin-bottom: 12px; 
+          color: inherit; text-decoration: none; opacity: 0.8; transition: opacity 0.2s;
+      }}
+      .footer-link:hover {{ opacity: 1; }}
       
-      /* --- PAGE MODAL --- */
-      #page-modal-content h2 {{ color: var(--primary-color); border-bottom: 1px solid #eee; padding-bottom: 10px; }}
-      #page-loader {{ display: flex; justify-content: center; padding: 20px; }}
-      .spinner {{ border: 4px solid #f3f3f3; border-top: 4px solid var(--primary-color); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }}
+      .social-links {{ display: flex; gap: 10px; }}
+      .social-links a {{ 
+          display: flex; width: 40px; height: 40px; border-radius: 10px; 
+          background: rgba(255,255,255,0.1); align-items: center; justify-content: center; 
+          color: inherit; text-decoration: none; transition: all 0.3s;
+      }}
+      .social-links a:hover {{ background: var(--primary); color: white; }}
+
+      /* --- ANIMATIONS & UTILS --- */
+      @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(15px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+      @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+      .spinner {{ 
+          border: 2px solid rgba(0,0,0,0.1); border-top: 2px solid var(--primary); 
+          border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; 
+      }}
     </style>
 </head>
 <body>
     <header>
-        <div class="header-logo-container">{logo_html}</div>
-        <h1>{site_title}</h1>
+        <div class="header-bg"></div>
+        <div class="header-content">
+            <div class="header-logo-container">{logo_html}</div>
+            <h1>{site_title}</h1>
+        </div>
     </header>
     
-    <nav class="main-nav">{menu_links_html}</nav>
+    <div class="category-nav-wrapper">
+        <nav class="category-nav" id="category-nav"></nav>
+    </div>
     
     <div class="container">
-        <nav class="category-nav" id="category-nav"></nav>
         <main id="menu">
-            <div style="text-align:center; padding: 50px;"><div class="spinner"></div></div>
+            <div style="text-align:center; padding: 80px;"><div class="spinner"></div></div>
         </main>
     </div>
 
     <button id="cart-toggle">
-        <i class="fa-solid fa-basket-shopping" style="font-size: 1.2em;"></i>
+        <i class="fa-solid fa-bag-shopping"></i>
         <span id="cart-count">0</span>
     </button>
-    <button id="scroll-to-top"><i class="fa-solid fa-arrow-up"></i></button>
 
     <aside id="cart-sidebar">
-        <div class="cart-header">
-            <h2>Ваше замовлення</h2>
-            <button id="close-cart-btn" style="background:none; border:none; font-size:1.5em; cursor:pointer;">&times;</button>
-        </div>
-        <div id="cart-items-container" class="cart-items"></div>
-        <div class="cart-footer">
-            <div class="cart-total" style="display:flex; justify-content:space-between; font-weight:bold; font-size:1.2em; margin-bottom:15px;">
-                <span>Всього:</span>
-                <span id="cart-total-price">0.00 грн</span>
+        <div class="cart-content-wrapper">
+            <div class="cart-header">
+                <h3 style="margin:0;">Кошик</h3>
+                <button id="close-cart-btn" style="background:none; border:none; font-size:1.5rem; cursor:pointer; color: #94a3b8;">&times;</button>
             </div>
-            <button id="checkout-btn" disabled>Оформити замовлення</button>
+            <div id="cart-items-container" class="cart-items"></div>
+            <div class="cart-footer">
+                <div class="cart-total-row">
+                    <span>Всього:</span>
+                    <span id="cart-total-price">0.00 грн</span>
+                </div>
+                <button id="checkout-btn" class="main-btn" disabled>Оформити замовлення</button>
+            </div>
         </div>
     </aside>
 
     <div id="modifier-modal" class="modal-overlay">
         <div class="modal-content">
-            <span class="close-modal" id="close-mod-modal">&times;</span>
-            <h3 id="mod-product-name" style="margin-top:0;"></h3>
-            <div id="mod-list" style="margin: 20px 0;"></div>
-            <button id="mod-add-btn" class="add-to-cart-btn" style="width:100%; display:flex; justify-content:center; gap:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                <h3 id="mod-product-name" style="font-size:1.2rem; margin:0;">Назва</h3>
+                <span class="close-modal" style="font-size:1.5rem; cursor:pointer; color:#cbd5e1;">&times;</span>
+            </div>
+            <p style="color:#64748b; margin-bottom:15px; font-size:0.9rem;">Додайте інгредієнти:</p>
+            <div id="mod-list" style="margin-bottom: 25px;"></div>
+            <button id="mod-add-btn" class="main-btn" style="width:100%;">
                 <span>Додати</span>
-                <span id="mod-total-price"></span>
+                <span id="mod-total-price" style="background:rgba(255,255,255,0.2); padding:2px 8px; border-radius:6px; font-size:0.9rem; margin-left:auto;"></span>
             </button>
         </div>
     </div>
 
     <div id="checkout-modal" class="modal-overlay">
         <div class="modal-content">
-            <span class="close-modal" id="close-checkout-modal">&times;</span>
-            <h2 style="text-align:center;">Оформлення</h2>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px;">
+                <h3 style="font-size:1.4rem; margin:0;">Оформлення</h3>
+                <span class="close-modal" style="font-size:1.5rem; cursor:pointer; color:#cbd5e1;">&times;</span>
+            </div>
+            
             <form id="checkout-form">
                 <div class="form-group">
-                    <label>Отримання:</label>
+                    <label>Отримання</label>
                     <div class="radio-group">
                         <input type="radio" id="delivery" name="delivery_type" value="delivery" checked>
-                        <label for="delivery"><i class="fa-solid fa-truck"></i> Доставка</label>
+                        <label for="delivery"><i class="fa-solid fa-motorcycle"></i> Доставка</label>
                         <input type="radio" id="pickup" name="delivery_type" value="pickup">
-                        <label for="pickup"><i class="fa-solid fa-bag-shopping"></i> Самовивіз</label>
+                        <label for="pickup"><i class="fa-solid fa-shop"></i> Самовивіз</label>
                     </div>
                 </div>
                 
-                <div class="form-group"><input type="text" id="customer_name" placeholder="Ваше ім'я" required></div>
-                <div class="form-group"><input type="tel" id="phone_number" placeholder="Телефон" required></div>
+                <div class="form-group">
+                    <label>Контакти</label>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                        <input type="text" id="customer_name" class="form-control" placeholder="Ваше ім'я" required>
+                        <input type="tel" id="phone_number" class="form-control" placeholder="Телефон" required>
+                    </div>
+                </div>
                 
                 <div id="address-group" class="form-group">
-                    <input type="text" id="address" placeholder="Адреса доставки" required>
+                    <label>Адреса</label>
+                    <input type="text" id="address" class="form-control" placeholder="Вулиця, будинок, під'їзд..." required>
                 </div>
 
                 <div class="form-group">
-                    <label>Час:</label>
+                    <label>Час</label>
                     <div class="radio-group">
                         <input type="radio" id="asap" name="delivery_time" value="asap" checked>
-                        <label for="asap">Якнайшвидше</label>
+                        <label for="asap"><i class="fa-solid fa-fire"></i> Зараз</label>
                         <input type="radio" id="specific" name="delivery_time" value="specific">
-                        <label for="specific">На час</label>
+                        <label for="specific"><i class="fa-regular fa-clock"></i> На час</label>
                     </div>
                 </div>
                 <div id="specific-time-group" class="form-group" style="display:none;">
-                    <input type="text" id="specific_time_input" placeholder="Наприклад: 18:30">
+                    <input type="text" id="specific_time_input" class="form-control" placeholder="Наприклад: 19:00">
                 </div>
 
                 <div class="form-group">
-                    <label>Оплата:</label>
+                    <label>Оплата</label>
                     <div class="radio-group">
                         <input type="radio" id="pay_cash" name="payment_method" value="cash" checked>
-                        <label for="pay_cash">💵 Готівка</label>
+                        <label for="pay_cash"><i class="fa-solid fa-money-bill-wave"></i> Готівка</label>
                         <input type="radio" id="pay_card" name="payment_method" value="card">
-                        <label for="pay_card">💳 Картка</label>
+                        <label for="pay_card"><i class="fa-regular fa-credit-card"></i> Картка</label>
                     </div>
                 </div>
 
-                <button type="submit" id="place-order-submit" class="add-to-cart-btn" style="width:100%;">Підтвердити</button>
+                <button type="submit" id="place-order-submit" class="main-btn" style="margin-top:10px;">
+                    Підтвердити
+                </button>
             </form>
         </div>
     </div>
 
     <div id="page-modal" class="modal-overlay">
-        <div class="modal-content" id="page-modal-content">
-            <span class="close-modal" id="close-page-modal">&times;</span>
-            <h2 id="page-modal-title"></h2>
-            <div id="page-modal-body"></div>
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:10px; border-bottom:1px solid #f1f5f9;">
+                <h3 id="page-modal-title" style="margin:0; font-size:1.3rem;"></h3>
+                <span class="close-modal" style="font-size:1.5rem; cursor:pointer; color:#cbd5e1;">&times;</span>
+            </div>
+            <div id="page-modal-body" class="page-content-body" style="line-height:1.6; color:#475569;"></div>
         </div>
     </div>
 
@@ -321,16 +540,16 @@ WEB_ORDER_HTML = """
         <div class="footer-content">
             <div class="footer-section">
                 <h4>Контакти</h4>
-                <div class="footer-contact-item"><i class="fa-solid fa-location-dot"></i> <span>{footer_address}</span></div>
-                <div class="footer-contact-item"><i class="fa-solid fa-phone"></i> <a href="tel:{footer_phone}">{footer_phone}</a></div>
-                <div class="footer-contact-item"><i class="fa-solid fa-clock"></i> <span>{working_hours}</span></div>
+                <a href="#" class="footer-link"><i class="fa-solid fa-location-dot"></i> <span>{footer_address}</span></a>
+                <a href="tel:{footer_phone}" class="footer-link"><i class="fa-solid fa-phone"></i> <span>{footer_phone}</span></a>
+                <div class="footer-link"><i class="fa-regular fa-clock"></i> <span>{working_hours}</span></div>
             </div>
             <div class="footer-section">
-                <h4>Соцмережі</h4>
-                <div class="footer-social">{social_links_html}</div>
+                <h4>Соціальні мережі</h4>
+                <div class="social-links">{social_links_html}</div>
             </div>
         </div>
-        <div style="text-align:center; margin-top:30px; opacity:0.7; font-size:0.9em;">
+        <div style="text-align:center; margin-top:50px; opacity:0.5; font-size:0.8rem;">
             &copy; 2024 {site_title}
         </div>
     </footer>
@@ -350,15 +569,17 @@ WEB_ORDER_HTML = """
             const cartCountEl = document.getElementById('cart-count');
             const checkoutBtn = document.getElementById('checkout-btn');
             
-            // Fetch Menu
+            fetchMenu();
+
             async function fetchMenu() {{
                 try {{
                     const res = await fetch('/api/menu');
+                    if (!res.ok) throw new Error("Failed");
                     menuData = await res.json();
                     renderMenu();
                     updateCartView();
                 }} catch (e) {{
-                    menuContainer.innerHTML = '<p style="text-align:center">Помилка завантаження меню.</p>';
+                    menuContainer.innerHTML = '<div style="text-align:center; padding:60px; color:#94a3b8;">Не вдалося завантажити меню.</div>';
                 }}
             }}
 
@@ -368,14 +589,12 @@ WEB_ORDER_HTML = """
                 nav.innerHTML = '';
 
                 menuData.categories.forEach((cat, idx) => {{
-                    // Nav Link
                     const link = document.createElement('a');
                     link.href = `#cat-${{cat.id}}`;
                     link.textContent = cat.name;
                     if(idx===0) link.classList.add('active');
                     nav.appendChild(link);
 
-                    // Section
                     const section = document.createElement('div');
                     section.id = `cat-${{cat.id}}`;
                     section.className = 'category-section';
@@ -384,41 +603,52 @@ WEB_ORDER_HTML = """
                     const grid = document.createElement('div');
                     grid.className = 'products-grid';
 
-                    menuData.products.filter(p => p.category_id === cat.id).forEach(prod => {{
-                        const card = document.createElement('div');
-                        card.className = 'product-card';
-                        const img = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
-                        const prodJson = JSON.stringify(prod).replace(/"/g, '&quot;');
-                        
-                        card.innerHTML = `
-                            <div class="product-image-wrapper"><img src="${{img}}" class="product-image"></div>
-                            <div class="product-info">
-                                <div class="product-name">${{prod.name}}</div>
-                                <div class="product-desc">${{prod.description || ''}}</div>
-                                <div class="product-footer">
-                                    <div class="product-price">${{prod.price}} грн</div>
-                                    <button class="add-to-cart-btn" data-product="${{prodJson}}" onclick="handleClick(this)">Додати</button>
+                    const products = menuData.products.filter(p => p.category_id === cat.id);
+                    if (products.length > 0) {{
+                        products.forEach(prod => {{
+                            const card = document.createElement('div');
+                            card.className = 'product-card';
+                            const img = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
+                            const prodJson = JSON.stringify(prod).replace(/"/g, '&quot;');
+                            
+                            card.innerHTML = `
+                                <div class="product-image-wrapper"><img src="${{img}}" class="product-image" loading="lazy"></div>
+                                <div class="product-info">
+                                    <div class="product-header">
+                                        <div class="product-name">${{prod.name}}</div>
+                                        <div class="product-desc">${{prod.description || ''}}</div>
+                                    </div>
+                                    <div class="product-footer">
+                                        <div class="product-price">${{prod.price}} грн</div>
+                                        <button class="add-btn" data-product="${{prodJson}}" onclick="handleClick(this)">
+                                            <span>Додати</span> <i class="fa-solid fa-plus"></i>
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                        `;
-                        grid.appendChild(card);
-                    }});
-                    section.appendChild(grid);
-                    menuContainer.appendChild(section);
+                            `;
+                            grid.appendChild(card);
+                        }});
+                        section.appendChild(grid);
+                        menuContainer.appendChild(section);
+                    }}
                 }});
                 setupScrollSpy();
             }}
 
-            // --- Cart Logic ---
             window.handleClick = (btn) => {{
                 const prod = JSON.parse(btn.dataset.product);
+                
+                const originalHTML = btn.innerHTML;
+                btn.classList.add('added');
+                btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+                
+                setTimeout(() => {{ 
+                    btn.classList.remove('added'); 
+                    btn.innerHTML = originalHTML;
+                }}, 1200);
+
                 if (prod.modifiers && prod.modifiers.length > 0) openModModal(prod);
                 else addToCart(prod, []);
-                
-                // Animation
-                btn.classList.add('added');
-                btn.textContent = '✓';
-                setTimeout(() => {{ btn.classList.remove('added'); btn.textContent = 'Додати'; }}, 1000);
             }};
 
             function addToCart(prod, mods) {{
@@ -437,9 +667,8 @@ WEB_ORDER_HTML = """
                 saveCart();
                 updateCartView();
                 
-                // Pop animation on cart icon
                 const toggle = document.getElementById('cart-toggle');
-                toggle.style.transform = 'scale(1.2)';
+                toggle.style.transform = 'scale(1.15)';
                 setTimeout(() => toggle.style.transform = 'scale(1)', 200);
             }}
 
@@ -450,7 +679,7 @@ WEB_ORDER_HTML = """
                 const items = Object.values(cart);
                 
                 if (items.length === 0) {{
-                    cartItemsContainer.innerHTML = '<p style="text-align:center;color:#999;margin-top:50px;">Кошик порожній</p>';
+                    cartItemsContainer.innerHTML = '<div style="text-align:center;color:#94a3b8;margin-top:60px;"><i class="fa-solid fa-basket-shopping" style="font-size:2.5rem; opacity:0.2; margin-bottom:10px;"></i><p>Кошик порожній</p></div>';
                 }}
 
                 items.forEach(item => {{
@@ -465,12 +694,12 @@ WEB_ORDER_HTML = """
                         <div class="cart-item-info">
                             <span class="cart-item-name">${{item.name}}</span>
                             ${{modStr ? `<span class="cart-item-mods">+ ${{modStr}}</span>` : ''}}
-                            <span style="color:var(--primary-color)">${{item.price}} грн</span>
+                            <span class="cart-item-price">${{item.price}} грн</span>
                         </div>
-                        <div class="cart-item-controls">
-                            <button onclick="updateQty('${{item.key}}', -1)">-</button>
-                            <span>${{item.quantity}}</span>
-                            <button onclick="updateQty('${{item.key}}', 1)">+</button>
+                        <div class="qty-control">
+                            <button class="qty-btn" onclick="updateQty('${{item.key}}', -1)">-</button>
+                            <div class="qty-val">${{item.quantity}}</div>
+                            <button class="qty-btn" onclick="updateQty('${{item.key}}', 1)">+</button>
                         </div>
                     `;
                     cartItemsContainer.appendChild(div);
@@ -493,7 +722,7 @@ WEB_ORDER_HTML = """
 
             function saveCart() {{ localStorage.setItem('webCart', JSON.stringify(cart)); }}
 
-            // --- Modals Logic ---
+            // Modals
             const modModal = document.getElementById('modifier-modal');
             const modList = document.getElementById('mod-list');
             
@@ -505,16 +734,17 @@ WEB_ORDER_HTML = """
                 
                 prod.modifiers.forEach(mod => {{
                     const div = document.createElement('div');
-                    div.style.padding = '10px';
-                    div.style.borderBottom = '1px solid #eee';
-                    div.style.display = 'flex';
-                    div.style.justifyContent = 'space-between';
-                    div.style.cursor = 'pointer';
+                    div.className = 'modifier-item';
+                    div.onclick = () => {{
+                        toggleMod(mod.id); 
+                        div.classList.toggle('selected', selectedMods.has(mod.id));
+                    }};
                     div.innerHTML = `
-                        <label style="cursor:pointer; display:flex; align-items:center; width:100%">
-                            <input type="checkbox" onchange="toggleMod(${{mod.id}})" style="margin-right:10px;"> ${{mod.name}}
-                        </label>
-                        <b>+${{mod.price}}</b>
+                        <div style="display:flex; align-items:center;">
+                            <div class="checkbox-circle"></div>
+                            <span style="font-weight:500; font-size:0.95rem; color:#334155;">${{mod.name}}</span>
+                        </div>
+                        <b style="color:var(--primary); font-size:0.9rem;">+${{mod.price}}</b>
                     `;
                     modList.appendChild(div);
                 }});
@@ -522,11 +752,11 @@ WEB_ORDER_HTML = """
                 modModal.classList.add('visible');
             }}
             
-            window.toggleMod = (id) => {{
+            function toggleMod(id) {{
                 if (selectedMods.has(id)) selectedMods.delete(id);
                 else selectedMods.add(id);
                 updateModPrice();
-            }};
+            }}
             
             function updateModPrice() {{
                 let p = currentProd.price;
@@ -540,14 +770,16 @@ WEB_ORDER_HTML = """
                 modModal.classList.remove('visible');
             }};
 
-            // --- Checkout Logic ---
+            // Checkout
             const checkoutModal = document.getElementById('checkout-modal');
             const addressGroup = document.getElementById('address-group');
             const timeGroup = document.getElementById('specific-time-group');
             
-            checkoutBtn.onclick = () => checkoutModal.classList.add('visible');
+            checkoutBtn.onclick = () => {{
+                cartSidebar.classList.remove('open');
+                checkoutModal.classList.add('visible');
+            }};
             
-            // Radio Toggles
             document.querySelectorAll('input[name="delivery_type"]').forEach(el => {{
                 el.onchange = (e) => {{
                     const isDelivery = e.target.value === 'delivery';
@@ -562,7 +794,6 @@ WEB_ORDER_HTML = """
                 }};
             }});
             
-            // Auto-fill customer info
             document.getElementById('phone_number').onblur = async (e) => {{
                 if(e.target.value.length >= 10) {{
                     try {{
@@ -579,12 +810,13 @@ WEB_ORDER_HTML = """
             document.getElementById('checkout-form').onsubmit = async (e) => {{
                 e.preventDefault();
                 const btn = document.getElementById('place-order-submit');
-                btn.disabled = true; btn.textContent = 'Обробка...';
+                const originalText = btn.innerText;
+                btn.disabled = true; 
+                btn.innerHTML = '<div class="spinner" style="border-color:white; border-top-color:transparent;"></div>';
                 
                 const dType = document.querySelector('input[name="delivery_type"]:checked').value;
                 const tType = document.querySelector('input[name="delivery_time"]:checked').value;
                 const payMethod = document.querySelector('input[name="payment_method"]:checked').value;
-                
                 let timeVal = "Якнайшвидше";
                 if(tType === 'specific') timeVal = document.getElementById('specific_time_input').value || "Не вказано";
 
@@ -600,54 +832,18 @@ WEB_ORDER_HTML = """
 
                 try {{
                     const res = await fetch('/api/place_order', {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify(data)
+                        method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(data)
                     }});
-                    
                     if(res.ok) {{
-                        alert('Дякуємо! Замовлення прийнято.');
-                        cart = {{}};
-                        saveCart();
-                        updateCartView();
+                        alert('Дякуємо! Замовлення успішно прийнято.');
+                        cart = {{}}; saveCart(); updateCartView();
                         checkoutModal.classList.remove('visible');
-                        cartSidebar.classList.remove('open');
-                    }} else {{
-                        alert('Помилка при замовленні');
-                    }}
-                }} catch(err) {{
-                    alert('Помилка з`єднання');
-                }} finally {{
-                    btn.disabled = false; btn.textContent = 'Підтвердити';
-                }}
+                    }} else {{ alert('Помилка. Спробуйте ще раз.'); }}
+                }} catch(err) {{ alert('Помилка з`єднання'); }} 
+                finally {{ btn.disabled = false; btn.innerText = originalText; }}
             }};
 
-            // --- Page Modal ---
-            const pageModal = document.getElementById('page-modal');
-            const pageContent = document.getElementById('page-modal-body');
-            const pageTitle = document.getElementById('page-modal-title');
-            
-            document.querySelectorAll('.menu-popup-trigger').forEach(link => {{
-                link.onclick = async (e) => {{
-                    e.preventDefault();
-                    pageModal.classList.add('visible');
-                    pageContent.innerHTML = '<div class="spinner"></div>';
-                    pageTitle.textContent = '';
-                    
-                    try {{
-                        const res = await fetch('/api/page/' + link.dataset.itemId);
-                        if(res.ok) {{
-                            const d = await res.json();
-                            pageTitle.textContent = d.title;
-                            pageContent.innerHTML = d.content;
-                        }} else {{
-                            pageContent.textContent = 'Помилка';
-                        }}
-                    }} catch(err) {{ pageContent.textContent = 'Помилка'; }}
-                }};
-            }});
-
-            // --- General UI ---
+            // Utils
             document.getElementById('cart-toggle').onclick = () => cartSidebar.classList.add('open');
             document.getElementById('close-cart-btn').onclick = () => cartSidebar.classList.remove('open');
             
@@ -655,31 +851,39 @@ WEB_ORDER_HTML = """
                 btn.onclick = (e) => e.target.closest('.modal-overlay').classList.remove('visible');
             }});
 
-            const scrollBtn = document.getElementById('scroll-to-top');
-            window.onscroll = () => {{
-                if(window.scrollY > 300) scrollBtn.classList.add('visible');
-                else scrollBtn.classList.remove('visible');
-            }};
-            scrollBtn.onclick = () => window.scrollTo({{top:0, behavior:'smooth'}});
+            const pageModal = document.getElementById('page-modal');
+            document.querySelectorAll('.menu-popup-trigger').forEach(link => {{
+                link.onclick = async (e) => {{
+                    e.preventDefault();
+                    pageModal.classList.add('visible');
+                    document.getElementById('page-modal-body').innerHTML = '<div style="text-align:center; padding:40px;"><div class="spinner"></div></div>';
+                    document.getElementById('page-modal-title').innerText = link.innerText;
+                    try {{
+                        const res = await fetch('/api/page/' + link.dataset.itemId);
+                        if(res.ok) {{
+                            const d = await res.json();
+                            document.getElementById('page-modal-title').innerText = d.title;
+                            document.getElementById('page-modal-body').innerHTML = d.content;
+                        }}
+                    }} catch(err) {{ document.getElementById('page-modal-body').innerText = 'Помилка.'; }}
+                }};
+            }});
 
             function setupScrollSpy() {{
-                const navLinks = document.querySelectorAll('.category-nav a');
                 const observer = new IntersectionObserver(entries => {{
                     entries.forEach(entry => {{
                         if (entry.isIntersecting) {{
-                            navLinks.forEach(l => l.classList.remove('active'));
+                            document.querySelectorAll('.category-nav a').forEach(l => l.classList.remove('active'));
                             const active = document.querySelector(`.category-nav a[href="#${{entry.target.id}}"]`);
                             if(active) {{
                                 active.classList.add('active');
-                                active.scrollIntoView({{behavior:'smooth', inline:'center'}});
+                                active.scrollIntoView({{behavior:'smooth', inline:'center', block: 'nearest'}});
                             }}
                         }}
                     }});
-                }}, {{rootMargin: '-40% 0px -60% 0px'}});
+                }}, {{rootMargin: '-30% 0px -70% 0px'}});
                 document.querySelectorAll('.category-section').forEach(s => observer.observe(s));
             }}
-
-            fetchMenu();
         }});
     </script>
 </body>
