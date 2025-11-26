@@ -96,7 +96,8 @@ async def get_design_settings_page(
         telegram_welcome_message=html.escape(settings.telegram_welcome_message or "Шановний {user_name}, ласкаво просимо! 👋\n\nМи раді вас бачити. Оберіть опцію:"),
     )
 
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["design_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(

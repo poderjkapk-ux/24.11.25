@@ -490,14 +490,22 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                         items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
                         table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                         content = f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
-                        btn = f"<button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'kitchen')\">✅ Кухня готова</button>"
+                        
+                        # Кнопки: Видача + Печать чека
+                        btns = f"""
+                        <div style="display:flex; gap:5px;">
+                            <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'kitchen')\" style="flex-grow:1;">✅ Готово</button>
+                            <a href='/staff/print_recipe/{o.id}' target='_blank' class='action-btn secondary' style='width:auto;' title='Друк чека'><i class="fa-solid fa-print"></i></a>
+                        </div>
+                        """
+                        
                         orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
                             id=o.id, 
                             time=o.created_at.strftime('%H:%M'), 
                             badge_class="warning", 
                             status="В роботі", 
                             content=content, 
-                            buttons=btn, 
+                            buttons=btns, 
                             color="#f39c12"
                         )})
 
@@ -525,14 +533,22 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                         items_html = "".join([f"<li><b>{html.escape(i.product_name)}</b> x{i.quantity}</li>" for i in items])
                         table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                         content = f"<div class='info-row'><i class='fa-solid fa-martini-glass'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
-                        btn = f"<button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'bar')\">✅ Бар готовий</button>"
+                        
+                        # Кнопки
+                        btns = f"""
+                        <div style="display:flex; gap:5px;">
+                            <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'bar')\" style="flex-grow:1;">✅ Готово</button>
+                            <a href='/staff/print_recipe/{o.id}' target='_blank' class='action-btn secondary' style='width:auto;'><i class="fa-solid fa-print"></i></a>
+                        </div>
+                        """
+                        
                         orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
                             id=o.id, 
                             time=o.created_at.strftime('%H:%M'), 
                             badge_class="info", 
                             status="В роботі", 
                             content=content, 
-                            buttons=btn, 
+                            buttons=btns, 
                             color="#3498db"
                         )})
     return orders_data
@@ -941,3 +957,18 @@ async def create_waiter_order(
         return JSONResponse({"success": True, "orderId": order.id})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПЕЧАТИ РЕЦЕПТА ---
+@router.get("/staff/print_recipe/{order_id}")
+async def print_recipe(order_id: int, session: AsyncSession = Depends(get_db_session)):
+    """Генерация HTML чека/рецепта для повара"""
+    # Импорт внутри функции, чтобы избежать циклических зависимостей, 
+    # если inventory_service импортирует что-то из этого модуля (хотя сейчас нет)
+    from inventory_service import generate_cook_ticket 
+    
+    try:
+        html_content = await generate_cook_ticket(session, order_id)
+        return HTMLResponse(html_content)
+    except Exception as e:
+        logger.error(f"Error generating receipt: {e}")
+        return HTMLResponse(f"Ошибка печати: {e}", status_code=500)

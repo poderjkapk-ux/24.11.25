@@ -126,7 +126,8 @@ async def admin_clients_list(
     # Об'єднуємо вкладки і контент
     body = tabs_html + body_content
     
-    active_classes = {key: "" for key in ["main_active", "products_active", "categories_active", "orders_active", "statuses_active", "employees_active", "settings_active", "reports_active", "menu_active", "tables_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "products_active", "categories_active", "orders_active", "statuses_active", "employees_active", "settings_active", "reports_active", "menu_active", "tables_active", "design_active", "inventory_active"]}
     active_classes["clients_active"] = "active"
 
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
@@ -223,7 +224,8 @@ async def admin_client_detail(
         order_rows="".join(order_rows)
     )
 
-    active_classes = {key: "" for key in ["main_active", "products_active", "categories_active", "orders_active", "statuses_active", "employees_active", "settings_active", "reports_active", "menu_active", "tables_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "products_active", "categories_active", "orders_active", "statuses_active", "employees_active", "settings_active", "reports_active", "menu_active", "tables_active", "design_active", "inventory_active"]}
     active_classes["clients_active"] = "active"
 
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(

@@ -185,7 +185,8 @@ async def admin_statuses(
     </div>
     """
 
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["statuses_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(

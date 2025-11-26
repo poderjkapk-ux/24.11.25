@@ -9,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload, joinedload
 
 from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotification
+# --- СКЛАД: Импорт функции списания ---
+from inventory_service import deduct_products_by_tech_card
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +332,14 @@ async def notify_all_parties_on_status_change(
 
     # --- 4. READY FOR PICKUP NOTIFICATION ---
     if new_status.name == "Готовий до видачі":
+        # --- СКЛАД: Списание ингредиентов ---
+        try:
+            await deduct_products_by_tech_card(session, order)
+            logger.info(f"Склад обновлен для заказа #{order.id}")
+        except Exception as e:
+            logger.error(f"Ошибка списания склада: {e}")
+        # ------------------------------------
+
         source_label = ""
         if "Кухня" in actor_info: source_label = " (🍳 КУХНЯ)"
         elif "Бар" in actor_info: source_label = " (🍹 БАР)"

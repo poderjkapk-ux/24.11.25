@@ -1,0 +1,112 @@
+# inventory_models.py
+import sqlalchemy as sa
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from datetime import datetime
+from models import Base, Product  # Импортируем Base и Product из основного файла
+
+# --- СПРАВОЧНИКИ ---
+
+class Unit(Base):
+    """Единицы измерения (кг, л, шт)"""
+    __tablename__ = 'units'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(sa.String(20), unique=True)  # кг, л, шт
+    is_weighable: Mapped[bool] = mapped_column(sa.Boolean, default=True) # Можно ли делить (кг - да, банка - нет)
+
+class Warehouse(Base):
+    """Склады (Кухня, Бар, Основной склад)"""
+    __tablename__ = 'warehouses'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(sa.String(100))
+    
+    stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="warehouse")
+
+class Supplier(Base):
+    """Контрагенты (Поставщики)"""
+    __tablename__ = 'suppliers'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(sa.String(100))
+    phone: Mapped[str] = mapped_column(sa.String(50), nullable=True)
+    contact_person: Mapped[str] = mapped_column(sa.String(100), nullable=True)
+
+class Ingredient(Base):
+    """Ингредиенты (Сырье: Мука, Томаты, Мясо)"""
+    __tablename__ = 'ingredients'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(sa.String(100))
+    unit_id: Mapped[int] = mapped_column(sa.ForeignKey('units.id'))
+    
+    # Текущая себестоимость (усредненная или последняя)
+    current_cost: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00)
+    
+    unit: Mapped["Unit"] = relationship("Unit")
+    stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="ingredient")
+
+# --- ТЕХНОЛОГИЧЕСКИЕ КАРТЫ ---
+
+class TechCard(Base):
+    """Техкарта блюда (Связь Продукт -> Набор ингредиентов)"""
+    __tablename__ = 'tech_cards'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(sa.ForeignKey('products.id'), unique=True)
+    
+    # Инструкция для повара
+    cooking_method: Mapped[str] = mapped_column(sa.Text, nullable=True) 
+    
+    product: Mapped["Product"] = relationship("Product")
+    components: Mapped[list["TechCardItem"]] = relationship("TechCardItem", back_populates="tech_card", cascade="all, delete-orphan")
+
+class TechCardItem(Base):
+    """Строка техкарты (Ингредиент + кол-во)"""
+    __tablename__ = 'tech_card_items'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tech_card_id: Mapped[int] = mapped_column(sa.ForeignKey('tech_cards.id'))
+    ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'))
+    
+    gross_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3)) # Брутто (сколько списать со склада)
+    net_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3))   # Нетто (сколько в тарелке)
+    
+    tech_card: Mapped["TechCard"] = relationship("TechCard", back_populates="components")
+    ingredient: Mapped["Ingredient"] = relationship("Ingredient")
+
+# --- СКЛАДСКОЙ УЧЕТ ---
+
+class Stock(Base):
+    """Остатки на складах"""
+    __tablename__ = 'stocks'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    warehouse_id: Mapped[int] = mapped_column(sa.ForeignKey('warehouses.id'))
+    ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'))
+    quantity: Mapped[float] = mapped_column(sa.Numeric(10, 3), default=0.000)
+    
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse", back_populates="stocks")
+    ingredient: Mapped["Ingredient"] = relationship("Ingredient", back_populates="stocks")
+
+class InventoryDoc(Base):
+    """Документ движения (Накладная)"""
+    __tablename__ = 'inventory_docs'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    doc_type: Mapped[str] = mapped_column(sa.String(20)) # supply (приход), transfer (перемещение), writeoff (списание), deduction (продажа)
+    
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=datetime.now)
+    supplier_id: Mapped[int | None] = mapped_column(sa.ForeignKey('suppliers.id'), nullable=True)
+    
+    source_warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
+    target_warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
+    
+    comment: Mapped[str] = mapped_column(sa.String(255), nullable=True)
+    linked_order_id: Mapped[int | None] = mapped_column(sa.ForeignKey('orders.id'), nullable=True) # Если списание по продаже
+    
+    items: Mapped[list["InventoryDocItem"]] = relationship("InventoryDocItem", back_populates="doc", cascade="all, delete-orphan")
+
+class InventoryDocItem(Base):
+    """Позиция в накладной"""
+    __tablename__ = 'inventory_doc_items'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    doc_id: Mapped[int] = mapped_column(sa.ForeignKey('inventory_docs.id'))
+    ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'))
+    quantity: Mapped[float] = mapped_column(sa.Numeric(10, 3))
+    price: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00) # Цена закупки (для прихода)
+    
+    doc: Mapped["InventoryDoc"] = relationship("InventoryDoc", back_populates="items")
+    ingredient: Mapped["Ingredient"] = relationship("Ingredient")

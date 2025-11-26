@@ -45,6 +45,10 @@ from templates import (
     ADMIN_REPORTS_BODY
 )
 from models import *
+# Импортируем модели склада, чтобы они зарегистрировались в Base.metadata
+import inventory_models 
+from inventory_models import Unit, Warehouse
+
 from admin_handlers import register_admin_handlers
 from courier_handlers import register_courier_handlers
 from notification_manager import notify_new_order_to_staff
@@ -64,6 +68,7 @@ from admin_products import router as admin_products_router
 from admin_menu_pages import router as admin_menu_pages_router
 from admin_employees import router as admin_employees_router
 from admin_statuses import router as admin_statuses_router
+from admin_inventory import router as admin_inventory_router
 # -----------------------------------------------
 
 # --- КОНФІГУРАЦІЯ ---
@@ -712,8 +717,57 @@ async def lifespan(app: FastAPI):
     os.makedirs("static/images", exist_ok=True)
     os.makedirs("static/favicons", exist_ok=True)
     
-    await create_db_tables()
+    # --- Инициализация БД ---
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     
+    # --- Инициализация данных (Статусы, Роли, Склад) ---
+    async with async_session_maker() as session:
+        # Статусы
+        result_status = await session.execute(sa.select(OrderStatus).limit(1))
+        if not result_status.scalars().first():
+            default_statuses = {
+                "Новий": {"visible_to_operator": True, "visible_to_courier": False, "visible_to_waiter": True, "visible_to_chef": True, "visible_to_bartender": True, "requires_kitchen_notify": False},
+                "В обробці": {"visible_to_operator": True, "visible_to_courier": False, "visible_to_waiter": True, "visible_to_chef": True, "visible_to_bartender": True, "requires_kitchen_notify": True},
+                "Готовий до видачі": {"visible_to_operator": True, "visible_to_courier": True, "visible_to_waiter": True, "visible_to_chef": False, "visible_to_bartender": False, "notify_customer": True, "requires_kitchen_notify": False},
+                "Доставлений": {"visible_to_operator": True, "visible_to_courier": True, "is_completed_status": True},
+                "Скасований": {"visible_to_operator": True, "visible_to_courier": False, "is_cancelled_status": True, "visible_to_waiter": True, "visible_to_chef": False, "visible_to_bartender": False},
+                "Оплачено": {"visible_to_operator": True, "is_completed_status": True, "visible_to_waiter": True, "visible_to_chef": False, "visible_to_bartender": False, "notify_customer": False}
+            }
+            for name, props in default_statuses.items():
+                session.add(OrderStatus(name=name, **props))
+
+        # Роли
+        result_roles = await session.execute(sa.select(Role).limit(1))
+        if not result_roles.scalars().first():
+            session.add(Role(name="Адміністратор", can_manage_orders=True, can_be_assigned=True, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
+            session.add(Role(name="Оператор", can_manage_orders=True, can_be_assigned=False, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
+            session.add(Role(name="Кур'єр", can_manage_orders=False, can_be_assigned=True, can_serve_tables=False, can_receive_kitchen_orders=False, can_receive_bar_orders=False))
+            session.add(Role(name="Офіціант", can_manage_orders=False, can_be_assigned=False, can_serve_tables=True, can_receive_kitchen_orders=False, can_receive_bar_orders=False))
+            session.add(Role(name="Повар", can_manage_orders=False, can_be_assigned=False, can_serve_tables=False, can_receive_kitchen_orders=True, can_receive_bar_orders=False))
+            session.add(Role(name="Бармен", can_manage_orders=False, can_be_assigned=False, can_serve_tables=False, can_receive_kitchen_orders=False, can_receive_bar_orders=True))
+
+        # --- Инициализация Склада (Единицы измерения и Склады) ---
+        result_units = await session.execute(sa.select(Unit).limit(1))
+        if not result_units.scalars().first():
+            session.add_all([
+                Unit(name='кг', is_weighable=True),
+                Unit(name='л', is_weighable=True),
+                Unit(name='шт', is_weighable=False),
+                Unit(name='порц', is_weighable=False)
+            ])
+            
+        result_warehouses = await session.execute(sa.select(Warehouse).limit(1))
+        if not result_warehouses.scalars().first():
+            session.add_all([
+                Warehouse(name='Основной склад'),
+                Warehouse(name='Кухня'),
+                Warehouse(name='Бар')
+            ])
+
+        await session.commit()
+    
+    # --- Запуск ботов ---
     client_token = os.environ.get('CLIENT_BOT_TOKEN')
     admin_token = os.environ.get('ADMIN_BOT_TOKEN')
     
@@ -765,6 +819,7 @@ app.include_router(admin_products_router)
 app.include_router(admin_menu_pages_router)
 app.include_router(admin_employees_router) 
 app.include_router(admin_statuses_router) 
+app.include_router(admin_inventory_router)
 
 # --- Спеціальний роут для Service Worker ---
 @app.get("/sw.js", response_class=FileResponse)
@@ -803,7 +858,6 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         [f'<a href="#" class="menu-popup-trigger" data-item-id="{item.id}">{html.escape(item.title)}</a>' for item in menu_items]
     )
 
-    # Параметры для шаблона
     template_params = {
         "logo_html": logo_html,
         "menu_links_html": menu_links_html,
@@ -823,7 +877,7 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         "footer_address": html.escape(settings.footer_address or "Адреса не вказана"),
         "footer_phone": html.escape(settings.footer_phone or ""),
         "working_hours": html.escape(settings.working_hours or ""),
-        "social_links_html": "", # Можно добавить логику
+        "social_links_html": "", 
         "category_nav_bg_color": settings.category_nav_bg_color or "#ffffff",
         "category_nav_text_color": settings.category_nav_text_color or "#333333",
         "header_image_url": settings.header_image_url or "",
@@ -942,7 +996,7 @@ async def admin_dashboard(session: AsyncSession = Depends(get_db_session), usern
         {''.join([f"<tr><td><a href='/admin/order/manage/{o.id}'>#{o.id}</a></td><td>{html.escape(o.customer_name or '')}</td><td>{html.escape(o.phone_number or '')}</td><td>{o.total_price} грн</td></tr>" for o in orders_res.scalars().all()]) or "<tr><td colspan='4'>Немає замовлень</td></tr>"}
         </tbody></table></div>"""
 
-    active_classes = {key: "" for key in ["orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["main_active"] = "active"
 
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
@@ -961,7 +1015,7 @@ async def admin_categories(session: AsyncSession = Depends(get_db_session), user
     rows = "".join([f"""<tr><td>{c.id}</td><td><form action="/admin/edit_category/{c.id}" method="post" class="inline-form"><input type="hidden" name="field" value="name_sort"><input type="text" name="name" value="{html.escape(c.name)}" style="width: 150px;"><input type="number" name="sort_order" value="{c.sort_order}" style="width: 80px;"><button type="submit">💾</button></form></td><td style="text-align: center;"><form action="/admin/edit_category/{c.id}" method="post" class="inline-form"><input type="hidden" name="field" value="show_on_delivery_site"><input type="hidden" name="value" value="{'false' if c.show_on_delivery_site else 'true'}"><button type="submit" class="button-sm" style="background: none; color: inherit; padding: 0; font-size: 1.2rem;">{bool_to_icon(c.show_on_delivery_site)}</button></form></td><td style="text-align: center;"><form action="/admin/edit_category/{c.id}" method="post" class="inline-form"><input type="hidden" name="field" value="show_in_restaurant"><input type="hidden" name="value" value="{'false' if c.show_in_restaurant else 'true'}"><button type="submit" class="button-sm" style="background: none; color: inherit; padding: 0; font-size: 1.2rem;">{bool_to_icon(c.show_in_restaurant)}</button></form></td><td class='actions'><a href='/admin/delete_category/{c.id}' onclick="return confirm('Ви впевнені?');" class='button-sm danger'>🗑️</a></td></tr>""" for c in categories])
 
     body = f"""<div class="card"><h2>Додати нову категорію</h2><form action="/admin/add_category" method="post"><label for="name">Назва категорії:</label><input type="text" id="name" name="name" required><label for="sort_order">Порядок сортування:</label><input type="number" id="sort_order" name="sort_order" value="100"><div class="checkbox-group"><input type="checkbox" id="show_on_delivery_site" name="show_on_delivery_site" value="true" checked><label for="show_on_delivery_site">Показувати на сайті та в боті (доставка)</label></div><div class="checkbox-group"><input type="checkbox" id="show_in_restaurant" name="show_in_restaurant" value="true" checked><label for="show_in_restaurant">Показувати в закладі (QR-меню)</label></div><button type="submit">Додати</button></form></div><div class="card"><h2>Список категорій</h2><table><thead><tr><th>ID</th><th>Назва та сортування</th><th>Сайт/Бот</th><th>В закладі</th><th>Дії</th></tr></thead><tbody>{rows or "<tr><td colspan='5'>Немає категорій</td></tr>"}</tbody></table></div>"""
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["categories_active"] = "active"
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Категорії", body=body, site_title=settings.site_title or "Назва", **active_classes))
 
@@ -1067,7 +1121,7 @@ async def admin_orders(page: int = Query(1, ge=1), q: str = Query(None, alias="s
         {rows or "<tr><td colspan='7'>Немає замовлень</td></tr>"}
         </tbody></table>{pagination if pages > 1 else ''}
     </div>"""
-    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["orders_active"] = "active"
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Замовлення", body=body, site_title=settings.site_title or "Назва", **active_classes))
 
@@ -1077,7 +1131,7 @@ async def get_add_order_form(session: AsyncSession = Depends(get_db_session), us
     initial_data = {"items": {}, "action": "/api/admin/order/new", "submit_text": "Створити замовлення", "form_values": None}
     script = f"<script>document.addEventListener('DOMContentLoaded',()=>{{if(typeof window.initializeForm==='function'&&!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}else if(!window.initializeForm){{document.addEventListener('formScriptLoaded',()=>{{if(!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}}});}}}});</script>"
     body = ADMIN_ORDER_FORM_BODY + script
-    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["orders_active"] = "active"
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Нове замовлення", body=body, site_title=settings.site_title or "Назва", **active_classes))
 
@@ -1102,7 +1156,7 @@ async def get_edit_order_form(order_id: int, session: AsyncSession = Depends(get
     }
     script = f"<script>document.addEventListener('DOMContentLoaded',()=>{{if(typeof window.initializeForm==='function'&&!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}else if(!window.initializeForm){{document.addEventListener('formScriptLoaded',()=>{{if(!window.orderFormInitialized){{window.initializeForm({json.dumps(initial_data)});window.orderFormInitialized=true;}}}});}}}});</script>"
     body = ADMIN_ORDER_FORM_BODY + script
-    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["main_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["orders_active"] = "active"
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"Редагування замовлення #{order.id}", body=body, site_title=settings.site_title or "Назва", **active_classes))
 
@@ -1210,7 +1264,7 @@ async def admin_reports_menu(session: AsyncSession = Depends(get_db_session), us
     
     body = ADMIN_REPORTS_BODY
     
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
@@ -1235,7 +1289,7 @@ async def admin_settings_page(saved: bool = False, session: AsyncSession = Depen
     if saved:
         body = "<div class='card' style='background:#d4edda; color:#155724; padding:10px; margin-bottom:20px;'>✅ Налаштування збережено!</div>" + body
 
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["settings_active"] = "active"
 
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(

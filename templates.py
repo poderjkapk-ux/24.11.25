@@ -218,8 +218,8 @@ ADMIN_HTML_TEMPLATE = """
         .pagination a {{ padding: 5px 10px; border: 1px solid var(--border-light); text-decoration: none; color: var(--text-color-light); border-radius: 5px; }}
         .pagination a.active {{ background-color: var(--primary-color); color: white; border-color: var(--primary-color);}}
         
-        .nav-tabs {{ display: flex; gap: 10px; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-light); padding-bottom: 5px; }}
-        .nav-tabs a {{ padding: 8px 15px; border-radius: 5px 5px 0 0; text-decoration: none; color: #6b7280; transition: color 0.2s; }}
+        .nav-tabs {{ display: flex; gap: 10px; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-light); padding-bottom: 5px; overflow-x: auto; }}
+        .nav-tabs a {{ padding: 8px 15px; border-radius: 5px 5px 0 0; text-decoration: none; color: #6b7280; transition: color 0.2s; white-space: nowrap; }}
         .nav-tabs a:hover {{ color: var(--primary-color); }}
         .nav-tabs a.active {{ background-color: var(--primary-color); color: white !important; }}
         
@@ -255,13 +255,15 @@ ADMIN_HTML_TEMPLATE = """
             <a href="/admin/orders" class="{orders_active}"><i class="fa-solid fa-box-archive"></i> Замовлення</a>
             <a href="/admin/clients" class="{clients_active}"><i class="fa-solid fa-users-line"></i> Клієнти</a>
             <a href="/admin/tables" class="{tables_active}"><i class="fa-solid fa-chair"></i> Столики</a>
-            
             <a href="/admin/cash" class="{reports_active}"><i class="fa-solid fa-cash-register"></i> 💰 Каса</a>
             
+            <hr style="border:0; border-top:1px solid #eee; margin: 10px 0;">
+            <a href="/admin/inventory/ingredients" class="{inventory_active}"><i class="fa-solid fa-boxes-stacked"></i> Склад</a>
             <a href="/admin/products" class="{products_active}"><i class="fa-solid fa-burger"></i> Страви</a>
-            
             <a href="/admin/categories" class="{categories_active}"><i class="fa-solid fa-folder-open"></i> Категорії</a>
             <a href="/admin/menu" class="{menu_active}"><i class="fa-solid fa-file-lines"></i> Сторінки меню</a>
+            
+            <hr style="border:0; border-top:1px solid #eee; margin: 10px 0;">
             <a href="/admin/employees" class="{employees_active}"><i class="fa-solid fa-users"></i> Співробітники</a>
             <a href="/admin/statuses" class="{statuses_active}"><i class="fa-solid fa-clipboard-list"></i> Статуси</a>
             <a href="/admin/reports" class="{reports_active}"><i class="fa-solid fa-chart-pie"></i> Звіти</a>
@@ -337,6 +339,16 @@ ADMIN_HTML_TEMPLATE = """
     </script>
 </body>
 </html>
+"""
+
+# --- ШАБЛОН ВКЛАДОК СКЛАДА ---
+ADMIN_INVENTORY_TABS = """
+<div class="nav-tabs">
+    <a href="/admin/inventory/ingredients">🥬 Ингредиенты</a>
+    <a href="/admin/inventory/tech_cards">📜 Техкарты</a>
+    <a href="/admin/inventory/stock">📦 Остатки</a>
+    <a href="/admin/inventory/docs">📄 Документы</a>
+</div>
 """
 
 ADMIN_TABLES_BODY = """

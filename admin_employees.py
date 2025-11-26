@@ -155,7 +155,8 @@ async def admin_employees(
     </div>
     """
 
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
@@ -239,7 +240,8 @@ async def get_edit_employee_form(
         </form>
     </div>"""
     
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
@@ -444,7 +446,8 @@ async def admin_roles(
     </div>
     """
     
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
@@ -525,7 +528,8 @@ async def get_edit_role_form(
         </form>
     </div>"""
     
-    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ: Добавлен inventory_active ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["employees_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(

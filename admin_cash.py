@@ -226,14 +226,14 @@ async def cash_dashboard(
         </div>
         """
 
-    active_classes = {key: "" for key in ["orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
 
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
         title="Каса", 
         body=body, 
         site_title=settings.site_title or "Назва", 
-        main_active="",
         **active_classes
     ))
 
@@ -365,14 +365,14 @@ async def handover_form(
     </div>
     """
     
-    active_classes = {key: "" for key in ["orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
         title="Прийом виручки", 
         body=body, 
         site_title=settings.site_title or "Назва", 
-        main_active="",
         **active_classes
     ))
 
@@ -475,10 +475,11 @@ async def cash_history(session: AsyncSession = Depends(get_db_session), username
     </div>
     """
     
-    active_classes = {key: "" for key in ["orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active"]}
+    # --- ИСПРАВЛЕНИЕ ---
+    active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
     
-    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Історія змін", body=body, site_title=settings.site_title, main_active="", **active_classes))
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Історія змін", body=body, site_title=settings.site_title, **active_classes))
 
 # --- ДРУК Z-ЗВІТУ ---
 @router.get("/admin/cash/z_report/{shift_id}", response_class=HTMLResponse)
