@@ -15,6 +15,8 @@ from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
 )
+# --- ДОБАВЛЕНО: Импорт модели модификаторов ---
+from inventory_models import Modifier
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
@@ -938,7 +940,16 @@ async def handle_action_api(
 
 @router.get("/api/menu/full")
 async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
+    """
+    Повертає повне меню ресторану + список модифікаторів для фронтенду.
+    """
+    # Завантажуємо категорії
     cats = (await session.execute(select(Category).where(Category.show_in_restaurant==True).order_by(Category.sort_order))).scalars().all()
+    
+    # Завантажуємо модифікатори
+    mods = (await session.execute(select(Modifier).order_by(Modifier.name))).scalars().all()
+    modifiers_list = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in mods]
+
     menu = []
     for c in cats:
         prods = (await session.execute(select(Product).where(Product.category_id==c.id, Product.is_active==True))).scalars().all()
@@ -947,7 +958,9 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
             "name": c.name, 
             "products": [{"id": p.id, "name": p.name, "price": float(p.price), "preparation_area": p.preparation_area} for p in prods]
         })
-    return JSONResponse(menu)
+        
+    # Повертаємо об'єкт з меню та модифікаторами
+    return JSONResponse({"menu": menu, "modifiers": modifiers_list})
 
 @router.post("/api/order/create")
 async def create_waiter_order(

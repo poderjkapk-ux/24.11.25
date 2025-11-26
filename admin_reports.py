@@ -119,7 +119,8 @@ async def report_cash_flow(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active"]}
+        # FIX: Added inventory_active=""
+        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))
 
 
@@ -204,7 +205,8 @@ async def report_workers(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active"]}
+        # FIX: Added inventory_active=""
+        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))
 
 
@@ -271,7 +273,8 @@ async def report_analytics(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active"]}
+        # FIX: Added inventory_active=""
+        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))
 
 
@@ -383,5 +386,6 @@ async def report_couriers(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active"]}
+        # FIX: Added inventory_active=""
+        **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))

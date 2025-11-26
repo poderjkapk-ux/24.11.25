@@ -302,6 +302,11 @@ class CartItem(Base):
     user_id: Mapped[int] = mapped_column(sa.BigInteger, index=True)
     product_id: Mapped[int] = mapped_column(sa.ForeignKey('products.id'))
     quantity: Mapped[int] = mapped_column(default=1)
+    
+    # --- МОДИФІКАТОРИ (JSON) ---
+    # Додано для збереження вибору в кошику
+    modifiers: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    
     product: Mapped["Product"] = relationship("Product", back_populates="cart_items", lazy='selectin')
 
 

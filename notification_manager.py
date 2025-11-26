@@ -74,7 +74,17 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
     
     products_formatted = ""
     if order.items:
-        products_formatted = "\n".join([f"- {html.quote(item.product_name)} x {item.quantity}" for item in order.items])
+        lines = []
+        for item in order.items:
+            # Добавляем модификаторы в текст уведомления
+            mods_str = ""
+            if item.modifiers:
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                if mod_names:
+                    mods_str = f" (+ {', '.join(mod_names)})"
+            
+            lines.append(f"- {html.quote(item.product_name)}{mods_str} x {item.quantity}")
+        products_formatted = "\n".join(lines)
     else:
         products_formatted = "- <i>Немає товарів</i>"
     
@@ -143,7 +153,14 @@ async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncS
     bar_items = []
 
     for item in loaded_order.items:
-        item_str = f"- {html.quote(item.product_name)} x {item.quantity}"
+        # Формируем строку с модификаторами
+        mods_str = ""
+        if item.modifiers:
+            mod_names = [m.get('name', '') for m in item.modifiers]
+            if mod_names:
+                mods_str = f" (+ {', '.join(mod_names)})"
+
+        item_str = f"- {html.quote(item.product_name)}{mods_str} x {item.quantity}"
         area = item.preparation_area
         
         if area == 'bar':
@@ -288,8 +305,10 @@ async def notify_all_parties_on_status_change(
         except Exception as e:
             logger.error(f"Помилка повернення на склад для #{order.id}: {e}")
 
-    # Б. Списание при готовности
-    if new_status.name == "Готовий до видачі":
+    # Б. Списание со склада
+    # Исправлено: списываем, если "Готовий до видачі" ИЛИ если статус финальный (выполнен),
+    # но списание еще не проводилось. Это покрывает случаи, когда заказ сразу закрывают как оплаченный.
+    if new_status.name == "Готовий до видачі" or new_status.is_completed_status:
         is_deducted = getattr(order, 'is_inventory_deducted', False)
         if not is_deducted:
             try:

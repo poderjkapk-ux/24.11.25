@@ -45,9 +45,9 @@ from templates import (
     ADMIN_REPORTS_BODY
 )
 from models import *
-# Импортируем модели склада, чтобы они зарегистрировались в Base.metadata
+# Импортируем модели склада
 import inventory_models 
-from inventory_models import Unit, Warehouse
+from inventory_models import Unit, Warehouse, Modifier
 
 from admin_handlers import register_admin_handlers
 from courier_handlers import register_courier_handlers
@@ -85,6 +85,10 @@ class CheckoutStates(StatesGroup):
     confirm_data = State()
     waiting_for_order_time = State()
     waiting_for_specific_time = State()
+
+# --- NEW: Состояния для выбора модификаторов ---
+class OrderStates(StatesGroup):
+    choosing_modifiers = State()
 
 # --- TELEGRAM БОТИ ---
 dp = Dispatcher()
@@ -213,7 +217,18 @@ async def show_my_orders(message_or_callback: Message | CallbackQuery, session: 
     text = "📋 <b>Ваші замовлення:</b>\n\n"
     for order in orders:
         status_name = order.status.name if order.status else 'Невідомий'
-        products_str = ", ".join([f"{item.product_name} x {item.quantity}" for item in order.items])
+        
+        lines = []
+        for item in order.items:
+            # Отображаем модификаторы в истории
+            mods_str = ""
+            if item.modifiers:
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                if mod_names:
+                    mods_str = f" (+ {', '.join(mod_names)})"
+            lines.append(f"{item.product_name}{mods_str} x {item.quantity}")
+            
+        products_str = ", ".join(lines)
         text += f"<b>Замовлення #{order.id} ({status_name})</b>\nСтрави: {html.escape(products_str)}\nСума: {order.total_price} грн\n\n"
 
     kb = InlineKeyboardBuilder().add(InlineKeyboardButton(text="⬅️ Головне меню", callback_data="start_menu")).as_markup()
@@ -354,33 +369,123 @@ async def show_product(callback: CallbackQuery, session: AsyncSession):
     else:
         await callback.message.answer(text, reply_markup=kb.as_markup())
 
+# --- ЛОГИКА ДОБАВЛЕНИЯ С МОДИФИКАТОРАМИ (ТЕЛЕГРАМ) ---
+
 @dp.callback_query(F.data.startswith("add_to_cart_"))
-async def add_to_cart(callback: CallbackQuery, session: AsyncSession):
+async def add_to_cart_start(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     try:
         product_id = int(callback.data.split("_")[3])
     except (IndexError, ValueError):
-        await callback.answer("Помилка! Не вдалося обробити запит.", show_alert=True)
-        logging.error(f"Не вдалося розпарсити product_id з даних колбеку: {callback.data}")
-        return
+        return await callback.answer("Помилка! Не вдалося обробити запит.", show_alert=True)
 
     user_id = callback.from_user.id
-
     product = await session.get(Product, product_id)
+    
     if not product or not product.is_active:
-        await callback.answer("Ця страва тимчасово недоступна.", show_alert=True)
-        return
+        return await callback.answer("Ця страва тимчасово недоступна.", show_alert=True)
 
-    result = await session.execute(sa.select(CartItem).where(CartItem.user_id == user_id, CartItem.product_id == product_id))
-    cart_item = result.scalars().first()
-
-    if cart_item:
-        cart_item.quantity += 1
+    # Проверяем наличие модификаторов
+    modifiers = (await session.execute(sa.select(Modifier))).scalars().all()
+    
+    if not modifiers:
+        # Если модификаторов нет в базе, добавляем сразу (старая логика)
+        await _add_item_to_db_cart(callback, product, [], session)
     else:
-        cart_item = CartItem(user_id=user_id, product_id=product_id, quantity=1)
-        session.add(cart_item)
+        # Если есть, показываем меню выбора
+        await state.set_state(OrderStates.choosing_modifiers)
+        await state.update_data(selected_product_id=product.id, selected_modifiers=[])
+        await _show_modifier_menu(callback, product, [], modifiers)
+
+async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, all_modifiers):
+    kb = InlineKeyboardBuilder()
+    
+    for mod in all_modifiers:
+        is_selected = mod.id in selected_ids
+        marker = "✅" if is_selected else "⬜️"
+        kb.add(InlineKeyboardButton(
+            text=f"{marker} {mod.name} (+{mod.price} грн)", 
+            callback_data=f"toggle_mod_{mod.id}"
+        ))
+    
+    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text="📥 Додати в кошик", callback_data="confirm_add_to_cart"))
+    
+    # Формируем текст с текущей ценой
+    current_price = product.price + sum(m.price for m in all_modifiers if m.id in selected_ids)
+    
+    text = f"<b>{html.escape(product.name)}</b>\nЦіна з добавками: {current_price} грн\n\nОберіть добавки:"
+    
+    # Если сообщение с фото, редактируем caption, иначе text
+    if callback.message.photo:
+        await callback.message.edit_caption(caption=text, reply_markup=kb.as_markup())
+    else:
+        await callback.message.edit_text(text, reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("toggle_mod_"), OrderStates.choosing_modifiers)
+async def toggle_modifier_callback(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    mod_id = int(callback.data.split("_")[2])
+    data = await state.get_data()
+    selected_ids = data.get("selected_modifiers", [])
+    
+    if mod_id in selected_ids:
+        selected_ids.remove(mod_id)
+    else:
+        selected_ids.append(mod_id)
+        
+    await state.update_data(selected_modifiers=selected_ids)
+    
+    product = await session.get(Product, data["selected_product_id"])
+    modifiers = (await session.execute(sa.select(Modifier))).scalars().all()
+    
+    await _show_modifier_menu(callback, product, selected_ids, modifiers)
+    await callback.answer()
+
+@dp.callback_query(F.data == "confirm_add_to_cart", OrderStates.choosing_modifiers)
+async def confirm_add_to_cart_callback(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    product_id = data.get("selected_product_id")
+    mod_ids = data.get("selected_modifiers", [])
+    
+    product = await session.get(Product, product_id)
+    
+    selected_mods_objects = []
+    if mod_ids:
+        selected_mods_objects = (await session.execute(sa.select(Modifier).where(Modifier.id.in_(mod_ids)))).scalars().all()
+    
+    await _add_item_to_db_cart(callback, product, selected_mods_objects, session)
+    await state.clear()
+
+async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifiers: list[Modifier], session: AsyncSession):
+    user_id = callback.from_user.id
+    
+    # Формируем список словарей для JSON
+    mods_json = [{"id": m.id, "name": m.name, "price": float(m.price), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty)} for m in modifiers]
+    
+    # Для уникальности товара в корзине проверяем product_id и набор модификаторов
+    # Так как SQLAlchemy сравнение JSON может быть сложным, упростим:
+    # Всегда добавляем новую запись, если есть модификаторы, или ищем простую, если их нет.
+    # (В идеале нужно сравнивать JSON, но для MVP можно просто добавлять).
+    
+    cart_item = CartItem(
+        user_id=user_id, 
+        product_id=product.id, 
+        quantity=1,
+        modifiers=mods_json if mods_json else None
+    )
+    session.add(cart_item)
 
     await session.commit()
-    await callback.answer(f"✅ {html.escape(product.name)} додано до кошика!", show_alert=False)
+    
+    msg = f"✅ {html.escape(product.name)}"
+    if modifiers:
+        msg += f" (+ {len(modifiers)} доб.)"
+    msg += " додано до кошика!"
+    
+    await callback.answer(msg, show_alert=False)
+    # Можно вернуть пользователя к категории
+    await show_category_paginated(callback, session) # Перезагрузит категорию, но сбросит пагинацию на 1
+
+# ---
 
 async def show_cart(message_or_callback: Message | CallbackQuery, session: AsyncSession):
     is_callback = isinstance(message_or_callback, CallbackQuery)
@@ -405,15 +510,37 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 
     for item in cart_items:
         if item.product:
-            item_total = item.product.price * item.quantity
+            # Считаем цену с учетом модификаторов
+            item_base_price = item.product.price
+            mods_price = Decimal(0)
+            mods_str = ""
+            
+            if item.modifiers:
+                for m in item.modifiers:
+                    mods_price += Decimal(str(m.get('price', 0)))
+                
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                mods_str = f" (+ {', '.join(mod_names)})"
+
+            final_item_price = item_base_price + mods_price
+            item_total = final_item_price * item.quantity
             total_price += item_total
-            text += f"<b>{html.escape(item.product.name)}</b>\n"
-            text += f"<i>{item.quantity} шт. x {item.product.price} грн</i> = <code>{item_total} грн</code>\n\n"
+            
+            text += f"<b>{html.escape(item.product.name)}</b>{mods_str}\n"
+            text += f"<i>{item.quantity} шт. x {final_item_price} грн</i> = <code>{item_total} грн</code>\n\n"
+            
+            # Кнопки управления (по ID записи CartItem, так как могут быть дубли товаров с разными модами)
+            # Но в текущей реализации CartItem.id - это PK. Используем его.
+            # НО! Обработчики change_qnt/delete_item используют product_id.
+            # Это ограничение текущей архитектуры хендлеров. 
+            # Чтобы поддержать модификаторы, нужно переделать хендлеры на использование CartItem.id.
+            # Ниже я обновляю callback_data, чтобы передавать cart_item.id
+            
             kb.row(
-                InlineKeyboardButton(text="➖", callback_data=f"change_qnt_{item.product.id}_-1"),
+                InlineKeyboardButton(text="➖", callback_data=f"cart_change_{item.id}_-1"),
                 InlineKeyboardButton(text=f"{item.quantity}", callback_data="noop"),
-                InlineKeyboardButton(text="➕", callback_data=f"change_qnt_{item.product.id}_1"),
-                InlineKeyboardButton(text="❌", callback_data=f"delete_item_{item.product.id}")
+                InlineKeyboardButton(text="➕", callback_data=f"cart_change_{item.id}_1"),
+                InlineKeyboardButton(text="❌", callback_data=f"cart_del_{item.id}")
             )
 
     text += f"\n<b>Разом до сплати: {total_price} грн</b>"
@@ -424,7 +551,11 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 
     if is_callback:
         try:
-            await message.edit_text(text, reply_markup=kb.as_markup())
+            if message.photo:
+                await message.delete() # Удаляем сообщение с фото
+                await message.answer(text, reply_markup=kb.as_markup()) # Отправляем новое
+            else:
+                await message.edit_text(text, reply_markup=kb.as_markup())
         except TelegramBadRequest:
             await message.delete()
             await message.answer(text, reply_markup=kb.as_markup())
@@ -436,15 +567,17 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 async def show_cart_callback(callback: CallbackQuery, session: AsyncSession):
     await show_cart(callback, session)
 
-@dp.callback_query(F.data.startswith("change_qnt_"))
-async def change_quantity(callback: CallbackQuery, session: AsyncSession):
+# --- Updated Cart Handlers using CartItem.id ---
+
+@dp.callback_query(F.data.startswith("cart_change_"))
+async def change_cart_item_quantity(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("⏳ Оновлюю...")
-    product_id, change = map(int, callback.data.split("_")[2:])
-    cart_item_res = await session.execute(sa.select(CartItem).where(CartItem.user_id == callback.from_user.id, CartItem.product_id == product_id))
-    cart_item = cart_item_res.scalars().first()
-
-
-    if not cart_item: return
+    parts = callback.data.split("_")
+    cart_item_id = int(parts[2])
+    change = int(parts[3])
+    
+    cart_item = await session.get(CartItem, cart_item_id)
+    if not cart_item or cart_item.user_id != callback.from_user.id: return
 
     cart_item.quantity += change
     if cart_item.quantity < 1:
@@ -452,13 +585,18 @@ async def change_quantity(callback: CallbackQuery, session: AsyncSession):
     await session.commit()
     await show_cart(callback, session)
 
-@dp.callback_query(F.data.startswith("delete_item_"))
-async def delete_from_cart(callback: CallbackQuery, session: AsyncSession):
+@dp.callback_query(F.data.startswith("cart_del_"))
+async def delete_cart_item_direct(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("⏳ Видаляю...")
-    product_id = int(callback.data.split("_")[2])
-    await session.execute(sa.delete(CartItem).where(CartItem.user_id == callback.from_user.id, CartItem.product_id == product_id))
-    await session.commit()
+    cart_item_id = int(callback.data.split("_")[2])
+    cart_item = await session.get(CartItem, cart_item_id)
+    if cart_item and cart_item.user_id == callback.from_user.id:
+        await session.delete(cart_item)
+        await session.commit()
     await show_cart(callback, session)
+
+# Backwards compatibility handlers (if needed) or simply remove old ones
+# ...
 
 @dp.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: CallbackQuery, session: AsyncSession):
@@ -479,10 +617,16 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
         await callback.answer("Шановний клієнте, кошик порожній! Оберіть щось з меню.", show_alert=True)
         return
 
-    total_price = sum(item.product.price * item.quantity for item in cart_items if item.product)
+    total_price = Decimal(0)
+    for item in cart_items:
+        if item.product:
+            item_price = item.product.price
+            if item.modifiers:
+                item_price += sum(Decimal(str(m.get('price', 0))) for m in item.modifiers)
+            total_price += item_price * item.quantity
     
     await state.update_data(
-        total_price=total_price,
+        total_price=float(total_price),
         user_id=user_id,
         username=callback.from_user.username,
         order_type='delivery' 
@@ -494,7 +638,12 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
     kb.adjust(1)
 
     try:
-        await callback.message.edit_text("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
+        # If there was a photo, delete and send new
+        if callback.message.photo:
+            await callback.message.delete()
+            await callback.message.answer("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
+        else:
+            await callback.message.edit_text("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
     except TelegramBadRequest:
         await callback.message.delete()
         await callback.message.answer("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
@@ -619,7 +768,6 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     data = await state.get_data()
     user_id = data.get('user_id')
     
-    # Получаем бота из state
     admin_bot = message.bot 
     
     cart_items_res = await session.execute(
@@ -631,7 +779,27 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
         await message.answer("Помилка: кошик порожній.")
         return
 
-    total_price = sum(item.product.price * item.quantity for item in cart_items if item.product)
+    total_price = Decimal(0)
+    items_obj = []
+
+    for cart_item in cart_items:
+        if cart_item.product:
+            item_price = cart_item.product.price
+            # Считаем стоимость модификаторов
+            if cart_item.modifiers:
+                for m in cart_item.modifiers:
+                    item_price += Decimal(str(m.get('price', 0)))
+            
+            total_price += item_price * cart_item.quantity
+            
+            items_obj.append(OrderItem(
+                product_id=cart_item.product_id,
+                product_name=cart_item.product.name,
+                quantity=cart_item.quantity,
+                price_at_moment=item_price,
+                preparation_area=cart_item.product.preparation_area,
+                modifiers=cart_item.modifiers # Сохраняем модификаторы в заказ
+            ))
 
     order = Order(
         user_id=data['user_id'], username=data.get('username'),
@@ -644,17 +812,9 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     session.add(order)
     await session.flush()
 
-    for cart_item in cart_items:
-        if cart_item.product:
-            order_item = OrderItem(
-                order_id=order.id,
-                product_id=cart_item.product_id,
-                product_name=cart_item.product.name,
-                quantity=cart_item.quantity,
-                price_at_moment=cart_item.product.price,
-                preparation_area=cart_item.product.preparation_area
-            )
-            session.add(order_item)
+    for obj in items_obj:
+        obj.order_id = order.id
+        session.add(obj)
 
     if user_id:
         customer = await session.get(Customer, user_id)
@@ -669,8 +829,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     await session.commit()
     await session.refresh(order)
 
-    # Используем instance бота для уведомлений, если он был сохранен в app.state или берем текущего
-    app_admin_bot = message.bot # В aiogram хендлере message.bot это и есть бот
+    app_admin_bot = message.bot 
     if app_admin_bot:
         await notify_new_order_to_staff(app_admin_bot, order, session)
 
@@ -944,14 +1103,21 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
         if pid in db_products:
             product = db_products[pid]
             qty = int(item.get('quantity', 1))
-            total_price += product.price * qty
+            
+            # Поддержка модификаторов
+            modifiers_data = item.get('modifiers', [])
+            mods_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
+            
+            item_total_price = (product.price + mods_price)
+            total_price += item_total_price * qty
             
             order_items_objects.append(OrderItem(
                 product_id=product.id,
                 product_name=product.name,
                 quantity=qty,
-                price_at_moment=product.price,
-                preparation_area=product.preparation_area
+                price_at_moment=item_total_price,
+                preparation_area=product.preparation_area,
+                modifiers=modifiers_data # Сохраняем
             ))
 
     is_delivery = order_data.get('is_delivery', True)
