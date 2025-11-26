@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload, joinedload
 
 from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotification
-# --- СКЛАД: Импорт функции списания ---
+# --- СКЛАД: Імпорт функції списання ---
 from inventory_service import deduct_products_by_tech_card
 
 logger = logging.getLogger(__name__)
@@ -330,15 +330,32 @@ async def notify_all_parties_on_status_change(
     if new_status.requires_kitchen_notify:
         await distribute_order_to_production(admin_bot, order, session)
 
-    # --- 4. READY FOR PICKUP NOTIFICATION ---
+    # --- 4. READY FOR PICKUP NOTIFICATION & INVENTORY DEDUCTION ---
     if new_status.name == "Готовий до видачі":
-        # --- СКЛАД: Списание ингредиентов ---
-        try:
-            await deduct_products_by_tech_card(session, order)
-            logger.info(f"Склад обновлен для заказа #{order.id}")
-        except Exception as e:
-            logger.error(f"Ошибка списания склада: {e}")
-        # ------------------------------------
+        # --- СКЛАД: Списание ингредиентов (ВИПРАВЛЕНО) ---
+        # Перевіряємо, чи є в моделі флаг списання (потрібно додати в models.py: is_inventory_deducted = Column(Boolean, default=False))
+        # Якщо моделі ще не оновлені, використовуємо getattr з дефолтом False, але це не збереже стан в БД без міграції.
+        # Припускаємо, що модель Order має поле is_inventory_deducted.
+        
+        is_deducted = getattr(order, 'is_inventory_deducted', False)
+        
+        if not is_deducted:
+            try:
+                await deduct_products_by_tech_card(session, order)
+                
+                # Встановлюємо прапор списання, щоб уникнути подвійного списання
+                if hasattr(order, 'is_inventory_deducted'):
+                    order.is_inventory_deducted = True
+                    await session.commit()
+                    logger.info(f"Склад успешно списан для заказа #{order.id}")
+                else:
+                    logger.warning(f"Модель Order не має поля 'is_inventory_deducted'. Ризик подвійного списання для #{order.id}")
+                    
+            except Exception as e:
+                logger.error(f"Помилка списання складу для замовлення #{order.id}: {e}")
+        else:
+            logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше. Пропускаємо.")
+        # -----------------------------------------------------
 
         source_label = ""
         if "Кухня" in actor_info: source_label = " (🍳 КУХНЯ)"

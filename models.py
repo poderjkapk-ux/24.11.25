@@ -256,6 +256,10 @@ class Order(Base):
     kitchen_done: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     bar_done: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
 
+    # --- СКЛАД: Флаг списання інгредієнтів ---
+    # Запобігає повторному списанню при багаторазовій зміні статусу
+    is_inventory_deducted: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+
     @property
     def products_text(self) -> str:
         if not self.items:

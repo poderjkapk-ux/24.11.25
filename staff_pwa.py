@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, delete
 from sqlalchemy.orm import joinedload, selectinload
 
-# Імпорт моделей та залежностей
+# Импорт моделей та залежностей
 from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
@@ -18,13 +18,13 @@ from models import (
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
-# Імпорт шаблонів
+# Импорт шаблонів
 from staff_templates import (
     STAFF_LOGIN_HTML, STAFF_DASHBOARD_HTML, 
     STAFF_TABLE_CARD, STAFF_ORDER_CARD
 )
 
-# Імпорт менеджерів сповіщень та каси
+# Импорт менеджерів сповіщень та каси
 from notification_manager import (
     notify_all_parties_on_status_change, 
     notify_new_order_to_staff, 
@@ -833,6 +833,12 @@ async def update_order_items_api(
 
     if order.status.is_completed_status or order.status.is_cancelled_status:
         return JSONResponse({"error": "Замовлення закрите"}, 400)
+    
+    # --- ВАЖЛИВО: Перевірка на списання складу ---
+    # Якщо продукти вже списані, забороняємо редагування, щоб уникнути подвійного списання.
+    if order.is_inventory_deducted:
+        return JSONResponse({"error": "Склад вже списано. Редагування заборонено (спочатку поверніть статус назад, якщо це підтримується, або створіть нове замовлення)."}, 403)
+    # ---------------------------------------------
     
     await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
     
