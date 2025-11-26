@@ -379,16 +379,18 @@ async def add_to_cart_start(callback: CallbackQuery, state: FSMContext, session:
         return await callback.answer("Помилка! Не вдалося обробити запит.", show_alert=True)
 
     user_id = callback.from_user.id
-    product = await session.get(Product, product_id)
+    
+    # --- ЗМІНА: Завантажуємо продукт разом з прив'язаними модифікаторами ---
+    product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
     
     if not product or not product.is_active:
         return await callback.answer("Ця страва тимчасово недоступна.", show_alert=True)
 
-    # Проверяем наличие модификаторов
-    modifiers = (await session.execute(sa.select(Modifier))).scalars().all()
+    # Використовуємо product.modifiers, а не всі модифікатори
+    modifiers = product.modifiers
     
     if not modifiers:
-        # Если модификаторов нет в базе, добавляем сразу (старая логика)
+        # Если модификаторов нет, добавляем сразу
         await _add_item_to_db_cart(callback, product, [], session)
     else:
         # Если есть, показываем меню выбора
@@ -396,10 +398,10 @@ async def add_to_cart_start(callback: CallbackQuery, state: FSMContext, session:
         await state.update_data(selected_product_id=product.id, selected_modifiers=[])
         await _show_modifier_menu(callback, product, [], modifiers)
 
-async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, all_modifiers):
+async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, available_modifiers):
     kb = InlineKeyboardBuilder()
     
-    for mod in all_modifiers:
+    for mod in available_modifiers:
         is_selected = mod.id in selected_ids
         marker = "✅" if is_selected else "⬜️"
         kb.add(InlineKeyboardButton(
@@ -411,7 +413,7 @@ async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, al
     kb.row(InlineKeyboardButton(text="📥 Додати в кошик", callback_data="confirm_add_to_cart"))
     
     # Формируем текст с текущей ценой
-    current_price = product.price + sum(m.price for m in all_modifiers if m.id in selected_ids)
+    current_price = product.price + sum(m.price for m in available_modifiers if m.id in selected_ids)
     
     text = f"<b>{html.escape(product.name)}</b>\nЦіна з добавками: {current_price} грн\n\nОберіть добавки:"
     
@@ -434,10 +436,10 @@ async def toggle_modifier_callback(callback: CallbackQuery, state: FSMContext, s
         
     await state.update_data(selected_modifiers=selected_ids)
     
-    product = await session.get(Product, data["selected_product_id"])
-    modifiers = (await session.execute(sa.select(Modifier))).scalars().all()
+    product = await session.get(Product, data["selected_product_id"], options=[selectinload(Product.modifiers)])
     
-    await _show_modifier_menu(callback, product, selected_ids, modifiers)
+    # Передаємо правильний список модифікаторів (прив'язаних до продукту)
+    await _show_modifier_menu(callback, product, selected_ids, product.modifiers)
     await callback.answer()
 
 @dp.callback_query(F.data == "confirm_add_to_cart", OrderStates.choosing_modifiers)
@@ -460,11 +462,6 @@ async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifi
     
     # Формируем список словарей для JSON
     mods_json = [{"id": m.id, "name": m.name, "price": float(m.price), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty)} for m in modifiers]
-    
-    # Для уникальности товара в корзине проверяем product_id и набор модификаторов
-    # Так как SQLAlchemy сравнение JSON может быть сложным, упростим:
-    # Всегда добавляем новую запись, если есть модификаторы, или ищем простую, если их нет.
-    # (В идеале нужно сравнивать JSON, но для MVP можно просто добавлять).
     
     cart_item = CartItem(
         user_id=user_id, 
@@ -529,13 +526,6 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
             text += f"<b>{html.escape(item.product.name)}</b>{mods_str}\n"
             text += f"<i>{item.quantity} шт. x {final_item_price} грн</i> = <code>{item_total} грн</code>\n\n"
             
-            # Кнопки управления (по ID записи CartItem, так как могут быть дубли товаров с разными модами)
-            # Но в текущей реализации CartItem.id - это PK. Используем его.
-            # НО! Обработчики change_qnt/delete_item используют product_id.
-            # Это ограничение текущей архитектуры хендлеров. 
-            # Чтобы поддержать модификаторы, нужно переделать хендлеры на использование CartItem.id.
-            # Ниже я обновляю callback_data, чтобы передавать cart_item.id
-            
             kb.row(
                 InlineKeyboardButton(text="➖", callback_data=f"cart_change_{item.id}_-1"),
                 InlineKeyboardButton(text=f"{item.quantity}", callback_data="noop"),
@@ -594,9 +584,6 @@ async def delete_cart_item_direct(callback: CallbackQuery, session: AsyncSession
         await session.delete(cart_item)
         await session.commit()
     await show_cart(callback, session)
-
-# Backwards compatibility handlers (if needed) or simply remove old ones
-# ...
 
 @dp.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: CallbackQuery, session: AsyncSession):
@@ -1060,14 +1047,31 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
         .where(Category.show_on_delivery_site == True)
         .order_by(Category.sort_order, Category.name)
     )
+    
+    # --- ЗМІНА: Завантажуємо продукти РАЗОМ з модифікаторами ---
     products_res = await session.execute(
         sa.select(Product)
+        .options(selectinload(Product.modifiers)) # <-- Завантажуємо modifiers
         .join(Category, Product.category_id == Category.id)
         .where(Product.is_active == True, Category.show_on_delivery_site == True)
     )
 
     categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
-    products = [{"id": p.id, "name": p.name, "description": p.description, "price": float(p.price), "image_url": p.image_url, "category_id": p.category_id} for p in products_res.scalars().all()]
+    
+    products = []
+    for p in products_res.scalars().all():
+        # Формуємо список модифікаторів для фронтенду
+        mods_list = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in p.modifiers]
+        
+        products.append({
+            "id": p.id, 
+            "name": p.name, 
+            "description": p.description, 
+            "price": float(p.price), 
+            "image_url": p.image_url, 
+            "category_id": p.category_id,
+            "modifiers": mods_list # <-- Додаємо список модифікаторів
+        })
 
     return {"categories": categories, "products": products}
 

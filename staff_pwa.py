@@ -15,7 +15,7 @@ from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
 )
-# --- ДОБАВЛЕНО: Импорт модели модификаторов ---
+# Импорт модели модификаторов
 from inventory_models import Modifier
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
@@ -418,7 +418,6 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
             badge_class = "success" if o.status.name == "Готовий до видачі" else "info"
             color = "#27ae60" if o.status.name == "Готовий до видачі" else "#333"
 
-            # --- UX FIX: Показываем иконки готовности, даже если статус еще не сменился ---
             status_display = o.status.name
             if o.kitchen_done: status_display += " 🍳"
             if o.bar_done: status_display += " 🍹"
@@ -642,7 +641,7 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
     
     q = select(Order).options(
-        joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter), joinedload(Order.courier)
+        joinedload(Order.status), joinedload(Order.table), joinedload(Order.accepted_by_waiter), joinedload(Order.courier), selectinload(Order.items)
     ).where(Order.status_id.not_in(final_ids)).order_by(Order.id.desc())
 
     orders = (await session.execute(q)).scalars().all()
@@ -655,9 +654,21 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
             courier_name = o.courier.full_name if o.courier else "Не призначено"
             extra_info = f"<div class='info-row' style='font-size:0.85rem; color:#555;'>Кур'єр: {courier_name}</div>"
         
+        # Формуємо список товарів з модифікаторами
+        items_list = []
+        for item in o.items:
+            mods_str = ""
+            if item.modifiers:
+                mods_names = [m['name'] for m in item.modifiers]
+                mods_str = f" <small>({', '.join(mods_names)})</small>"
+            items_list.append(f"{item.product_name}{mods_str}")
+        items_preview = ", ".join(items_list)
+        if len(items_preview) > 50: items_preview = items_preview[:50] + "..."
+
         content = f"""
         <div class="info-row"><i class="fa-solid fa-info-circle"></i> <b>{html.escape(table_name)}</b></div>
         <div class="info-row"><i class="fa-solid fa-money-bill-wave"></i> {o.total_price} грн</div>
+        <div class="info-row" style="font-size:0.85rem; color:#666;"><i class="fa-solid fa-list"></i> {html.escape(items_preview)}</div>
         {extra_info}
         """
         
@@ -841,11 +852,8 @@ async def update_order_items_api(
     if order.status.is_completed_status or order.status.is_cancelled_status:
         return JSONResponse({"error": "Замовлення закрите"}, 400)
     
-    # --- ВАЖЛИВО: Перевірка на списання складу ---
-    # Якщо продукти вже списані, забороняємо редагування, щоб уникнути подвійного списання.
     if order.is_inventory_deducted:
-        return JSONResponse({"error": "Склад вже списано. Редагування заборонено (спочатку поверніть статус назад, якщо це підтримується, або створіть нове замовлення)."}, 403)
-    # ---------------------------------------------
+        return JSONResponse({"error": "Склад вже списано. Редагування заборонено."}, 403)
     
     await session.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
     
@@ -861,11 +869,7 @@ async def update_order_items_api(
             if pid in prod_map and qty > 0:
                 p = prod_map[pid]
                 
-                # Підтримка збереження модифікаторів при редагуванні
-                # item може містити поле modifiers (якщо фронтенд його передає)
                 modifiers_data = item.get('modifiers', [])
-                
-                # Розрахунок ціни
                 item_price = p.price
                 for mod in modifiers_data:
                     item_price += Decimal(str(mod.get('price', 0)))
@@ -941,26 +945,40 @@ async def handle_action_api(
 @router.get("/api/menu/full")
 async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
     """
-    Повертає повне меню ресторану + список модифікаторів для фронтенду.
+    Повертає повне меню ресторану для PWA.
+    Завантажує продукти разом з модифікаторами.
     """
-    # Завантажуємо категорії
     cats = (await session.execute(select(Category).where(Category.show_in_restaurant==True).order_by(Category.sort_order))).scalars().all()
     
-    # Завантажуємо модифікатори
-    mods = (await session.execute(select(Modifier).order_by(Modifier.name))).scalars().all()
-    modifiers_list = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in mods]
-
     menu = []
     for c in cats:
-        prods = (await session.execute(select(Product).where(Product.category_id==c.id, Product.is_active==True))).scalars().all()
+        # Завантажуємо продукти разом з прив'язаними модифікаторами
+        prods = (await session.execute(
+            select(Product)
+            .where(Product.category_id==c.id, Product.is_active==True)
+            .options(selectinload(Product.modifiers))
+        )).scalars().all()
+        
+        prod_list = []
+        for p in prods:
+            # Формуємо список модифікаторів для продукту
+            p_mods = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in p.modifiers]
+            
+            prod_list.append({
+                "id": p.id, 
+                "name": p.name, 
+                "price": float(p.price), 
+                "preparation_area": p.preparation_area,
+                "modifiers": p_mods # <--- Список модифікаторів всередині продукту
+            })
+            
         menu.append({
             "id": c.id, 
             "name": c.name, 
-            "products": [{"id": p.id, "name": p.name, "price": float(p.price), "preparation_area": p.preparation_area} for p in prods]
+            "products": prod_list
         })
         
-    # Повертаємо об'єкт з меню та модифікаторами
-    return JSONResponse({"menu": menu, "modifiers": modifiers_list})
+    return JSONResponse({"menu": menu})
 
 @router.post("/api/order/create")
 async def create_waiter_order(
@@ -982,7 +1000,6 @@ async def create_waiter_order(
         total = Decimal(0)
         items_obj = []
         
-        # Завантажуємо продукти для отримання актуальних цін
         prod_ids = [int(item['id']) for item in cart]
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
@@ -994,8 +1011,6 @@ async def create_waiter_order(
             if pid in products_map and qty > 0:
                 prod = products_map[pid]
                 
-                # Розрахунок ціни з урахуванням модифікаторів
-                # cart item format: {id: 1, qty: 2, modifiers: [{name: 'Cheese', price: 5, id: 10}, ...]}
                 modifiers_data = item.get('modifiers', [])
                 modifiers_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
                 
@@ -1008,7 +1023,7 @@ async def create_waiter_order(
                     quantity=qty, 
                     price_at_moment=item_price, 
                     preparation_area=prod.preparation_area,
-                    modifiers=modifiers_data # Зберігаємо модифікатори
+                    modifiers=modifiers_data
                 ))
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))

@@ -131,37 +131,22 @@ STAFF_DASHBOARD_HTML = """
         
         /* GROUP HEADERS */
         .table-group-header {{
-            background: #eee;
-            padding: 8px 15px;
-            border-radius: 8px;
-            font-weight: bold;
-            color: #555;
-            margin: 15px 0 10px;
-            position: sticky;
-            top: 70px;
-            z-index: 90;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            display: flex; align-items: center; gap: 10px;
+            background: #eee; padding: 8px 15px; border-radius: 8px; font-weight: bold; color: #555;
+            margin: 15px 0 10px; position: sticky; top: 70px; z-index: 90;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; align-items: center; gap: 10px;
         }}
         
-        /* FINANCE CARDS */
-        .finance-card {{
-            background: var(--white);
-            border-radius: 15px;
-            padding: 25px;
-            text-align: center;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            margin-bottom: 20px;
-        }}
+        /* FINANCE */
+        .finance-card {{ background: var(--white); border-radius: 15px; padding: 25px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }}
         .finance-header {{ font-size: 0.9rem; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }}
         .finance-amount {{ font-size: 2.5rem; font-weight: 800; }}
         .finance-amount.red-text {{ color: var(--red); }}
         .finance-amount.green-text {{ color: var(--green); }}
-        
         .debt-list {{ background: var(--white); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }}
         .debt-item {{ display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #eee; }}
         .debt-item:last-child {{ border-bottom: none; }}
         
+        /* ORDER CARDS */
         .order-card {{ margin-bottom: 15px; border-left: 5px solid var(--primary); position: relative; background: var(--white); padding: 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
         .order-card .card-header {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; font-size: 0.9rem; color: #666; }}
         .order-card .order-id {{ font-size: 1.1rem; font-weight: 800; color: #333; }}
@@ -170,65 +155,59 @@ STAFF_DASHBOARD_HTML = """
         .info-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }}
         .info-row i {{ width: 20px; text-align: center; color: #777; }}
         
-        /* STATUS BADGES */
+        /* BADGES & BUTTONS */
         .badge {{ display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }}
         .badge.success {{ background: #e8f5e9; color: var(--green); }}
         .badge.alert {{ background: #ffebee; color: var(--red); }}
         .badge.warning {{ background: #fff3e0; color: var(--orange); }}
         .badge.info {{ background: #e3f2fd; color: var(--blue); }}
 
-        /* BUTTONS */
         .action-btn {{ background: var(--primary); color: var(--white); border: none; padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 6px; }}
         .action-btn.secondary {{ background: #f0f0f0; color: #333; }}
         .action-btn:active {{ opacity: 0.8; transform: translateY(1px); }}
         
-        /* NOTIFICATIONS */
+        /* NOTIFICATIONS & TOAST */
         .notify-item {{ background: var(--white); padding: 15px; margin-bottom: 10px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border-left: 4px solid var(--blue); position: relative; }}
         .notify-item.read {{ border-left-color: #ddd; opacity: 0.7; box-shadow: none; background: #fcfcfc; }}
         .notify-time {{ font-size: 0.75rem; color: #999; position: absolute; top: 15px; right: 15px; }}
         .notify-msg {{ padding-right: 30px; }}
         .notify-dot {{ position: absolute; top: 2px; right: 50%; transform: translateX(50%); width: 10px; height: 10px; background: var(--red); border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 5px rgba(0,0,0,0.2); }}
 
-        /* TOAST NOTIFICATION (SYSTEM) */
-        #toast-container {{ position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 2000; width: 90%; max-width: 400px; pointer-events: none; }}
+        #toast-container {{ position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 3000; width: 90%; max-width: 400px; pointer-events: none; }}
         .toast {{ background: #333; color: #fff; padding: 15px 20px; border-radius: 12px; margin-bottom: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); opacity: 0; transform: translateY(-20px); transition: all 0.3s ease; display: flex; align-items: center; gap: 10px; pointer-events: auto; }}
         .toast.show {{ opacity: 1; transform: translateY(0); }}
         .toast i {{ color: var(--orange); font-size: 1.2rem; }}
 
-        /* BOTTOM NAV */
+        /* NAV & MODAL */
         .bottom-nav {{ position: fixed; bottom: 0; left: 0; width: 100%; background: var(--white); border-top: 1px solid #eee; display: flex; justify-content: space-around; padding: 8px 0; z-index: 500; padding-bottom: max(8px, env(safe-area-inset-bottom)); box-shadow: 0 -2px 10px rgba(0,0,0,0.03); }}
         .nav-item {{ background: none; border: none; color: #aaa; display: flex; flex-direction: column; align-items: center; font-size: 0.7rem; width: 100%; cursor: pointer; position: relative; transition: color 0.2s; gap: 4px; }}
         .nav-item.active {{ color: var(--primary); font-weight: 600; }}
         .nav-item i {{ font-size: 1.4rem; }}
 
-        /* MODAL */
         .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 2000; justify-content: center; align-items: flex-end; backdrop-filter: blur(2px); }}
         .modal.active {{ display: flex; animation: slideUp 0.25s ease-out; }}
-        
-        .modal-content {{ 
-            background: var(--white); width: 100%; max-width: 600px; 
-            height: 90vh; /* Почти на весь экран для удобства */
-            border-radius: 20px 20px 0 0; padding: 20px; 
-            box-sizing: border-box; display: flex; flex-direction: column; 
-            box-shadow: 0 -10px 40px rgba(0,0,0,0.2); 
-            position: relative;
-        }}
-        
+        .modal-content {{ background: var(--white); width: 100%; max-width: 600px; height: 90vh; border-radius: 20px 20px 0 0; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; box-shadow: 0 -10px 40px rgba(0,0,0,0.2); position: relative; }}
         .close {{ position: absolute; top: 15px; right: 15px; font-size: 28px; color: #999; cursor: pointer; z-index: 10; padding: 10px; line-height: 1; }}
         @keyframes slideUp {{ from {{ transform: translateY(100%); }} to {{ transform: translateY(0); }} }}
         
-        /* EDIT LIST */
+        /* EDIT LIST & ITEMS */
         .edit-list {{ flex-grow: 1; overflow-y: auto; margin: 15px 0; border: 1px solid #eee; border-radius: 8px; -webkit-overflow-scrolling: touch; }}
         .edit-item {{ display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #eee; }}
         .edit-item:last-child {{ border-bottom: none; }}
         
         .qty-ctrl-sm {{ display: flex; gap: 15px; align-items: center; background: #f5f5f5; padding: 5px 10px; border-radius: 8px; }}
         .qty-btn-sm {{ width: 32px; height: 32px; border-radius: 50%; border: none; background: #fff; cursor: pointer; font-weight: bold; font-size: 1.1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; }}
-        
         .big-btn {{ width: 100%; padding: 16px; background: var(--primary); color: white; border: none; border-radius: 12px; font-size: 1rem; font-weight: bold; margin-top: 15px; cursor: pointer; }}
         
-        #loading-indicator {{ text-align: center; padding: 20px; color: #999; display: none; }}
+        /* MODIFIERS STYLES (NEW) */
+        .mod-list {{ display: flex; flex-direction: column; gap: 5px; }}
+        .mod-item {{ display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; cursor: pointer; }}
+        .mod-checkbox {{ width: 20px; height: 20px; border: 2px solid #ddd; border-radius: 4px; margin-right: 10px; display: flex; justify-content: center; align-items: center; transition: all 0.2s; }}
+        .mod-item.selected .mod-checkbox {{ background: var(--primary); border-color: var(--primary); }}
+        .mod-item.selected .mod-checkbox::after {{ content: '✓'; color: white; font-size: 14px; }}
+        .mod-info {{ display: flex; align-items: center; }}
         
+        #loading-indicator {{ text-align: center; padding: 20px; color: #999; display: none; }}
         #search-input {{ width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; margin-bottom: 10px; box-sizing: border-box; background: #f9f9f9; }}
         #search-input:focus {{ border-color: #333; background: #fff; outline: none; }}
     </style>
@@ -249,11 +228,15 @@ STAFF_DASHBOARD_HTML = """
         let currentView = 'orders'; 
         let currentTableId = null;
         let menuData = [];
-        let cart = {{}}; 
+        let cart = {{}}; // Key: `${{productId}}-${{modIds}}`
         let editingOrderId = null;
         let currentStatusChangeId = null;
         let lastNotificationCount = 0;
         let wakeLock = null;
+        
+        // Temp variables for modifier modal
+        let selectedProduct = null;
+        let selectedModifiers = new Set();
 
         document.addEventListener('DOMContentLoaded', () => {{
             const activeBtn = document.querySelector('.nav-item.active');
@@ -293,34 +276,19 @@ STAFF_DASHBOARD_HTML = """
 
         function sendSystemNotification(text) {{
             if (!("Notification" in window) || Notification.permission !== "granted") return;
-            
             if (navigator.serviceWorker && navigator.serviceWorker.controller) {{
                 navigator.serviceWorker.ready.then(registration => {{
                     registration.showNotification("Staff Panel", {{
-                        body: text,
-                        icon: '/static/favicons/icon-192.png',
-                        vibrate: [200, 100, 200],
-                        tag: 'staff-notification',
-                        renotify: true
+                        body: text, icon: '/static/favicons/icon-192.png', vibrate: [200, 100, 200], tag: 'staff-notification', renotify: true
                     }});
                 }});
             }} else {{
-                try {{
-                    const notification = new Notification("Нове сповіщення", {{
-                        body: text,
-                        icon: '/static/favicons/icon-192.png',
-                        vibrate: [200, 100, 200]
-                    }});
-                }} catch (e) {{}}
+                try {{ new Notification("Нове сповіщення", {{ body: text, icon: '/static/favicons/icon-192.png', vibrate: [200, 100, 200] }}); }} catch (e) {{}}
             }}
         }}
 
         async function requestWakeLock() {{
-            try {{
-                if ('wakeLock' in navigator) {{
-                    wakeLock = await navigator.wakeLock.request('screen');
-                }}
-            }} catch (err) {{}}
+            try {{ if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }} catch (err) {{}}
         }}
 
         function showToast(message) {{
@@ -329,24 +297,17 @@ STAFF_DASHBOARD_HTML = """
             toast.className = 'toast';
             toast.innerHTML = `<i class="fa-solid fa-bell"></i> <span>${{message}}</span>`;
             container.appendChild(toast);
-            
             setTimeout(() => toast.classList.add('show'), 10);
             if (navigator.vibrate) navigator.vibrate(200);
-            
-            setTimeout(() => {{
-                toast.classList.remove('show');
-                setTimeout(() => toast.remove(), 300);
-            }}, 5000);
+            setTimeout(() => {{ toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }}, 5000);
         }}
 
         function switchTab(view) {{
             currentView = view;
             document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
             event.currentTarget.classList.add('active');
-            
-            if (view === 'notifications') {{
-                renderNotifications();
-            }} else {{
+            if (view === 'notifications') renderNotifications();
+            else {{
                 document.getElementById('content-area').innerHTML = '';
                 document.getElementById('loading-indicator').style.display = 'block';
                 fetchData();
@@ -357,17 +318,9 @@ STAFF_DASHBOARD_HTML = """
             if (currentView === 'notifications') return;
             try {{
                 const response = await fetch(`/staff/api/data?view=${{currentView}}`);
-                
-                // --- FIX: Автоматический редирект при истечении токена ---
-                if (response.status === 401) {{
-                    window.location.href = "/staff/login";
-                    return;
-                }}
-                // --------------------------------------------------------
-
+                if (response.status === 401) {{ window.location.href = "/staff/login"; return; }}
                 if (!response.ok) throw new Error("Server error");
                 const data = await response.json();
-                
                 document.getElementById('loading-indicator').style.display = 'none';
                 document.getElementById('content-area').innerHTML = data.html;
             }} catch (e) {{ console.error("Fetch error:", e); }}
@@ -376,32 +329,17 @@ STAFF_DASHBOARD_HTML = """
         async function updateNotifications() {{
             try {{
                 const res = await fetch('/staff/api/notifications');
-                
-                // --- FIX: Редирект при 401 ---
-                if (res.status === 401) {{
-                    // window.location.href = "/staff/login"; // Можно включить редирект и тут, но обычно достаточно основного fetchData
-                    return;
-                }}
-                // -----------------------------
-
+                if (res.status === 401) return;
                 const data = await res.json();
                 const badge = document.getElementById('nav-notify-badge');
-                
                 window.notificationsList = data.list;
-
                 if (data.unread_count > 0) {{
                     badge.style.display = 'block';
                     if (data.unread_count > lastNotificationCount) {{
                         const newest = data.list[0];
-                        if (newest) {{
-                            showToast(newest.message);
-                            sendSystemNotification(newest.message);
-                        }}
+                        if (newest) {{ showToast(newest.message); sendSystemNotification(newest.message); }}
                     }}
-                }} else {{
-                    badge.style.display = 'none';
-                }}
-                
+                }} else badge.style.display = 'none';
                 lastNotificationCount = data.unread_count;
                 if (currentView === 'notifications') renderNotifications();
             }} catch(e) {{}}
@@ -410,12 +348,10 @@ STAFF_DASHBOARD_HTML = """
         function renderNotifications() {{
             const container = document.getElementById('content-area');
             document.getElementById('loading-indicator').style.display = 'none';
-            
             if (!window.notificationsList || window.notificationsList.length === 0) {{
                 container.innerHTML = "<div class='empty-state'><i class='fa-regular fa-bell-slash'></i>Сповіщень немає</div>";
                 return;
             }}
-            
             let html = "";
             window.notificationsList.forEach(n => {{
                 const cls = n.is_read ? 'read' : '';
@@ -428,9 +364,7 @@ STAFF_DASHBOARD_HTML = """
         async function toggleShift() {{
             if(!confirm("Змінити статус зміни?")) return;
             const res = await fetch('/staff/api/shift/toggle', {{ method: 'POST' }});
-            
             if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-            
             const data = await res.json();
             if (data.status === 'ok') location.reload();
         }}
@@ -444,15 +378,9 @@ STAFF_DASHBOARD_HTML = """
             
             try {{
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
-                
                 if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-                
                 const data = await res.json();
-                
-                if(data.error) {{
-                    body.innerHTML = `<div style="text-align:center; padding:20px;"><h3>Помилка</h3><p>${{data.error}}</p></div>`;
-                    return;
-                }}
+                if(data.error) {{ body.innerHTML = `<div style="text-align:center; padding:20px;"><h3>Помилка</h3><p>${{data.error}}</p></div>`; return; }}
                 
                 let courierHtml = "";
                 if (data.can_assign_courier && data.is_delivery) {{
@@ -461,100 +389,111 @@ STAFF_DASHBOARD_HTML = """
                         data.couriers.forEach(c => {{
                             courierOptions += `<option value="${{c.id}}" ${{c.selected ? 'selected' : ''}}>${{c.name}}</option>`;
                         }});
-                    }} else {{
-                        courierOptions = '<option value="0" disabled>Немає кур\\'єрів на зміні</option>';
-                    }}
-                    courierHtml = `
-                    <div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;">
-                        <label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label>
-                        <select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">
-                            ${{courierOptions}}
-                        </select>
-                    </div>`;
+                    }} else courierOptions = '<option value="0" disabled>Немає кур\\'єрів на зміні</option>';
+                    courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
                 }}
 
                 if (!keepCart) {{
                     cart = {{}};
-                    data.items.forEach(i => cart[i.id] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price }});
-                }}
-
-                let itemsHtml = `<div class="edit-list">`;
-                const currentItems = Object.values(cart);
-                let currentTotal = 0;
-                
-                if (currentItems.length > 0) {{
-                    currentItems.forEach(item => {{
-                        currentTotal += (item.price * item.qty);
-                        const controls = data.can_edit_items ? `
-                            <div class="qty-ctrl-sm">
-                                <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, -1)">-</button>
-                                <span id="qty-${{item.id}}" style="font-weight:bold; min-width:20px; text-align:center;">${{item.qty}}</span>
-                                <button class="qty-btn-sm" onclick="updateEditQty(${{item.id}}, 1)">+</button>
-                            </div>` : `<span>x${{item.qty}}</span>`;
-                            
-                        itemsHtml += `
-                        <div class="edit-item">
-                            <div><b>${{item.name}}</b><br><small>${{item.price}} грн</small></div>
-                            ${{controls}}
-                        </div>`;
+                    data.items.forEach(i => {{
+                        // Створюємо ключ так само, як при додаванні (або використовуємо унікальний ID, якщо він є)
+                        // Для редагування існуючих, якщо немає ID унікального рядка кошика, використовуємо productID.
+                        // АЛЕ! Оскільки ми тепер підтримуємо модифікатори, нам потрібен унікальний ключ.
+                        // Спрощуємо: якщо це завантаження з сервера, просто додаємо в cart за індексом або генеруємо ключ.
+                        const modIds = i.name.includes('+') ? 'from_db' : ''; // Спрощення, насправді треба ID
+                        // Для редагування вже збережених товарів ми просто відображаємо їх. 
+                        // Повноцінне редагування (додавання/видалення) робимо через перестворення списку.
+                        
+                        // Тимчасово: для простоти редагування існуючого замовлення, 
+                        // ми просто додаємо їх у cart як єдиний список об'єктів.
+                        // Ключем буде timestamp + random для унікальності.
+                        const key = `exist_${{i.id}}_${{Math.random()}}`;
+                        cart[key] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price, modifiers: [] }}; 
+                        // Примітка: сервер повертає назву вже з модифікаторами, тому modifiers тут пустий, 
+                        // але назва повна. Це компроміс для редагування.
                     }});
-                }} else {{
-                    itemsHtml += `<div style="padding:10px; text-align:center; color:#999;">Кошик порожній</div>`;
                 }}
-                
-                itemsHtml += `</div>`;
-                
-                if (data.can_edit_items) {{
-                    itemsHtml += `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal()"><i class="fa-solid fa-plus"></i> Додати страву</button>`;
-                }}
-                
-                let statusOptions = "";
-                data.statuses.forEach(s => {{
-                    statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
-                }});
-                
-                const saveBtn = data.can_edit_items ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад (~${{currentTotal.toFixed(2)}} грн)</button>` : '';
 
-                body.innerHTML = `
-                    <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{orderId}}</h3>
-                    ${{courierHtml}}
-                    <div style="margin-bottom:15px; background:#f9f9f9; padding:10px; border-radius:8px;">
-                        <label style="font-size:0.85rem; color:#666; margin-bottom:5px; display:block;">Статус:</label>
-                        <select id="status-select" style="width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; background:#fff; font-size:1rem;" onchange="changeOrderStatus(this)">
-                            ${{statusOptions}}
-                        </select>
-                    </div>
-                    <h4 style="margin:0 0 5px 0;">Склад:</h4>
-                    ${{itemsHtml}}
-                    ${{saveBtn}}
-                `;
-            }} catch (e) {{
-                body.innerHTML = "Помилка: " + e.message;
-            }}
+                renderEditCart(data.can_edit_items, data.statuses);
+                // Додаємо кнопки статусу і збереження в renderEditCart або після
+                
+            }} catch (e) {{ body.innerHTML = "Помилка: " + e.message; }}
+        }}
+
+        function renderEditCart(canEdit, statuses) {{
+            const body = document.getElementById('modal-body');
+            let itemsHtml = `<div class="edit-list">`;
+            const currentItems = Object.values(cart);
+            let currentTotal = 0;
+            
+            if (currentItems.length > 0) {{
+                Object.entries(cart).forEach(([key, item]) => {{
+                    currentTotal += (item.price * item.qty);
+                    const controls = canEdit ? `
+                        <div class="qty-ctrl-sm">
+                            <button class="qty-btn-sm" onclick="updateCartItemQty('${{key}}', -1, true)">-</button>
+                            <span style="font-weight:bold; min-width:20px; text-align:center;">${{item.qty}}</span>
+                            <button class="qty-btn-sm" onclick="updateCartItemQty('${{key}}', 1, true)">+</button>
+                        </div>` : `<span>x${{item.qty}}</span>`;
+                    itemsHtml += `<div class="edit-item"><div><b>${{item.name}}</b><br><small>${{item.price.toFixed(2)}} грн</small></div>${{controls}}</div>`;
+                }});
+            }} else itemsHtml += `<div style="padding:10px; text-align:center; color:#999;">Кошик порожній</div>`;
+            
+            itemsHtml += `</div>`;
+            
+            let statusOptions = "";
+            statuses.forEach(s => {{
+                statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
+            }});
+            
+            const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
+            const saveBtn = canEdit ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад (~${{currentTotal.toFixed(2)}} грн)</button>` : '';
+
+            // Зберігаємо HTML в modal-body (але треба зберегти courierHtml якщо він був)
+            // Для простоти просто перезаписуємо нижню частину
+            const courierDiv = body.querySelector('div[style*="background:#e3f2fd"]');
+            const courierHtml = courierDiv ? courierDiv.outerHTML : '';
+
+            body.innerHTML = `
+                <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{editingOrderId}}</h3>
+                ${{courierHtml}}
+                <div style="margin-bottom:15px; background:#f9f9f9; padding:10px; border-radius:8px;">
+                    <label style="font-size:0.85rem; color:#666; margin-bottom:5px; display:block;">Статус:</label>
+                    <select id="status-select" style="width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; background:#fff; font-size:1rem;" onchange="changeOrderStatus(this)">
+                        ${{statusOptions}}
+                    </select>
+                </div>
+                <h4 style="margin:0 0 5px 0;">Склад:</h4>
+                ${{itemsHtml}}
+                ${{addBtn}}
+                ${{saveBtn}}
+            `;
         }}
 
         async function assignCourier(courierId) {{
             if(!confirm("Змінити кур'єра?")) return;
             try {{
                 const res = await fetch('/staff/api/order/assign_courier', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ orderId: editingOrderId, courierId: courierId }})
                 }});
-                
                 if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-                
                 const data = await res.json();
-                if(data.success) showToast(data.message);
-                else alert(data.error);
+                if(data.success) showToast(data.message); else alert(data.error);
             }} catch(e) {{ alert("Помилка з'єднання"); }}
         }}
 
-        function updateEditQty(prodId, delta) {{
-            if (cart[prodId]) {{
-                cart[prodId].qty += delta;
-                if (cart[prodId].qty <= 0) delete cart[prodId];
-                openOrderEditModal(editingOrderId, true);
+        function updateCartItemQty(key, delta, isEditing = false) {{
+            if (cart[key]) {{
+                cart[key].qty += delta;
+                if (cart[key].qty <= 0) delete cart[key];
+                if(isEditing) {
+                    // Перемальовуємо тільки кошик, не робимо запит на сервер
+                    // Але нам потрібні статуси... Для простоти викликаємо openOrderEditModal з keepCart=true
+                    openOrderEditModal(editingOrderId, true); 
+                } else {
+                    renderNewOrderMenu(); // Оновлюємо меню створення
+                }
             }}
         }}
 
@@ -562,18 +501,15 @@ STAFF_DASHBOARD_HTML = """
             const newStatusId = selectElem.value;
             const option = selectElem.options[selectElem.selectedIndex];
             const isCompleted = option.getAttribute('data-completed') === 'true';
-            
             if (isCompleted) {{
                 currentStatusChangeId = newStatusId;
-                const body = document.getElementById('modal-body');
-                body.innerHTML = `
+                document.getElementById('modal-body').innerHTML = `
                     <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; align-items:center;">
                         <h3 style="text-align:center;">💰 Оплата замовлення</h3>
                         <p style="text-align:center; color:#666; margin-bottom:20px;">Оберіть метод оплати:</p>
                         <button class="big-btn" style="background:#27ae60; margin-bottom:10px;" onclick="finishStatusChange('cash')"><i class="fa-solid fa-money-bill-wave"></i> Готівка</button>
                         <button class="big-btn" style="background:#2980b9;" onclick="finishStatusChange('card')"><i class="fa-regular fa-credit-card"></i> Картка / Термінал</button>
-                        <br>
-                        <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="openOrderEditModal(editingOrderId, true)">Скасувати</button>
+                        <br><button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="openOrderEditModal(editingOrderId, true)">Скасувати</button>
                     </div>
                 `;
                 return;
@@ -583,205 +519,212 @@ STAFF_DASHBOARD_HTML = """
 
         async function finishStatusChange(method) {{
             await updateStatusAPI(currentStatusChangeId, method);
-            closeModal();
-            fetchData();
+            closeModal(); fetchData();
         }}
 
         async function updateStatusAPI(statusId, paymentMethod) {{
             const res = await fetch('/staff/api/order/update_status', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ 
-                    orderId: editingOrderId, 
-                    statusId: statusId,
-                    paymentMethod: paymentMethod 
-                }})
+                method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ orderId: editingOrderId, statusId: statusId, paymentMethod: paymentMethod }})
             }});
-            
             if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-            
             const data = await res.json();
-            if(data.error) alert(data.error);
-            else showToast("Статус оновлено");
+            if(data.error) alert(data.error); else showToast("Статус оновлено");
         }}
 
         async function saveOrderChanges() {{
-            const items = Object.values(cart);
+            const items = Object.values(cart); // Список об'єктів
             const res = await fetch('/staff/api/order/update_items', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
+                method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, items: items }})
             }});
-            
             if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-            
             const data = await res.json();
-            if(data.success) {{
-                closeModal();
-                fetchData();
-                showToast("Склад збережено");
-            }} else {{
-                alert(data.error || "Помилка");
-            }}
+            if(data.success) {{ closeModal(); fetchData(); showToast("Склад збережено"); }} 
+            else alert(data.error || "Помилка");
         }}
 
-        async function openAddProductModal() {{
-            const body = document.getElementById('modal-body');
-            body.innerHTML = '<div style="text-align:center; padding:20px;">Завантаження меню...</div>';
-            
+        // --- NEW ORDER & PRODUCT ADDING LOGIC ---
+
+        async function openAddProductModal(isEditing = false) {{
             if (menuData.length === 0) {{
+                document.getElementById('modal-body').innerHTML = '<div style="text-align:center; padding:20px;">Завантаження меню...</div>';
                 const res = await fetch('/staff/api/menu/full');
                 if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-                menuData = await res.json();
+                menuData = (await res.json()).menu;
             }}
-            
-            renderAddProductList("");
+            renderProductList("", isEditing);
         }}
         
-        function renderAddProductList(filterText = "") {{
+        function renderProductList(filterText = "", isEditing = false) {{
             const body = document.getElementById('modal-body');
             const lowerFilter = filterText.toLowerCase();
-            
+            let backFn = isEditing ? `openOrderEditModal(${editingOrderId}, true)` : `openTableModal(${currentTableId}, '${document.getElementById('modal-title')?.innerText || ''}')`; // Fix title later
+            if(!isEditing) backFn = `createNewOrderMenu()`; // Simplification
+
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0;">Додати страву</h3>
-                    <button onclick="openOrderEditModal(editingOrderId, true)" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
+                    <h3 style="margin:0;">${isEditing ? 'Додати страву' : 'Нове замовлення'}</h3>
+                    <button onclick="${backFn}" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
                 </div>
-                <input type="text" id="search-input" placeholder="🔍 Пошук страви..." value="${{filterText}}" oninput="renderAddProductList(this.value)">
+                <input type="text" id="search-input" placeholder="🔍 Пошук..." value="${filterText}" oninput="renderProductList(this.value, ${isEditing})">
                 <div class="edit-list">`;
                 
             let hasItems = false;
             menuData.forEach(cat => {{
                 const filteredProds = cat.products.filter(p => p.name.toLowerCase().includes(lowerFilter));
-                
                 if (filteredProds.length > 0) {{
                     hasItems = true;
-                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
+                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${cat.name}</div>`;
                     filteredProds.forEach(p => {{
+                        // Зберігаємо об'єкт продукту в атрибут для доступу
+                        const pData = JSON.stringify(p).replace(/"/g, '&quot;');
+                        const key = p.id; // Simple key for check, not for cart
+                        
+                        // Кнопка додавання
                         html += `
                         <div class="edit-item">
-                            <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}})</small></div>
-                            <button class="action-btn" style="padding:6px 12px;" onclick="addToEditCart(${{p.id}}, '${{p.name}}', ${{p.price}})">+</button>
+                            <div style="flex-grow:1;">${p.name} <small>(${p.price} грн)</small></div>
+                            <button class="action-btn" style="padding:6px 12px;" onclick="handleProductClick(this)" data-product="${pData}" data-editing="${isEditing}">+</button>
                         </div>`;
                     }});
                 }}
             }});
-            
             if(!hasItems) html += `<div style="padding:20px; text-align:center; color:#999;">Нічого не знайдено</div>`;
-            
             html += `</div>`;
-            body.innerHTML = html;
             
+            if(!isEditing) {
+                 // Show cart summary or button
+                 const count = Object.keys(cart).length;
+                 const total = Object.values(cart).reduce((sum, i) => sum + i.price * i.qty, 0);
+                 if (count > 0) {
+                     html += `<button class="big-btn" onclick="submitNewOrder()">✅ Замовити (${count} поз. - ${total} грн)</button>`;
+                 }
+            }
+
+            body.innerHTML = html;
             const input = document.getElementById('search-input');
-            if(input) {{
-                input.focus();
-                const val = input.value; input.value = ''; input.value = val;
+            if(input) { input.focus(); input.value = ''; input.value = filterText; }
+        }}
+
+        window.handleProductClick = (btn) => {{
+            const product = JSON.parse(btn.dataset.product);
+            const isEditing = btn.dataset.editing === 'true';
+            
+            if (product.modifiers && product.modifiers.length > 0) {{
+                openModifierModal(product, isEditing);
+            }} else {{
+                addToCart(product, [], isEditing);
+            }}
+        }};
+
+        // --- MODIFIER MODAL FOR STAFF ---
+        function openModifierModal(product, isEditing) {{
+            selectedProduct = product;
+            selectedModifiers.clear();
+            
+            const body = document.getElementById('modal-body');
+            let modListHtml = `<div class="mod-list" style="overflow-y:auto; max-height:300px; margin:10px 0;">`;
+            
+            product.modifiers.forEach(mod => {{
+                modListHtml += `
+                <div class="mod-item" onclick="toggleStaffMod(${mod.id}, this)">
+                    <div class="mod-info">
+                        <div class="mod-checkbox"></div> <span>${mod.name}</span>
+                    </div>
+                    <b>+${mod.price} грн</b>
+                </div>`;
+            }});
+            modListHtml += `</div>`;
+            
+            body.innerHTML = `
+                <h3 style="text-align:center; margin-top:0;">${product.name}</h3>
+                <p style="text-align:center; color:#666;">Оберіть добавки:</p>
+                ${modListHtml}
+                <div style="margin-top:auto; padding-top:10px; border-top:1px solid #eee;">
+                    <button class="big-btn" id="staff-mod-add-btn" onclick="addStaffWithMods(${isEditing})">Додати (<span>${product.price}</span> грн)</button>
+                    <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="renderProductList('', ${isEditing})">Скасувати</button>
+                </div>
+            `;
+        }}
+
+        window.toggleStaffMod = (id, row) => {{
+            if(selectedModifiers.has(id)) {{
+                selectedModifiers.delete(id);
+                row.classList.remove('selected');
+            }} else {{
+                selectedModifiers.add(id);
+                row.classList.add('selected');
+            }}
+            updateStaffModPrice();
+        }};
+
+        function updateStaffModPrice() {{
+            let total = selectedProduct.price;
+            selectedProduct.modifiers.forEach(m => {{
+                if(selectedModifiers.has(m.id)) total += m.price;
+            }});
+            const btnSpan = document.querySelector('#staff-mod-add-btn span');
+            if(btnSpan) btnSpan.innerText = total.toFixed(2);
+        }}
+
+        window.addStaffWithMods = (isEditing) => {{
+            const mods = [];
+            selectedProduct.modifiers.forEach(m => {{
+                if(selectedModifiers.has(m.id)) mods.push(m);
+            }});
+            addToCart(selectedProduct, mods, isEditing);
+        }};
+
+        function addToCart(product, modifiers, isEditing) {{
+            const modIds = modifiers.map(m => m.id).sort().join('-');
+            const key = `${product.id}-${modIds}`;
+            
+            if (cart[key]) {{
+                cart[key].qty++;
+            }} else {{
+                let unitPrice = product.price;
+                modifiers.forEach(m => unitPrice += m.price);
+                
+                // Формуємо назву з модифікаторами для відображення
+                let displayName = product.name;
+                if (modifiers.length > 0) {{
+                    displayName += ` (+ ${modifiers.map(m => m.name).join(', ')})`;
+                }}
+
+                cart[key] = {{
+                    id: product.id, // Backend product ID
+                    name: displayName,
+                    price: unitPrice,
+                    qty: 1,
+                    modifiers: modifiers // Full objects for backend
+                }};
+            }}
+            
+            if (isEditing) {{
+                openOrderEditModal(editingOrderId, true);
+            }} else {{
+                renderProductList("", false);
+                showToast("Додано!");
             }}
         }}
 
-        function addToEditCart(prodId, name, price) {{
-            if (!cart[prodId]) cart[prodId] = {{ id: prodId, qty: 0, name: name, price: price }};
-            cart[prodId].qty++;
-            
-            const btn = event.currentTarget;
-            const originalText = btn.innerText;
-            btn.innerText = "✓";
-            btn.style.background = "#27ae60";
-            setTimeout(() => {{ 
-                btn.innerText = originalText; 
-                btn.style.background = ""; 
-            }}, 500);
-        }}
-
-        function performAction(action, orderId, extra=null) {{
-            if(action === 'chef_ready' && !confirm("Підтвердити готовність?")) return;
-            
-            fetch('/staff/api/action', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ action, orderId, extra }})
-            }}).then(res => {{
-                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-                return res.json();
-            }}).then(data => {{
-                if(data && data.success) fetchData();
-                else if (data) alert("Помилка: " + (data.error || "Unknown"));
-            }});
-        }}
-        
         function openTableModal(tableId, tableName) {{
             currentTableId = tableId;
-            cart = {{}};
+            cart = {};
             const modal = document.getElementById('staff-modal');
             document.getElementById('modal-body').innerHTML = `
-                <h3 style="text-align:center;">${{tableName}}</h3>
+                <h3 style="text-align:center;">${tableName}</h3>
                 <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:15px;">
-                    <button class="big-btn" onclick="createNewOrderMenu()">📝 Нове замовлення</button>
+                    <button class="big-btn" onclick="openAddProductModal(false)">📝 Нове замовлення</button>
                     <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="closeModal()">Закрити</button>
                 </div>
             `;
             modal.classList.add('active');
         }}
         
-        async function createNewOrderMenu() {{
-             const body = document.getElementById('modal-body');
-             body.innerHTML = '<div style="text-align:center; padding:20px;">Завантаження...</div>';
-             if (menuData.length === 0) {{
-                const res = await fetch('/staff/api/menu/full');
-                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
-                menuData = await res.json();
-            }}
-            renderNewOrderMenu("");
-        }}
-        
-        function renderNewOrderMenu(filterText) {{
-            const body = document.getElementById('modal-body');
-            const lowerFilter = filterText.toLowerCase();
-            
-            let html = `
-                <h3 style="margin-top:0; margin-bottom:10px;">Створення замовлення</h3>
-                <input type="text" id="new-order-search" placeholder="🔍 Пошук..." value="${{filterText}}" oninput="renderNewOrderMenu(this.value)" style="width:100%; padding:12px; border:1px solid #ddd; border-radius:8px; margin-bottom:10px; box-sizing:border-box;">
-                <div class="edit-list">`;
-            
-            menuData.forEach(cat => {{
-                const filteredProds = cat.products.filter(p => p.name.toLowerCase().includes(lowerFilter));
-                if(filteredProds.length > 0) {{
-                    html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
-                    filteredProds.forEach(p => {{
-                        const qty = cart[p.id] ? cart[p.id].qty : 0;
-                        html += `
-                        <div class="edit-item">
-                            <div style="font-size:0.95rem;">${{p.name}}</div>
-                            <div class="qty-ctrl-sm">
-                                <button class="qty-btn-sm" onclick="updateNewOrderCart(${{p.id}}, -1)">-</button>
-                                <span id="new-qty-${{p.id}}" style="min-width:20px; text-align:center;">${{qty}}</span>
-                                <button class="qty-btn-sm" onclick="updateNewOrderCart(${{p.id}}, 1)">+</button>
-                            </div>
-                        </div>`;
-                    }});
-                }}
-            }});
-            html += `</div><button class="big-btn" onclick="submitNewOrder()">✅ Підтвердити замовлення</button>`;
-            body.innerHTML = html;
-            
-            const input = document.getElementById('new-order-search');
-            if(input) {{
-                input.focus();
-                const val = input.value; input.value = ''; input.value = val;
-            }}
-        }}
-        
-        function updateNewOrderCart(id, delta) {{
-            if (!cart[id]) cart[id] = {{ id: id, qty: 0 }};
-            cart[id].qty += delta;
-            if(cart[id].qty < 0) cart[id].qty = 0;
-            
-            const el = document.getElementById(`new-qty-${{id}}`);
-            if (el) el.innerText = cart[id].qty;
-        }}
-        
         async function submitNewOrder() {{
-            const items = Object.values(cart).filter(i => i.qty > 0);
+            const items = Object.values(cart);
             if(items.length === 0) return alert("Кошик порожній");
             
             const btn = event.currentTarget;
@@ -790,11 +733,9 @@ STAFF_DASHBOARD_HTML = """
             
             try {{
                 const res = await fetch('/staff/api/order/create', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ tableId: currentTableId, cart: items }})
                 }});
-                
                 if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
                 
                 closeModal();
@@ -804,6 +745,20 @@ STAFF_DASHBOARD_HTML = """
                 alert("Помилка створення");
                 btn.disabled = false;
             }}
+        }}
+
+        function performAction(action, orderId, extra=null) {{
+            if(action === 'chef_ready' && !confirm("Підтвердити готовність?")) return;
+            fetch('/staff/api/action', {{
+                method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ action, orderId, extra }})
+            }}).then(res => {{
+                if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
+                return res.json();
+            }}).then(data => {{
+                if(data && data.success) fetchData();
+                else if (data) alert("Помилка: " + (data.error || "Unknown"));
+            }});
         }}
 
         function closeModal() {{

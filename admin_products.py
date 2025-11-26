@@ -6,15 +6,16 @@ import secrets
 import aiofiles
 import logging
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Form, HTTPException, File, UploadFile, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
-from models import Product, Category, Settings
+from models import Product, Category, Settings, product_modifier_association
+from inventory_models import Modifier
 from templates import ADMIN_HTML_TEMPLATE
 from dependencies import get_db_session, check_credentials
 
@@ -87,6 +88,20 @@ async def admin_products(
     categories_res = await session.execute(select(Category))
     category_options = "".join([f'<option value="{c.id}">{html.escape(c.name)}</option>' for c in categories_res.scalars().all()])
     
+    # --- ЗАВАНТАЖЕННЯ МОДИФІКАТОРІВ ДЛЯ ФОРМИ ДОДАВАННЯ ---
+    all_modifiers = (await session.execute(select(Modifier).order_by(Modifier.name))).scalars().all()
+    
+    modifiers_html = "<div style='display:grid; grid-template-columns: 1fr 1fr; gap:10px; max-height:150px; overflow-y:auto; border:1px solid #eee; padding:10px; border-radius:5px; margin-bottom:15px;'>"
+    for mod in all_modifiers:
+        modifiers_html += f"""
+        <div class="checkbox-group" style="margin-bottom:0;">
+            <input type="checkbox" id="new_mod_{mod.id}" name="modifier_ids" value="{mod.id}">
+            <label for="new_mod_{mod.id}" style="font-weight:normal; font-size:0.9em;">{html.escape(mod.name)} (+{mod.price} грн)</label>
+        </div>
+        """
+    modifiers_html += "</div>"
+    # -------------------------------------------------------
+
     # Пагінація
     links_products = []
     for i in range(1, pages + 1):
@@ -218,6 +233,9 @@ async def admin_products(
                         </label>
                     </div>
 
+                    <label>Доступні модифікатори:</label>
+                    {modifiers_html}
+
                     <label for="description">Опис (склад)</label>
                     <textarea id="description" name="description" rows="3" placeholder="Опис для меню..."></textarea>
                     
@@ -248,7 +266,8 @@ async def add_product(
     price: Decimal = Form(...), 
     description: str = Form(""), 
     category_id: int = Form(...), 
-    preparation_area: str = Form("kitchen"), 
+    preparation_area: str = Form("kitchen"),
+    modifier_ids: List[int] = Form([]), # Отримуємо список ID модифікаторів
     image: UploadFile = File(None), 
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
@@ -271,14 +290,21 @@ async def add_product(
         except Exception as e:
             logger.error(f"Не вдалося зберегти зображення: {e}")
 
-    session.add(Product(
+    product = Product(
         name=name, 
         price=price, 
         description=description, 
         image_url=image_url, 
         category_id=category_id, 
         preparation_area=preparation_area
-    ))
+    )
+
+    # Додаємо модифікатори, якщо обрані
+    if modifier_ids:
+        modifiers = (await session.execute(select(Modifier).where(Modifier.id.in_(modifier_ids)))).scalars().all()
+        product.modifiers = modifiers
+
+    session.add(product)
     await session.commit()
     return RedirectResponse(url="/admin/products", status_code=303)
 
@@ -289,7 +315,8 @@ async def get_edit_product_form(
     username: str = Depends(check_credentials)
 ):
     settings = await session.get(Settings, 1) or Settings()
-    product = await session.get(Product, product_id)
+    # Завантажуємо продукт разом з його модифікаторами
+    product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
     if not product: 
         raise HTTPException(status_code=404, detail="Товар не знайдено")
 
@@ -299,6 +326,22 @@ async def get_edit_product_form(
     # Радіо кнопки замість селекта для цеху
     is_kitchen = "checked" if product.preparation_area == 'kitchen' else ""
     is_bar = "checked" if product.preparation_area == 'bar' else ""
+
+    # --- ЛОГІКА МОДИФІКАТОРІВ ---
+    all_modifiers = (await session.execute(select(Modifier).order_by(Modifier.name))).scalars().all()
+    current_mod_ids = [m.id for m in product.modifiers]
+    
+    modifiers_html = "<div style='display:grid; grid-template-columns: 1fr 1fr; gap:10px; max-height:200px; overflow-y:auto; border:1px solid #eee; padding:10px; border-radius:5px;'>"
+    for mod in all_modifiers:
+        checked = "checked" if mod.id in current_mod_ids else ""
+        modifiers_html += f"""
+        <div class="checkbox-group" style="margin-bottom:0;">
+            <input type="checkbox" id="mod_{mod.id}" name="modifier_ids" value="{mod.id}" {checked}>
+            <label for="mod_{mod.id}" style="font-weight:normal; font-size:0.9em;">{html.escape(mod.name)} (+{mod.price} грн)</label>
+        </div>
+        """
+    modifiers_html += "</div>"
+    # -----------------------------
 
     body = f"""
     <div class="card" style="max-width: 600px; margin: 0 auto;">
@@ -334,6 +377,10 @@ async def get_edit_product_form(
                 </label>
             </div>
 
+            <label>Доступні модифікатори:</label>
+            {modifiers_html}
+            <br>
+
             <label for="description">Опис</label>
             <textarea id="description" name="description" rows="4">{html.escape(product.description or '')}</textarea>
             
@@ -365,12 +412,14 @@ async def edit_product(
     price: Decimal = Form(...), 
     description: str = Form(""), 
     category_id: int = Form(...), 
-    preparation_area: str = Form(...), 
+    preparation_area: str = Form(...),
+    modifier_ids: List[int] = Form([]), # Отримуємо список ID обраних модифікаторів
     image: UploadFile = File(None), 
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
 ):
-    product = await session.get(Product, product_id)
+    # Завантажуємо з modifiers, щоб оновити список
+    product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
     if not product: 
         raise HTTPException(status_code=404, detail="Товар не знайдено")
 
@@ -379,6 +428,13 @@ async def edit_product(
     product.description = description
     product.category_id = category_id
     product.preparation_area = preparation_area 
+
+    # Оновлюємо список модифікаторів
+    if modifier_ids:
+        modifiers = (await session.execute(select(Modifier).where(Modifier.id.in_(modifier_ids)))).scalars().all()
+        product.modifiers = modifiers
+    else:
+        product.modifiers = [] # Очищаємо, якщо нічого не обрано
 
     if image and image.filename:
         if product.image_url and os.path.exists(product.image_url):
@@ -445,7 +501,7 @@ async def api_get_products(
         .where(Product.is_active == True)
         .order_by(Category.sort_order, Product.name)
     )
-    # Додаємо preparation_area у відповідь, щоб JS знав куди відправити (хоча JS це не використовує прямо, але корисно)
+    # Додаємо preparation_area у відповідь
     products = [{
         "id": row.id, 
         "name": row.name, 

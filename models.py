@@ -4,11 +4,16 @@ import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy import text, ForeignKey, JSON, func
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 import secrets
 import os
 from decimal import Decimal
+
+# Если нужно для тайп-хинтинга (чтобы IDE понимала, что такое Modifier),
+# но избегая циклического импорта в рантайме
+if TYPE_CHECKING:
+    from inventory_models import Modifier
 
 # Чтение DATABASE_URL из переменных окружения
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -28,6 +33,14 @@ waiter_table_association = sa.Table(
     Base.metadata,
     sa.Column('employee_id', sa.ForeignKey('employees.id'), primary_key=True),
     sa.Column('table_id', sa.ForeignKey('tables.id'), primary_key=True)
+)
+
+# --- НОВЕ: Асоціативна таблиця Продукти <-> Модифікатори ---
+product_modifier_association = sa.Table(
+    'product_modifier_association',
+    Base.metadata,
+    sa.Column('product_id', sa.ForeignKey('products.id'), primary_key=True),
+    sa.Column('modifier_id', sa.ForeignKey('modifiers.id'), primary_key=True)
 )
 
 
@@ -121,6 +134,15 @@ class Product(Base):
     
     category: Mapped["Category"] = relationship("Category", back_populates="products")
     cart_items: Mapped[list["CartItem"]] = relationship("CartItem", back_populates="product")
+
+    # --- НОВЕ: Зв'язок з модифікаторами ---
+    # Використовуємо рядок "Modifier", оскільки клас Modifier знаходиться в іншому файлі (inventory_models.py),
+    # але він спадкується від того ж Base, тому SQLAlchemy знайде його по імені класу.
+    modifiers: Mapped[List["Modifier"]] = relationship(
+        "Modifier", 
+        secondary=product_modifier_association,
+        lazy="selectin"
+    )
 
 
 class OrderStatus(Base):

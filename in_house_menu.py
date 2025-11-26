@@ -17,7 +17,6 @@ from urllib.parse import quote_plus as url_quote_plus
 from models import Table, Product, Category, Order, Settings, Employee, OrderStatusHistory, OrderStatus, OrderItem
 from dependencies import get_db_session
 from templates import IN_HOUSE_MENU_HTML_TEMPLATE
-# --- ИЗМЕНЕНИЕ: Добавлен импорт create_staff_notification ---
 from notification_manager import distribute_order_to_production, create_staff_notification
 
 router = APIRouter()
@@ -44,16 +43,30 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         .where(Category.show_in_restaurant == True)
         .order_by(Category.sort_order, Category.name)
     )
+    
+    # --- ЗМІНА: Завантажуємо продукти РАЗОМ з модифікаторами ---
     products_res = await session.execute(
         select(Product)
+        .options(selectinload(Product.modifiers)) # <-- Важливо: завантажуємо зв'язок
         .join(Category)
         .where(Product.is_active == True, Category.show_in_restaurant == True)
     )
 
     categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
     
-    # Конвертуємо Decimal у float для JSON
-    products = [{"id": p.id, "name": p.name, "description": p.description, "price": float(p.price), "image_url": p.image_url, "category_id": p.category_id} for p in products_res.scalars().all()]
+    # Формуємо список продуктів з модифікаторами
+    products = []
+    for p in products_res.scalars().all():
+        mods_list = [{"id": m.id, "name": m.name, "price": float(m.price)} for m in p.modifiers]
+        products.append({
+            "id": p.id, 
+            "name": p.name, 
+            "description": p.description, 
+            "price": float(p.price), 
+            "image_url": p.image_url, 
+            "category_id": p.category_id,
+            "modifiers": mods_list # <-- Додаємо список модифікаторів
+        })
 
     # Отримуємо історію неоплачених замовлень для цього столика
     final_statuses_res = await session.execute(
@@ -76,13 +89,22 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         grand_total += o.total_price
         status_name = o.status.name if o.status else "Обробяється"
         
-        # Генеруємо рядок продуктів з items
-        products_str = ", ".join([f"{item.product_name} x {item.quantity}" for item in o.items])
+        # Генеруємо рядок продуктів з items, включаючи модифікатори
+        product_strings = []
+        for item in o.items:
+            mods_str = ""
+            if item.modifiers:
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                if mod_names:
+                    mods_str = f" (+ {', '.join(mod_names)})"
+            product_strings.append(f"{item.product_name}{mods_str} x {item.quantity}")
+            
+        products_str = ", ".join(product_strings)
         
         history_list.append({
             "id": o.id,
             "products": products_str,
-            "total_price": float(o.total_price), # Decimal -> float для JSON
+            "total_price": float(o.total_price), 
             "status": status_name,
             "time": o.created_at.strftime('%H:%M')
         })
@@ -103,7 +125,7 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     # --- Нові налаштування дизайну ---
     category_nav_bg_color = settings.category_nav_bg_color or "#ffffff"
     category_nav_text_color = settings.category_nav_text_color or "#333333"
-    header_image_url = settings.header_image_url or "" # URL фонового зображення шапки
+    header_image_url = settings.header_image_url or "" 
     
     # --- Wi-Fi ---
     wifi_ssid = html_module.escape(settings.wifi_ssid or "Не налаштовано")
@@ -184,7 +206,18 @@ async def get_table_updates(table_id: int, session: AsyncSession = Depends(get_d
     for o in active_orders:
         grand_total += o.total_price
         status_name = o.status.name if o.status else "Обробяється"
-        products_str = ", ".join([f"{item.product_name} x {item.quantity}" for item in o.items])
+        
+        # Формуємо рядок продуктів з модифікаторами
+        product_strings = []
+        for item in o.items:
+            mods_str = ""
+            if item.modifiers:
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                if mod_names:
+                    mods_str = f" (+ {', '.join(mod_names)})"
+            product_strings.append(f"{item.product_name}{mods_str} x {item.quantity}")
+            
+        products_str = ", ".join(product_strings)
         
         history_list.append({
             "id": o.id,
@@ -212,19 +245,17 @@ async def call_waiter(
     waiters = table.assigned_waiters
     message_text = f"❗️ <b>Виклик зі столика: {html_module.escape(table.name)}</b>"
     
-    # --- PWA NOTIFICATION START (Виклик офіціанта) ---
+    # --- PWA NOTIFICATION ---
     pwa_msg = f"🔔 Вас викликають до столика: {table.name}"
     for w in waiters:
         if w.is_on_shift:
             await create_staff_notification(session, w.id, pwa_msg)
-    # --- PWA NOTIFICATION END ---
 
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     admin_bot = request.app.state.admin_bot
     
     if not admin_bot:
-        logger.warning("Bot not configured, cannot send waiter call.")
-        return JSONResponse(content={"message": "Система сповіщень тимчасово недоступна, але ми працюємо над цим."})
+        return JSONResponse(content={"message": "Система сповіщень тимчасово недоступна."})
 
     target_chat_ids = set()
     for w in waiters:
@@ -236,8 +267,7 @@ async def call_waiter(
             try:
                 target_chat_ids.add(int(admin_chat_id_str))
                 message_text += "\n<i>Офіціанта не призначено або він не на зміні.</i>"
-            except ValueError:
-                    logger.warning(f"Некоректний admin_chat_id: {admin_chat_id_str}")
+            except ValueError: pass
 
     if target_chat_ids:
         for chat_id in target_chat_ids:
@@ -278,12 +308,11 @@ async def request_bill(
                     f"Столик: {html_module.escape(table.name)}\n"
                     f"Сума до сплати: <b>{total_bill} грн</b>")
 
-    # --- PWA NOTIFICATION START (Запит рахунку) ---
+    # --- PWA NOTIFICATION ---
     pwa_msg = f"💰 Просять рахунок ({method_text}): Стіл {table.name}. Сума: {total_bill} грн"
     for w in waiters:
         if w.is_on_shift:
             await create_staff_notification(session, w.id, pwa_msg)
-    # --- PWA NOTIFICATION END ---
 
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     admin_bot = request.app.state.admin_bot
@@ -301,15 +330,13 @@ async def request_bill(
             try:
                 target_chat_ids.add(int(admin_chat_id_str))
                 message_text += "\n<i>Офіціанта не призначено або він не на зміні.</i>"
-            except ValueError:
-                    logger.warning(f"Некоректний admin_chat_id: {admin_chat_id_str}")
+            except ValueError: pass
 
     if target_chat_ids:
         for chat_id in target_chat_ids:
             try:
                 await admin_bot.send_message(chat_id, message_text)
-            except Exception as e:
-                logger.error(f"Не вдалося надіслати запит на рахунок в чат {chat_id}: {e}")
+            except Exception: pass
         return JSONResponse(content={"message": "Запит надіслано. Офіціант незабаром підійде з рахунком."})
     else:
         return JSONResponse(content={"message": "Запит надіслано."})
@@ -321,7 +348,7 @@ async def place_in_house_order(
     items: list = Body(...), 
     session: AsyncSession = Depends(get_db_session)
 ):
-    """Обробляє нове замовлення зі столика."""
+    """Обробляє нове замовлення зі столика (QR-меню)."""
     table = await session.get(Table, table_id, options=[selectinload(Table.assigned_waiters)])
     if not table: raise HTTPException(status_code=404, detail="Столик не знайдено.")
     if not items: raise HTTPException(status_code=400, detail="Замовлення порожнє.")
@@ -331,6 +358,7 @@ async def place_in_house_order(
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Невірний формат ID товару.")
 
+    # Завантажуємо продукти для отримання актуальних цін
     products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
     db_products = {str(p.id): p for p in products_res.scalars().all()}
 
@@ -343,16 +371,27 @@ async def place_in_house_order(
         qty = int(item.get('quantity', 1))
         if pid in db_products and qty > 0:
             product = db_products[pid]
-            total_price += product.price * qty
             
-            products_str_for_msg.append(f"{product.name} x {qty}")
+            # --- Обробка модифікаторів ---
+            modifiers_data = item.get('modifiers', [])
+            mods_price = sum(Decimal(str(m.get('price', 0))) for m in modifiers_data)
+            
+            item_price = product.price + mods_price
+            total_price += item_price * qty
+            
+            # Формуємо текст для сповіщення
+            mod_names = [m.get('name') for m in modifiers_data]
+            mod_str = f" (+ {', '.join(mod_names)})" if mod_names else ""
+            
+            products_str_for_msg.append(f"{product.name}{mod_str} x {qty}")
             
             new_order_items.append(OrderItem(
                 product_id=product.id,
                 product_name=product.name,
                 quantity=qty,
-                price_at_moment=product.price,
-                preparation_area=product.preparation_area
+                price_at_moment=item_price,
+                preparation_area=product.preparation_area,
+                modifiers=modifiers_data # Зберігаємо JSON
             ))
 
     if not new_order_items:
@@ -375,13 +414,11 @@ async def place_in_house_order(
     await session.refresh(order)
     await session.refresh(order, ['status'])
 
-    # --- PWA NOTIFICATION START (Нове замовлення для офіціанта) ---
-    # Сповіщаємо всіх закріплених офіціантів
+    # --- PWA NOTIFICATION ---
     pwa_msg = f"📝 Нове замовлення #{order.id} (Стіл: {table.name}). Сума: {total_price} грн"
     for w in table.assigned_waiters:
         if w.is_on_shift:
             await create_staff_notification(session, w.id, pwa_msg)
-    # --- PWA NOTIFICATION END ---
 
     history_entry = OrderStatusHistory(
         order_id=order.id, status_id=order.status_id,
@@ -390,6 +427,7 @@ async def place_in_house_order(
     session.add(history_entry)
     await session.commit()
 
+    # --- Telegram сповіщення ---
     products_display = "\n- ".join(products_str_for_msg)
     order_details_text = (f"📝 <b>Нове замовлення зі столика: {aiogram_html.bold(table.name)} (ID: #{order.id})</b>\n\n"
                           f"<b>Склад:</b>\n- {aiogram_html.quote(products_display)}\n\n"
@@ -428,7 +466,7 @@ async def place_in_house_order(
         if admin_chat_id and admin_chat_id not in waiter_chat_ids:
             try:
                 await admin_bot.send_message(admin_chat_id, "✅ " + order_details_text, reply_markup=kb_admin.as_markup())
-            except Exception as e: pass
+            except Exception: pass
     else:
         if admin_chat_id:
             await admin_bot.send_message(
@@ -441,6 +479,6 @@ async def place_in_house_order(
         try:
             await distribute_order_to_production(admin_bot, order, session)
         except Exception as e:
-            logger.error(f"Помилка при розподілі замовлення #{order.id} на кухню/бар: {e}")
+            logger.error(f"Помилка при розподілі замовлення #{order.id}: {e}")
         
     return JSONResponse(content={"message": "Замовлення прийнято! Офіціант незабаром його підтвердить.", "order_id": order.id})
