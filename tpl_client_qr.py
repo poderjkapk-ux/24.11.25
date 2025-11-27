@@ -38,6 +38,12 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         
         --font-sans: '{font_family_sans_val}', sans-serif;
         --font-serif: '{font_family_serif_val}', serif;
+
+        /* --- Status Colors --- */
+        --st-new-bg: #e0f2fe; --st-new-text: #0284c7;
+        --st-work-bg: #fff7ed; --st-work-text: #ea580c;
+        --st-ready-bg: #dcfce7; --st-ready-text: #16a34a;
+        --st-done-bg: #f1f5f9; --st-done-text: #64748b;
       }}
       
       * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }}
@@ -170,17 +176,31 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
       .qty-btn {{ width: 28px; height: 28px; background: white; border-radius: 6px; border: none; font-weight: 700; box-shadow: var(--shadow-sm); cursor: pointer; }}
       .qty-val {{ min-width: 20px; text-align: center; font-weight:600; }}
 
-      /* HISTORY ITEMS */
+      /* HISTORY ITEMS (UPDATED STYLE) */
       .history-card {{
           background: white; border-radius: 16px; padding: 20px; margin-bottom: 15px;
-          border-left: 5px solid #cbd5e1; box-shadow: var(--shadow-sm); position: relative;
+          box-shadow: var(--shadow-sm); border: 1px solid var(--border-light);
+          position: relative; overflow: hidden;
       }}
-      .history-card.completed {{ border-left-color: #10b981; }} /* Готово */
-      .history-card.processing {{ border-left-color: #f59e0b; }} /* В работе */
+      .h-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }}
+      .h-id {{ font-weight: 700; color: #333; }}
+      .h-time {{ font-size: 0.8rem; color: #999; }}
       
-      .h-header {{ display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 0.85rem; color: #64748b; }}
-      .h-body {{ font-weight: 500; line-height: 1.5; margin-bottom: 10px; color: #333; }}
-      .h-footer {{ display: flex; justify-content: space-between; font-weight: 700; font-size: 1rem; color: var(--primary); border-top: 1px dashed #eee; padding-top: 10px; }}
+      /* Status Badges */
+      .status-badge {{
+          padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700;
+          display: inline-flex; align-items: center; gap: 6px;
+      }}
+      .st-new {{ background: var(--st-new-bg); color: var(--st-new-text); }}
+      .st-work {{ background: var(--st-work-bg); color: var(--st-work-text); }}
+      .st-ready {{ background: var(--st-ready-bg); color: var(--st-ready-text); border: 1px solid #86efac; }}
+      .st-done {{ background: var(--st-done-bg); color: var(--st-done-text); }}
+      
+      .h-body {{ font-size: 0.95rem; line-height: 1.6; color: #444; margin-bottom: 12px; }}
+      .h-item {{ display: block; }}
+      
+      .h-footer {{ display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px dashed #eee; }}
+      .h-total {{ font-weight: 800; font-size: 1.1rem; color: var(--text-main); }}
 
       /* SIDEBAR FOOTER */
       .sidebar-footer {{
@@ -314,6 +334,10 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
             
             <div id="view-history" class="tab-view">
                 <div id="history-list"></div>
+                <div id="empty-history-msg" style="text-align:center; padding:40px; color:#999; display:none;">
+                    <i class="fa-solid fa-clock-rotate-left" style="font-size:3rem; opacity:0.3; margin-bottom:15px;"></i>
+                    <p>Історія порожня</p>
+                </div>
             </div>
         </div>
         
@@ -708,18 +732,43 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
             // History Render
             const hList = document.getElementById('history-list');
             hList.innerHTML = '';
-            HISTORY.forEach(o => {{
-                const cls = o.status === 'Готовий до видачі' ? 'completed' : 'processing';
-                hList.innerHTML += `
-                <div class="history-card ${{cls}}">
-                    <div class="h-header"><span>#${{o.id}}</span> <span>${{o.time}}</span></div>
-                    <div class="h-body">${{o.products.replace(/, /g, '<br>')}}</div>
-                    <div class="h-footer">
-                        <span>${{o.status}}</span> <span>${{o.total_price}} грн</span>
-                    </div>
-                </div>`;
-            }});
-            if(HISTORY.length === 0) hList.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">Історія порожня</div>';
+            
+            if (HISTORY.length === 0) {{
+                document.getElementById('empty-history-msg').style.display = 'block';
+            }} else {{
+                document.getElementById('empty-history-msg').style.display = 'none';
+                HISTORY.forEach(o => {{
+                    // Determine Status Style and Icon
+                    let stClass = 'st-done';
+                    let stIcon = 'fa-check';
+                    const s = o.status.toLowerCase();
+                    
+                    if(s.includes('новий') || s.includes('new')) {{
+                        stClass = 'st-new'; stIcon = 'fa-hourglass-start';
+                    }} else if(s.includes('обробці') || s.includes('роботі')) {{
+                        stClass = 'st-work'; stIcon = 'fa-fire-burner';
+                    }} else if(s.includes('готовий') || s.includes('ready')) {{
+                        stClass = 'st-ready'; stIcon = 'fa-bell';
+                    }}
+                    
+                    hList.innerHTML += `
+                    <div class="history-card">
+                        <div class="h-header">
+                            <span class="h-id">#${{o.id}}</span>
+                            <div class="status-badge ${{stClass}}">
+                                <i class="fa-solid ${{stIcon}}"></i> ${{o.status}}
+                            </div>
+                        </div>
+                        <div class="h-body">
+                            ${{o.products.split(', ').map(p => `<span class="h-item">• ${{p}}</span>`).join('')}}
+                        </div>
+                        <div class="h-footer">
+                            <span class="h-time">${{o.time}}</span>
+                            <span class="h-total">${{o.total_price.toFixed(2)}} грн</span>
+                        </div>
+                    </div>`;
+                }});
+            }}
 
             const fabBadge = document.getElementById('fab-badge');
             fabBadge.innerText = count || '!';
