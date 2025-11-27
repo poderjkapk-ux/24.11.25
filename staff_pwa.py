@@ -10,23 +10,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, delete
 from sqlalchemy.orm import joinedload, selectinload
 
-# Импорт моделей та залежностей
+# Імпорт моделей та залежностей
 from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
 )
-# Импорт модели модификаторов
+# Імпорт модели модификаторов
 from inventory_models import Modifier
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
-# Импорт шаблонів
+# Імпорт шаблонів
 from staff_templates import (
     STAFF_LOGIN_HTML, STAFF_DASHBOARD_HTML, 
     STAFF_TABLE_CARD, STAFF_ORDER_CARD
 )
 
-# Импорт менеджерів сповіщень та каси
+# Імпорт менеджерів сповіщень та каси
 from notification_manager import (
     notify_all_parties_on_status_change, 
     notify_new_order_to_staff, 
@@ -91,14 +91,15 @@ async def login_action(
     )
     employee = result.scalars().first()
 
+    # --- ВИПРАВЛЕННЯ: Редірект з параметром помилки ---
     if not employee:
-        return HTMLResponse("Користувача не знайдено", status_code=400)
+        return RedirectResponse(url="/staff/login?error=1", status_code=303)
     
     if not employee.password_hash:
         if password == "admin": pass 
-        else: return HTMLResponse("Пароль ще не встановлено.", status_code=400)
+        else: return RedirectResponse(url="/staff/login?error=1", status_code=303)
     elif not verify_password(password, employee.password_hash):
-        return HTMLResponse("Невірний пароль", status_code=400)
+        return RedirectResponse(url="/staff/login?error=1", status_code=303)
 
     access_token = create_access_token(data={"sub": str(employee.id)})
     
@@ -719,9 +720,10 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         
         items.append({
             "id": i.product_id, 
-            "name": i.product_name + modifiers_str, # Додаємо назви модифікаторів до імені товару для відображення
+            "name": i.product_name + modifiers_str, 
             "qty": i.quantity, 
-            "price": float(i.price_at_moment)
+            "price": float(i.price_at_moment),
+            "modifiers": i.modifiers  # --- ВИПРАВЛЕННЯ: Повертаємо масив модифікаторів для редагування ---
         })
     
     couriers_list = []
@@ -872,7 +874,6 @@ async def update_order_items_api(
                 modifiers_data = item.get('modifiers', [])
                 item_price = p.price
                 for mod in modifiers_data:
-                    # --- ВИПРАВЛЕННЯ: Обробка None ---
                     price_val = mod.get('price', 0)
                     if price_val is None: price_val = 0
                     item_price += Decimal(str(price_val))
@@ -965,7 +966,6 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
         prod_list = []
         for p in prods:
             # Формуємо список модифікаторів для продукту
-            # --- ВИПРАВЛЕННЯ: Безпечне перетворення ціни (обробка None) ---
             p_mods = []
             if p.modifiers:
                 for m in p.modifiers:
@@ -977,7 +977,7 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
                 "name": p.name, 
                 "price": float(p.price), 
                 "preparation_area": p.preparation_area,
-                "modifiers": p_mods # <--- Список модифікаторів всередині продукту
+                "modifiers": p_mods 
             })
             
         menu.append({
@@ -1020,7 +1020,6 @@ async def create_waiter_order(
                 prod = products_map[pid]
                 
                 modifiers_data = item.get('modifiers', [])
-                # --- ВИПРАВЛЕННЯ: Обробка None ---
                 modifiers_price = Decimal(0)
                 if modifiers_data:
                     for m in modifiers_data:
@@ -1056,7 +1055,16 @@ async def create_waiter_order(
             items=items_obj
         )
         session.add(order)
-        await session.flush()
+        await session.flush() # Отримуємо ID замовлення
+
+        # Створюємо OrderItems
+        for item_data in items_obj:
+            item_data.order_id = order.id
+            session.add(item_data)
+
+        await session.commit()
+        
+        await session.refresh(order, ['status'])
         
         session.add(OrderStatusHistory(order_id=order.id, status_id=status_id, actor_info=f"{employee.full_name} (PWA)"))
         await session.commit()

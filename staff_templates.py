@@ -17,7 +17,7 @@ STAFF_LOGIN_HTML = """
     <link rel="icon" type="image/png" href="/static/favicons/favicon-32x32.png">
 
     <style>
-        body { 
+        body {{ 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
             display: flex; 
             justify-content: center; 
@@ -25,32 +25,34 @@ STAFF_LOGIN_HTML = """
             height: 100vh; 
             margin: 0; 
             background: #f0f2f5; 
-        }
-        .login-card { 
+        }}
+        .login-card {{ 
             background: white; 
-            padding: 2rem; 
-            border-radius: 15px; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            padding: 2.5rem; 
+            border-radius: 20px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05); 
             width: 90%; 
-            max-width: 350px; 
+            max-width: 360px; 
             text-align: center; 
-        }
-        h2 { margin-top: 0; color: #333; margin-bottom: 1.5rem; }
-        input { 
+        }}
+        h2 {{ margin-top: 0; color: #333; margin-bottom: 1.5rem; font-weight: 700; }}
+        input {{ 
             width: 100%; 
-            padding: 14px; 
+            padding: 15px; 
             margin: 8px 0; 
             border: 1px solid #ddd; 
             border-radius: 12px; 
             box-sizing: border-box; 
             font-size: 16px; 
             background: #fafafa; 
+            transition: all 0.2s;
+            outline: none;
             -webkit-appearance: none; 
-        }
-        input:focus { border-color: #333; outline: none; background: #fff; }
-        button { 
+        }}
+        input:focus {{ border-color: #333; background: #fff; box-shadow: 0 0 0 3px rgba(0,0,0,0.05); }}
+        button {{ 
             width: 100%; 
-            padding: 14px; 
+            padding: 16px; 
             background: #333; 
             color: white; 
             border: none; 
@@ -58,16 +60,22 @@ STAFF_LOGIN_HTML = """
             font-size: 16px; 
             font-weight: 600; 
             cursor: pointer; 
-            margin-top: 15px; 
+            margin-top: 20px; 
             transition: background 0.2s; 
             -webkit-appearance: none; 
-        }
-        button:hover { background: #000; }
+        }}
+        button:hover {{ background: #000; }}
+        .error-msg {{
+            background: #fee2e2; color: #991b1b; padding: 12px; 
+            border-radius: 10px; margin-bottom: 20px; font-size: 0.9rem;
+            display: none; border: 1px solid #fecaca;
+        }}
     </style>
 </head>
 <body>
     <div class="login-card">
-        <h2>🔐 Вхід для персоналу</h2>
+        <h2>🔐 Staff Panel</h2>
+        <div id="error-box" class="error-msg">Невірний номер або пароль</div>
         <form action="/staff/login" method="post">
             <input type="tel" name="phone" placeholder="Номер телефону" required autocomplete="username">
             <input type="password" name="password" placeholder="Пароль" required autocomplete="current-password">
@@ -75,13 +83,19 @@ STAFF_LOGIN_HTML = """
         </form>
     </div>
     <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
+      // Показуємо помилку, якщо в URL є ?error=1
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.has('error')) {{
+          document.getElementById('error-box').style.display = 'block';
+      }}
+
+      if ('serviceWorker' in navigator) {{
+        window.addEventListener('load', () => {{
           navigator.serviceWorker.register('/sw.js')
             .then(reg => console.log('SW зареєстровано:', reg.scope))
             .catch(err => console.log('SW помилка:', err));
-        });
-      }
+        }});
+      }}
     </script>
 </body>
 </html>
@@ -377,40 +391,39 @@ STAFF_DASHBOARD_HTML = """
             modal.classList.add('active');
             
             try {{
-                // ВИПРАВЛЕНО: Подвійні дужки ${{orderId}}
                 const res = await fetch(`/staff/api/order/${{orderId}}/details`);
                 if (res.status === 401) {{ window.location.href = "/staff/login"; return; }}
                 const data = await res.json();
                 if(data.error) {{ body.innerHTML = `<div style="text-align:center; padding:20px;"><h3>Помилка</h3><p>${{data.error}}</p></div>`; return; }}
                 
+                // --- GENERATE COURIER HTML ---
                 let courierHtml = "";
                 if (data.can_assign_courier && data.is_delivery) {{
                     let courierOptions = '<option value="0">Не призначено</option>';
                     if (data.couriers && data.couriers.length > 0) {{
                         data.couriers.forEach(c => {{
-                            // ВИПРАВЛЕНО: Подвійні дужки ${{c.id}}, ${{c.selected ...}}, ${{c.name}}
                             courierOptions += `<option value="${{c.id}}" ${{c.selected ? 'selected' : ''}}>${{c.name}}</option>`;
                         }});
                     }} else courierOptions = '<option value="0" disabled>Немає кур\\'єрів на зміні</option>';
-                    // ВИПРАВЛЕНО: Подвійні дужки ${{courierOptions}}
+                    
                     courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
                 }}
 
                 if (!keepCart) {{
                     cart = {{}};
                     data.items.forEach(i => {{
-                        // ВИПРАВЛЕНО: Подвійні дужки ${{i.id}}, ${{Math.random()}}
                         const key = `exist_${{i.id}}_${{Math.random()}}`;
-                        cart[key] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price, modifiers: [] }}; 
+                        // Ensure modifiers are passed correctly
+                        cart[key] = {{ qty: i.qty, id: i.id, name: i.name, price: i.price, modifiers: i.modifiers || [] }}; 
                     }});
                 }}
 
-                renderEditCart(data.can_edit_items, data.statuses);
+                renderEditCart(data.can_edit_items, data.statuses, courierHtml);
                 
             }} catch (e) {{ body.innerHTML = "Помилка: " + e.message; }}
         }}
 
-        function renderEditCart(canEdit, statuses) {{
+        function renderEditCart(canEdit, statuses, courierHtml = "") {{
             const body = document.getElementById('modal-body');
             let itemsHtml = `<div class="edit-list">`;
             const currentItems = Object.values(cart);
@@ -419,7 +432,6 @@ STAFF_DASHBOARD_HTML = """
             if (currentItems.length > 0) {{
                 Object.entries(cart).forEach(([key, item]) => {{
                     currentTotal += (item.price * item.qty);
-                    // ВИПРАВЛЕНО: Подвійні дужки ${{key}}, ${{item.qty}}, ${{item.name}}, ${{item.price.toFixed(2)}}
                     const controls = canEdit ? `
                         <div class="qty-ctrl-sm">
                             <button class="qty-btn-sm" onclick="updateCartItemQty('${{key}}', -1, true)">-</button>
@@ -434,18 +446,12 @@ STAFF_DASHBOARD_HTML = """
             
             let statusOptions = "";
             statuses.forEach(s => {{
-                // ВИПРАВЛЕНО: Подвійні дужки ${{s.id}}, ${{s.selected ...}}, ${{s.is_completed}}, ${{s.name}}
                 statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
             }});
             
             const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
-            // ВИПРАВЛЕНО: Подвійні дужки ${{currentTotal.toFixed(2)}}
             const saveBtn = canEdit ? `<button class="big-btn" onclick="saveOrderChanges()">💾 Зберегти склад (~${{currentTotal.toFixed(2)}} грн)</button>` : '';
 
-            const courierDiv = body.querySelector('div[style*="background:#e3f2fd"]');
-            const courierHtml = courierDiv ? courierDiv.outerHTML : '';
-
-            // ВИПРАВЛЕНО: Подвійні дужки для всіх JS змінних у template literals
             body.innerHTML = `
                 <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{editingOrderId}}</h3>
                 ${{courierHtml}}
@@ -465,8 +471,6 @@ STAFF_DASHBOARD_HTML = """
         async function assignCourier(courierId) {{
             if(!confirm("Змінити кур'єра?")) return;
             try {{
-                // ВИПРАВЛЕНО: Подвійні дужки в JSON об'єкті всередині .format() не потрібні, якщо вони не є частиною рядка форматування, 
-                // але оскільки це JS код всередині Python рядка, то для Python дужки JSON об'єкта треба подвоїти!
                 const res = await fetch('/staff/api/order/assign_courier', {{
                     method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ orderId: editingOrderId, courierId: courierId }})
@@ -482,7 +486,6 @@ STAFF_DASHBOARD_HTML = """
                 cart[key].qty += delta;
                 if (cart[key].qty <= 0) delete cart[key];
                 
-                // ВИПРАВЛЕНО: Подвійні дужки для блоків if/else
                 if(isEditing) {{
                     openOrderEditModal(editingOrderId, true); 
                 }} else {{
@@ -517,7 +520,6 @@ STAFF_DASHBOARD_HTML = """
         }}
 
         async function updateStatusAPI(statusId, paymentMethod) {{
-            // ВИПРАВЛЕНО: Подвійні дужки для JSON об'єкта
             const res = await fetch('/staff/api/order/update_status', {{
                 method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, statusId: statusId, paymentMethod: paymentMethod }})
@@ -529,7 +531,6 @@ STAFF_DASHBOARD_HTML = """
 
         async function saveOrderChanges() {{
             const items = Object.values(cart);
-            // ВИПРАВЛЕНО: Подвійні дужки для JSON об'єкта
             const res = await fetch('/staff/api/order/update_items', {{
                 method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ orderId: editingOrderId, items: items }})
@@ -555,12 +556,10 @@ STAFF_DASHBOARD_HTML = """
         function renderProductList(filterText = "", isEditing = false) {{
             const body = document.getElementById('modal-body');
             const lowerFilter = filterText.toLowerCase();
-            // ВИПРАВЛЕНО: Подвійні дужки ${{editingOrderId}}, ${{currentTableId}}, ${{document...}}
             let backFn = isEditing ? `openOrderEditModal(${{editingOrderId}}, true)` : `openTableModal(${{currentTableId}}, '${{document.getElementById('modal-title')?.innerText || ''}}')`; 
             
             if(!isEditing) backFn = `renderNewOrderMenu()`; 
 
-            // ВИПРАВЛЕНО: Подвійні дужки ${{backFn}}, ${{isEditing ? ...}}
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
                     <h3 style="margin:0;">${{isEditing ? 'Додати страву' : 'Нове замовлення'}}</h3>
@@ -574,11 +573,9 @@ STAFF_DASHBOARD_HTML = """
                 const filteredProds = cat.products.filter(p => p.name.toLowerCase().includes(lowerFilter));
                 if (filteredProds.length > 0) {{
                     hasItems = true;
-                    // ВИПРАВЛЕНО: Подвійні дужки ${{cat.name}}
                     html += `<div style="background:#eee; padding:8px 12px; font-weight:bold; font-size:0.9rem; position:sticky; top:0;">${{cat.name}}</div>`;
                     filteredProds.forEach(p => {{
                         const pData = JSON.stringify(p).replace(/"/g, '&quot;');
-                        // ВИПРАВЛЕНО: Подвійні дужки ${{p.name}}, ${{p.price}}, ${{pData}}, ${{isEditing}}
                         html += `
                         <div class="edit-item">
                             <div style="flex-grow:1;">${{p.name}} <small>(${{p.price}} грн)</small></div>
@@ -590,20 +587,16 @@ STAFF_DASHBOARD_HTML = """
             if(!hasItems) html += `<div style="padding:20px; text-align:center; color:#999;">Нічого не знайдено</div>`;
             html += `</div>`;
             
-            // ВИПРАВЛЕНО: Подвійні дужки для if
             if(!isEditing) {{
                  const count = Object.keys(cart).length;
                  const total = Object.values(cart).reduce((sum, i) => sum + i.price * i.qty, 0);
-                 // ВИПРАВЛЕНО: Подвійні дужки для if
                  if (count > 0) {{
-                     // ВИПРАВЛЕНО: Подвійні дужки ${{count}}, ${{total}}
                      html += `<button class="big-btn" onclick="submitNewOrder()">✅ Замовити (${{count}} поз. - ${{total}} грн)</button>`;
                  }}
             }}
 
             body.innerHTML = html;
             const input = document.getElementById('search-input');
-            // ВИПРАВЛЕНО: Подвійні дужки для if
             if(input) {{ input.focus(); input.value = ''; input.value = filterText; }}
         }}
 
@@ -626,7 +619,6 @@ STAFF_DASHBOARD_HTML = """
             let modListHtml = `<div class="mod-list" style="overflow-y:auto; max-height:300px; margin:10px 0;">`;
             
             product.modifiers.forEach(mod => {{
-                // ВИПРАВЛЕНО: Подвійні дужки ${{mod.id}}, ${{mod.name}}, ${{mod.price}}
                 modListHtml += `
                 <div class="mod-item" onclick="toggleStaffMod(${{mod.id}}, this)">
                     <div class="mod-info">
@@ -637,7 +629,6 @@ STAFF_DASHBOARD_HTML = """
             }});
             modListHtml += `</div>`;
             
-            // ВИПРАВЛЕНО: Подвійні дужки ${{product.name}}, ${{product.price}}, ${{isEditing}}, ${{isEditing}}
             body.innerHTML = `
                 <h3 style="text-align:center; margin-top:0;">${{product.name}}</h3>
                 <p style="text-align:center; color:#666;">Оберіть добавки:</p>
@@ -679,7 +670,6 @@ STAFF_DASHBOARD_HTML = """
 
         function addToCart(product, modifiers, isEditing) {{
             const modIds = modifiers.map(m => m.id).sort().join('-');
-            // ВИПРАВЛЕНО: Подвійні дужки ${{product.id}}, ${{modIds}}
             const key = `${{product.id}}-${{modIds}}`;
             
             if (cart[key]) {{
@@ -714,7 +704,6 @@ STAFF_DASHBOARD_HTML = """
             currentTableId = tableId;
             cart = {{}};
             const modal = document.getElementById('staff-modal');
-            // ВИПРАВЛЕНО: Подвійні дужки ${{tableName}}
             document.getElementById('modal-body').innerHTML = `
                 <h3 style="text-align:center;">${{tableName}}</h3>
                 <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:15px;">
@@ -734,7 +723,6 @@ STAFF_DASHBOARD_HTML = """
             btn.innerText = "Створення...";
             
             try {{
-                // ВИПРАВЛЕНО: Подвійні дужки в JSON
                 const res = await fetch('/staff/api/order/create', {{
                     method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ tableId: currentTableId, cart: items }})
@@ -752,7 +740,6 @@ STAFF_DASHBOARD_HTML = """
 
         function performAction(action, orderId, extra=null) {{
             if(action === 'chef_ready' && !confirm("Підтвердити готовність?")) return;
-            // ВИПРАВЛЕНО: Подвійні дужки в JSON
             fetch('/staff/api/action', {{
                 method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ action, orderId, extra }})
