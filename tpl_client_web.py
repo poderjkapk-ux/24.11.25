@@ -374,6 +374,35 @@ WEB_ORDER_HTML = """
       .detail-price {{ font-size: 1.5rem; color: var(--primary); font-weight: 800; margin-bottom: 20px; }}
       .detail-desc {{ color: #64748b; font-size: 1rem; line-height: 1.6; margin-bottom: 25px; }}
 
+      /* --- MODIFIERS IN MODAL (NEW) --- */
+      #detail-modifiers {{
+          margin-bottom: 30px;
+          border-top: 1px solid #f1f5f9;
+          padding-top: 15px;
+      }}
+      .mod-detail-item {{
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px 0;
+          border-bottom: 1px solid #f1f5f9;
+          cursor: pointer;
+      }}
+      .mod-detail-item label {{
+          display: flex;
+          align-items: center;
+          width: 100%;
+          cursor: pointer;
+      }}
+      .mod-detail-checkbox {{
+          width: 22px; height: 22px; 
+          margin-right: 15px; 
+          accent-color: var(--primary);
+          cursor: pointer;
+      }}
+      .mod-detail-name {{ font-weight: 600; font-size: 1rem; color: var(--text-main); flex-grow: 1; }}
+      .mod-detail-price {{ font-weight: 700; color: var(--primary); font-size: 0.95rem; }}
+
       /* --- CHECKOUT FORM --- */
       .form-group {{ margin-bottom: 22px; }}
       .form-group label {{ display: block; margin-bottom: 8px; font-weight: 700; font-size: 0.9rem; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; }}
@@ -398,19 +427,6 @@ WEB_ORDER_HTML = """
       }}
       .radio-group label i {{ font-size: 1.4rem; margin-bottom: 2px; }}
 
-      /* --- MODIFIERS --- */
-      .modifier-item {{
-          display: flex; justify-content: space-between; align-items: center;
-          padding: 14px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer;
-      }}
-      .checkbox-circle {{
-          width: 24px; height: 24px; border: 2px solid #cbd5e1; border-radius: 8px;
-          display: flex; align-items: center; justify-content: center; margin-right: 15px;
-          transition: all 0.2s;
-      }}
-      .modifier-item.selected .checkbox-circle {{ border-color: var(--primary); background: var(--primary); }}
-      .modifier-item.selected .checkbox-circle::after {{ content: '✓'; color: white; font-size: 14px; font-weight: 900; }}
-
       /* --- FOOTER --- */
       footer {{ 
           background: var(--footer-bg); color: var(--footer-text); 
@@ -431,7 +447,6 @@ WEB_ORDER_HTML = """
       .footer-link:hover {{ opacity: 1; }}
       .footer-link i {{ width: 20px; text-align: center; }}
       
-      /* Socials Correction */
       .social-links {{ display: flex; gap: 15px; }}
       .social-links a {{ 
           display: flex; width: 45px; height: 45px; border-radius: 12px; 
@@ -449,7 +464,6 @@ WEB_ORDER_HTML = """
           border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; 
       }}
       
-      /* Modal Page Content Style */
       .page-content-body img {{ max-width: 100%; border-radius: 12px; margin: 10px 0; }}
       .page-content-body h1, .page-content-body h2 {{ color: var(--primary); margin-top: 15px; }}
     </style>
@@ -507,23 +521,10 @@ WEB_ORDER_HTML = """
             <div class="detail-price" id="detail-price"></div>
             <div class="detail-desc" id="detail-desc"></div>
             
+            <div id="detail-modifiers"></div>
+            
             <button id="detail-add-btn" class="main-btn">
                 <span>В кошик</span> <i class="fa-solid fa-plus"></i>
-            </button>
-        </div>
-    </div>
-
-    <div id="modifier-modal" class="modal-overlay">
-        <div class="modal-content">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px; padding-bottom: 15px; border-bottom: 1px solid #f1f5f9;">
-                <h3 id="mod-product-name" style="font-size:1.4rem; margin:0;">Назва</h3>
-                <span class="close-modal" style="font-size:1.8rem; cursor:pointer; color:#cbd5e1;">&times;</span>
-            </div>
-            <p style="color:#64748b; margin-bottom:20px; font-size:1rem; font-weight: 500;">Додайте інгредієнти:</p>
-            <div id="mod-list" style="margin-bottom: 30px;"></div>
-            <button id="mod-add-btn" class="main-btn">
-                <span>Додати</span>
-                <span id="mod-total-price" style="background:rgba(255,255,255,0.25); padding:4px 10px; border-radius:8px; font-size:0.95rem; margin-left:auto;"></span>
             </button>
         </div>
     </div>
@@ -627,8 +628,8 @@ WEB_ORDER_HTML = """
         document.addEventListener('DOMContentLoaded', () => {{
             let cart = JSON.parse(localStorage.getItem('webCart') || '{{}}');
             let menuData = null;
-            let currentProd = null;
-            let selectedMods = new Set();
+            // Для модального окна деталей
+            let currentDetailProduct = null;
 
             // DOM Elements
             const menuContainer = document.getElementById('menu');
@@ -644,6 +645,7 @@ WEB_ORDER_HTML = """
             const detailName = document.getElementById('detail-name');
             const detailPrice = document.getElementById('detail-price');
             const detailDesc = document.getElementById('detail-desc');
+            const detailModifiers = document.getElementById('detail-modifiers');
             const detailAddBtn = document.getElementById('detail-add-btn');
 
             fetchMenu();
@@ -688,6 +690,7 @@ WEB_ORDER_HTML = """
                             const img = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
                             const prodJson = JSON.stringify(prod).replace(/"/g, '&quot;');
                             
+                            // Клик по карточке открывает детали
                             card.onclick = (e) => {{
                                 if(!e.target.closest('.add-btn')) openProductDetails(prod);
                             }};
@@ -701,7 +704,7 @@ WEB_ORDER_HTML = """
                                     </div>
                                     <div class="product-footer">
                                         <div class="product-price">${{prod.price}} грн</div>
-                                        <button class="add-btn" data-product="${{prodJson}}" onclick="handleAddClick(this)">
+                                        <button class="add-btn" data-product="${{prodJson}}" onclick="event.stopPropagation(); handleAddClick(this)">
                                             <span>Додати</span> <i class="fa-solid fa-plus"></i>
                                         </button>
                                     </div>
@@ -716,41 +719,93 @@ WEB_ORDER_HTML = """
                 setupScrollSpy();
             }}
 
+            // Логика клика по кнопке "Добавить" в списке
             window.handleAddClick = (btn) => {{
                 const prod = JSON.parse(btn.dataset.product);
                 
-                const originalHTML = btn.innerHTML;
-                btn.classList.add('added');
-                btn.innerHTML = '<i class="fa-solid fa-check"></i>';
-                
-                setTimeout(() => {{ 
-                    btn.classList.remove('added'); 
-                    btn.innerHTML = originalHTML;
-                }}, 1000);
-
-                if (prod.modifiers && prod.modifiers.length > 0) openModModal(prod);
-                else addToCart(prod, []);
+                // Если у товара есть модификаторы, обязательно открываем карточку
+                if (prod.modifiers && prod.modifiers.length > 0) {{
+                    openProductDetails(prod);
+                }} else {{
+                    // Анимация кнопки
+                    const originalHTML = btn.innerHTML;
+                    btn.classList.add('added');
+                    btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+                    setTimeout(() => {{ 
+                        btn.classList.remove('added'); 
+                        btn.innerHTML = originalHTML;
+                    }}, 1000);
+                    
+                    addToCart(prod, []);
+                }}
             }};
 
-            // Product Details Modal Logic
+            // Логика открытия модального окна товара
             function openProductDetails(prod) {{
+                currentDetailProduct = prod;
                 detailImg.src = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
                 detailName.textContent = prod.name;
-                detailPrice.textContent = prod.price + ' грн';
                 detailDesc.textContent = prod.description || 'Немає опису';
                 
+                // Очистка и генерация модификаторов
+                detailModifiers.innerHTML = '';
+                
+                if (prod.modifiers && prod.modifiers.length > 0) {{
+                    const title = document.createElement('p');
+                    title.textContent = "Добавки:";
+                    title.style.cssText = "font-weight:600; color:#64748b; margin-bottom:10px;";
+                    detailModifiers.appendChild(title);
+
+                    prod.modifiers.forEach(mod => {{
+                        const div = document.createElement('div');
+                        div.className = 'mod-detail-item';
+                        div.innerHTML = `
+                            <label>
+                                <input type="checkbox" class="mod-detail-checkbox" value="${{mod.id}}" data-price="${{mod.price}}" data-name="${{mod.name}}" onchange="updateDetailPrice()">
+                                <span class="mod-detail-name">${{mod.name}}</span>
+                                <span class="mod-detail-price">+${{mod.price}} грн</span>
+                            </label>
+                        `;
+                        detailModifiers.appendChild(div);
+                    }});
+                }}
+                
+                updateDetailPrice(); // Установить начальную цену
+                
+                // Клик по кнопке "В корзину" внутри модалки
                 detailAddBtn.onclick = () => {{
-                    if (prod.modifiers && prod.modifiers.length > 0) {{
-                        productModal.classList.remove('visible');
-                        setTimeout(() => openModModal(prod), 300);
-                    }} else {{
-                        addToCart(prod, []);
-                        productModal.classList.remove('visible');
-                    }}
+                    const selectedMods = [];
+                    // Собираем выбранные чекбоксы
+                    detailModifiers.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => {{
+                        selectedMods.push({{
+                            id: parseInt(cb.value),
+                            name: cb.dataset.name,
+                            price: parseFloat(cb.dataset.price)
+                        }});
+                    }});
+                    
+                    addToCart(currentDetailProduct, selectedMods);
+                    productModal.classList.remove('visible');
                 }};
                 
                 productModal.classList.add('visible');
             }}
+            
+            // Функция обновления цены в модальном окне при выборе модификаторов
+            window.updateDetailPrice = () => {{
+                if (!currentDetailProduct) return;
+                let price = currentDetailProduct.price;
+                
+                const checkedBoxes = detailModifiers.querySelectorAll('.mod-detail-checkbox:checked');
+                checkedBoxes.forEach(cb => {{
+                    price += parseFloat(cb.dataset.price);
+                }});
+                
+                detailPrice.textContent = price.toFixed(2) + ' грн';
+                // Обновляем текст на кнопке для наглядности
+                const btnSpan = detailAddBtn.querySelector('span');
+                if(btnSpan) btnSpan.textContent = `В кошик за ${{price.toFixed(2)}} грн`;
+            }};
 
             function addToCart(prod, mods) {{
                 const modIds = mods.map(m => m.id).sort().join('-');
@@ -822,54 +877,6 @@ WEB_ORDER_HTML = """
             }};
 
             function saveCart() {{ localStorage.setItem('webCart', JSON.stringify(cart)); }}
-
-            // Modals
-            const modModal = document.getElementById('modifier-modal');
-            const modList = document.getElementById('mod-list');
-            
-            function openModModal(prod) {{
-                currentProd = prod;
-                selectedMods.clear();
-                document.getElementById('mod-product-name').textContent = prod.name;
-                modList.innerHTML = '';
-                
-                prod.modifiers.forEach(mod => {{
-                    const div = document.createElement('div');
-                    div.className = 'modifier-item';
-                    div.onclick = () => {{
-                        toggleMod(mod.id); 
-                        div.classList.toggle('selected', selectedMods.has(mod.id));
-                    }};
-                    div.innerHTML = `
-                        <div style="display:flex; align-items:center;">
-                            <div class="checkbox-circle"></div>
-                            <span style="font-weight:600; font-size:1rem; color:#334155;">${{mod.name}}</span>
-                        </div>
-                        <b style="color:var(--primary); font-size:0.95rem;">+${{mod.price}}</b>
-                    `;
-                    modList.appendChild(div);
-                }});
-                updateModPrice();
-                modModal.classList.add('visible');
-            }}
-            
-            function toggleMod(id) {{
-                if (selectedMods.has(id)) selectedMods.delete(id);
-                else selectedMods.add(id);
-                updateModPrice();
-            }}
-            
-            function updateModPrice() {{
-                let p = currentProd.price;
-                currentProd.modifiers.forEach(m => {{ if(selectedMods.has(m.id)) p += m.price; }});
-                document.getElementById('mod-total-price').textContent = p.toFixed(2) + ' грн';
-            }}
-            
-            document.getElementById('mod-add-btn').onclick = () => {{
-                const mods = currentProd.modifiers.filter(m => selectedMods.has(m.id));
-                addToCart(currentProd, mods);
-                modModal.classList.remove('visible');
-            }};
 
             // Checkout
             const checkoutModal = document.getElementById('checkout-modal');
@@ -954,7 +961,6 @@ WEB_ORDER_HTML = """
 
             // Page Modal Logic
             const pageModal = document.getElementById('page-modal');
-            // Event delegation for dynamically added links
             document.body.addEventListener('click', async (e) => {{
                 const link = e.target.closest('.menu-popup-trigger');
                 if (link) {{
