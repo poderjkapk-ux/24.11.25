@@ -14,7 +14,8 @@ from aiogram import Bot, html as aiogram_html
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
 from urllib.parse import quote_plus as url_quote_plus
 
-from models import Table, Product, Category, Order, Settings, Employee, OrderStatusHistory, OrderStatus, OrderItem
+# Added MenuItem to imports
+from models import Table, Product, Category, Order, Settings, Employee, OrderStatusHistory, OrderStatus, OrderItem, MenuItem
 from dependencies import get_db_session
 from templates import IN_HOUSE_MENU_HTML_TEMPLATE
 from notification_manager import distribute_order_to_production, create_staff_notification
@@ -153,6 +154,17 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     
     social_links_html = "".join(social_links)
 
+    # --- FIX: Отримуємо сторінки меню для футера ---
+    menu_items_res = await session.execute(
+        select(MenuItem).where(MenuItem.show_on_website == True).order_by(MenuItem.sort_order)
+    )
+    menu_items = menu_items_res.scalars().all()
+    
+    menu_links_html = "".join(
+        [f'<a href="#" class="footer-link menu-popup-trigger" data-item-id="{item.id}"><i class="fa-solid fa-file-lines"></i> <span>{html_module.escape(item.title)}</span></a>' for item in menu_items]
+    )
+    # -----------------------------------------------
+
     return HTMLResponse(content=IN_HOUSE_MENU_HTML_TEMPLATE.format(
         table_name=html_module.escape(table.name),
         table_id=table.id,
@@ -189,7 +201,8 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         footer_address=html_module.escape(settings.footer_address or "Адреса не вказана"),
         footer_phone=html_module.escape(settings.footer_phone or ""),
         working_hours=html_module.escape(settings.working_hours or ""),
-        social_links_html=social_links_html
+        social_links_html=social_links_html,
+        menu_links_html=menu_links_html # <-- Passed to template
     ))
 
 # --- ЕНДПОІНТ ДЛЯ АВТООНОВЛЕННЯ (POLLING) ---
