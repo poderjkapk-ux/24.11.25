@@ -17,6 +17,8 @@ from dependencies import get_db_session, check_credentials
 from templates import ADMIN_HTML_TEMPLATE
 from inventory_service import apply_doc_stock_changes
 from cash_service import add_shift_transaction, get_any_open_shift
+# Імпорт константи навігації (переконайтеся, що вона є в tpl_admin_panels.py)
+from tpl_admin_panels import ADMIN_INVENTORY_TABS 
 
 router = APIRouter(prefix="/admin/inventory", tags=["inventory"])
 
@@ -81,7 +83,8 @@ def get_nav(active_tab):
         "modifiers": {"icon": "fa-layer-group", "label": "Модифікатори"},
         "stock": {"icon": "fa-boxes-stacked", "label": "Залишки"},
         "docs": {"icon": "fa-file-invoice", "label": "Накладні"},
-        "tech_cards": {"icon": "fa-book-open", "label": "Техкарти"}
+        "tech_cards": {"icon": "fa-book-open", "label": "Техкарти"},
+        "reports/usage": {"icon": "fa-chart-line", "label": "Рух (Звіт)"}
     }
     html = f"{INVENTORY_STYLES}<div class='inv-nav'>"
     for k, v in tabs.items():
@@ -808,3 +811,122 @@ async def del_tc_comp(item_id: int, session: AsyncSession = Depends(get_db_sessi
     await session.delete(item)
     await session.commit()
     return RedirectResponse(f"/admin/inventory/tech_cards/{tc_id}", 303)
+
+# --- ЗВІТ ПО РУХУ ІНГРЕДІЄНТА ---
+@router.get("/reports/usage", response_class=HTMLResponse)
+async def inventory_usage_report(
+    ingredient_id: int = Query(None),
+    date_from: str = Query(None),
+    date_to: str = Query(None),
+    session: AsyncSession = Depends(get_db_session),
+    user=Depends(check_credentials)
+):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    # Список інгредієнтів для фільтру
+    ingredients = (await session.execute(select(Ingredient).order_by(Ingredient.name))).scalars().all()
+    ing_options = "".join([f'<option value="{i.id}" {"selected" if ingredient_id == i.id else ""}>{html.escape(i.name)}</option>' for i in ingredients])
+    
+    report_rows = ""
+    
+    if ingredient_id:
+        # Запит: Позиції накладних для обраного інгредієнта
+        # ВИПРАВЛЕНО: Прибрано .joinedload(InventoryDoc.linked_order_id), оскільки це колонка
+        query = select(InventoryDocItem).join(InventoryDoc).options(
+            joinedload(InventoryDocItem.doc)
+        ).where(
+            InventoryDocItem.ingredient_id == ingredient_id, 
+            InventoryDoc.is_processed == True
+        )
+        
+        # Фільтр по датах
+        if date_from:
+            dt_from = datetime.strptime(date_from, "%Y-%m-%d")
+            query = query.where(InventoryDoc.created_at >= dt_from)
+        if date_to:
+            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            query = query.where(InventoryDoc.created_at <= dt_to)
+            
+        query = query.order_by(desc(InventoryDoc.created_at))
+        
+        items = (await session.execute(query)).scalars().all()
+        
+        for item in items:
+            doc = item.doc
+            
+            # Переклад типів операцій та кольори
+            type_map = {
+                'supply': ('📥 Прихід', 'green'),
+                'writeoff': ('🗑️ Списання', 'red'),
+                'deduction': ('🤖 Авто-списання', 'gray'),
+                'transfer': ('🔄 Переміщення', 'blue'),
+                'return': ('♻️ Повернення', 'orange')
+            }
+            type_label, color = type_map.get(doc.doc_type, (doc.doc_type, 'black'))
+            
+            # Деталі (посилання на замовлення, якщо є)
+            details = html.escape(doc.comment or '-')
+            if doc.linked_order_id:
+                details = f"<a href='/admin/order/manage/{doc.linked_order_id}'>Замовлення #{doc.linked_order_id}</a>"
+                
+            qty_formatted = f"{item.quantity:.3f}"
+            # Візуально показуємо мінус для видаткових операцій
+            if doc.doc_type in ['writeoff', 'deduction', 'transfer']:
+                 if doc.doc_type == 'transfer' and not doc.source_warehouse_id: pass
+                 else: qty_formatted = f"-{qty_formatted}"
+            
+            report_rows += f"""
+            <tr>
+                <td>{doc.created_at.strftime('%d.%m.%Y %H:%M')}</td>
+                <td style="color:{color}; font-weight:bold;">{type_label}</td>
+                <td>{qty_formatted}</td>
+                <td>{item.price:.2f}</td>
+                <td>{details}</td>
+            </tr>
+            """
+    
+    body = f"""
+    {get_nav('reports/usage')}
+    <div class="card">
+        <h2 style="margin-bottom:20px;"><i class="fa-solid fa-chart-line"></i> Історія руху товару</h2>
+        
+        <form action="/admin/inventory/reports/usage" method="get" class="search-form" style="background: #f8fafc; padding: 20px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+            <div style="display:flex; gap:15px; flex-wrap:wrap; align-items:flex-end;">
+                <div style="flex:1; min-width:200px;">
+                    <label style="display:block; margin-bottom:5px; font-weight:bold;">Інгредієнт:</label>
+                    <select name="ingredient_id" required style="width:100%; padding:10px; border-radius:6px; border:1px solid #ccc;">
+                        <option value="">-- Оберіть товар --</option>
+                        {ing_options}
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom:5px; font-weight:bold;">З:</label>
+                    <input type="date" name="date_from" value="{date_from or ''}" style="padding:9px; border-radius:6px; border:1px solid #ccc;">
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom:5px; font-weight:bold;">По:</label>
+                    <input type="date" name="date_to" value="{date_to or ''}" style="padding:9px; border-radius:6px; border:1px solid #ccc;">
+                </div>
+                <button type="submit" class="button" style="height:42px;"><i class="fa-solid fa-filter"></i> Показати</button>
+            </div>
+        </form>
+        
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead>
+                    <tr>
+                        <th>Дата/Час</th>
+                        <th>Операція</th>
+                        <th>Кількість</th>
+                        <th>Ціна (обл.)</th>
+                        <th>Деталі / Замовлення</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {report_rows or "<tr><td colspan='5' style='text-align:center; padding:30px; color:#999;'>Дані відсутні. Оберіть товар та період.</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Звіт по руху", body=body, site_title=settings.site_title, **get_active_classes()))
