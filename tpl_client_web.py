@@ -34,20 +34,22 @@ WEB_ORDER_HTML = """
         
         /* --- System Colors & Shadows --- */
         --surface: #ffffff;
-        --surface-glass: rgba(255, 255, 255, 0.85);
-        --border-light: rgba(0, 0, 0, 0.06);
+        --surface-glass: rgba(255, 255, 255, 0.95);
+        --border-light: rgba(0, 0, 0, 0.08);
         
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.04);
-        --shadow-md: 0 8px 24px rgba(0,0,0,0.08);
-        --shadow-lg: 0 15px 40px rgba(0,0,0,0.12);
+        --shadow-sm: 0 4px 12px rgba(0,0,0,0.05);
+        --shadow-md: 0 12px 30px rgba(0,0,0,0.08);
+        --shadow-lg: 0 20px 60px rgba(0,0,0,0.15);
+        --shadow-float: 0 15px 35px rgba(0,0,0,0.2);
         
         /* --- Geometry --- */
-        --radius-lg: 20px;
-        --radius-md: 14px;
-        --radius-sm: 8px;
+        --radius-lg: 24px;
+        --radius-md: 16px;
+        --radius-sm: 10px;
         
         /* --- Animation --- */
         --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+        --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
         
         /* --- Fonts --- */
         --font-sans: '{font_family_sans_val}', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -60,30 +62,30 @@ WEB_ORDER_HTML = """
       body {{
         margin: 0;
         background-color: var(--bg-color);
-        /* Subtle Mesh Gradient */
         background-image: 
-            radial-gradient(at 0% 0%, color-mix(in srgb, var(--primary), transparent 96%), transparent 50%),
-            radial-gradient(at 100% 100%, color-mix(in srgb, var(--secondary), transparent 96%), transparent 50%);
+            radial-gradient(at 0% 0%, color-mix(in srgb, var(--primary), transparent 97%), transparent 60%),
+            radial-gradient(at 100% 100%, color-mix(in srgb, var(--secondary), transparent 97%), transparent 60%);
         background-attachment: fixed;
         color: var(--text-main);
         font-family: var(--font-sans);
         display: flex; flex-direction: column; min-height: 100vh;
         -webkit-font-smoothing: antialiased;
         font-size: 15px;
+        line-height: 1.5;
       }}
 
-      h1, h2, h3, .serif {{ font-family: var(--font-serif); margin: 0; }}
-      button, input {{ font-family: var(--font-sans); }}
+      h1, h2, h3, h4, .serif {{ font-family: var(--font-serif); margin: 0; color: var(--text-main); }}
+      button, input, textarea, select {{ font-family: var(--font-sans); }}
 
       /* --- PREMIUM HEADER --- */
       header {{
           position: relative;
-          height: 40vh; min-height: 300px; max-height: 450px;
+          height: 45vh; min-height: 350px; max-height: 500px;
           display: flex; flex-direction: column; align-items: center; justify-content: center;
           text-align: center; color: white;
-          border-radius: 0 0 40px 40px;
+          border-radius: 0 0 50px 50px;
           overflow: hidden;
-          box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+          box-shadow: 0 10px 50px rgba(0,0,0,0.15);
           margin-bottom: 20px;
       }}
       .header-bg {{
@@ -95,66 +97,79 @@ WEB_ORDER_HTML = """
       header:hover .header-bg {{ transform: scale(1.05); }}
       header::after {{
           content: ''; position: absolute; inset: 0;
-          background: linear-gradient(to bottom, rgba(0,0,0,0.2), rgba(0,0,0,0.6));
+          background: linear-gradient(to bottom, rgba(0,0,0,0.3), rgba(0,0,0,0.7));
           z-index: 1;
+          backdrop-filter: blur(1px);
       }}
       
-      .header-content {{ position: relative; z-index: 2; width: 90%; max-width: 800px; animation: fadeUp 0.8s var(--ease-out); }}
+      .header-content {{ position: relative; z-index: 2; width: 90%; max-width: 800px; animation: fadeUp 1s var(--ease-out); }}
       .header-logo {{ 
-          height: 100px; width: auto; margin-bottom: 15px; 
-          filter: drop-shadow(0 8px 20px rgba(0,0,0,0.25)); 
+          height: 110px; width: auto; margin-bottom: 20px; 
+          filter: drop-shadow(0 10px 25px rgba(0,0,0,0.3));
+          transition: transform 0.3s ease;
       }}
+      .header-logo:hover {{ transform: scale(1.05) rotate(-2deg); }}
       header h1 {{ 
-          font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; 
-          text-shadow: 0 4px 20px rgba(0,0,0,0.3); line-height: 1.1;
+          font-size: clamp(2.2rem, 6vw, 4rem); font-weight: 700; 
+          text-shadow: 0 4px 25px rgba(0,0,0,0.4); line-height: 1.1; letter-spacing: -0.02em;
       }}
 
       /* --- NAVIGATION --- */
       .category-nav-wrapper {{
           position: sticky; top: 15px; z-index: 90;
           display: flex; justify-content: center;
-          padding: 0 15px; margin-bottom: 30px;
+          padding: 0 15px; margin-bottom: 40px;
       }}
       .category-nav {{
-          display: flex; gap: 6px; overflow-x: auto; 
-          padding: 6px; border-radius: 100px;
-          background: rgba(255, 255, 255, 0.8); 
+          display: flex; gap: 8px; overflow-x: auto; 
+          padding: 8px; border-radius: 100px;
+          background: rgba(255, 255, 255, 0.9); 
           backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px);
-          border: 1px solid rgba(255,255,255,0.5);
+          border: 1px solid rgba(255,255,255,0.6);
           box-shadow: var(--shadow-md);
           scrollbar-width: none; max-width: 100%;
       }}
       .category-nav::-webkit-scrollbar {{ display: none; }}
       
       .category-nav a {{
-          color: var(--nav-text); text-decoration: none; padding: 8px 20px; 
-          border-radius: 50px; font-weight: 600; white-space: nowrap; font-size: 0.9rem;
-          transition: all 0.3s var(--ease-out);
+          color: var(--nav-text); text-decoration: none; padding: 10px 24px; 
+          border-radius: 50px; font-weight: 600; white-space: nowrap; font-size: 0.95rem;
+          transition: all 0.3s var(--ease-out); border: 1px solid transparent;
       }}
       .category-nav a:hover {{ background: rgba(0,0,0,0.05); }}
       .category-nav a.active {{ 
           background: var(--primary); color: white; 
           box-shadow: 0 4px 15px color-mix(in srgb, var(--primary), transparent 60%);
+          border-color: var(--primary);
       }}
 
       /* --- MAIN CONTENT --- */
-      .container {{ max-width: 1200px; margin: 0 auto; padding: 0 20px; }}
+      .container {{ max-width: 1280px; margin: 0 auto; padding: 0 25px; }}
       
-      .category-section {{ margin-bottom: 50px; scroll-margin-top: 100px; }}
+      .category-section {{ margin-bottom: 60px; scroll-margin-top: 120px; }}
       .category-title {{ 
-          font-size: 1.8rem; color: var(--text-main); margin-bottom: 20px; 
-          font-weight: 700; display: flex; align-items: center; gap: 15px;
+          font-size: 2rem; color: var(--text-main); margin-bottom: 30px; 
+          font-weight: 800; display: flex; align-items: center; gap: 20px;
+          letter-spacing: -0.03em;
       }}
       .category-title::after {{ 
-          content: ''; height: 1px; background: var(--secondary); flex-grow: 1; opacity: 0.6; 
+          content: ''; height: 2px; background: var(--secondary); flex-grow: 1; opacity: 0.3; border-radius: 2px;
       }}
 
-      /* --- PRODUCT GRID (Adaptive) --- */
+      /* --- PRODUCT GRID (PC Enhanced) --- */
       .products-grid {{ 
           display: grid; 
-          /* PC: 3-4 items, Mobile: 2 items (min 160px) */
-          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); 
-          gap: 24px; 
+          /* Mobile default */
+          grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); 
+          gap: 30px; 
+      }}
+      
+      /* PC Optimization: More columns */
+      @media (min-width: 1200px) {{
+          .products-grid {{ grid-template-columns: repeat(4, 1fr); }}
+      }}
+      @media (min-width: 1600px) {{
+          .products-grid {{ grid-template-columns: repeat(5, 1fr); }}
       }}
 
       /* --- PRODUCT CARD --- */
@@ -162,11 +177,13 @@ WEB_ORDER_HTML = """
           background: var(--surface); border-radius: var(--radius-md);
           overflow: hidden; display: flex; flex-direction: column;
           box-shadow: var(--shadow-sm); border: 1px solid var(--border-light);
-          transition: transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
-          height: 100%; position: relative;
+          transition: all 0.4s var(--ease-out);
+          height: 100%; position: relative; cursor: pointer;
       }}
       .product-card:hover {{ 
-          transform: translateY(-5px); box-shadow: var(--shadow-md); z-index: 2;
+          transform: translateY(-8px) scale(1.01); 
+          box-shadow: var(--shadow-lg); 
+          border-color: color-mix(in srgb, var(--primary), transparent 80%);
       }}
 
       .product-image-wrapper {{ 
@@ -175,48 +192,49 @@ WEB_ORDER_HTML = """
       }}
       .product-image {{ 
           width: 100%; height: 100%; object-fit: cover; 
-          transition: transform 0.5s var(--ease-out); 
+          transition: transform 0.6s var(--ease-out); 
       }}
-      .product-card:hover .product-image {{ transform: scale(1.08); }}
+      .product-card:hover .product-image {{ transform: scale(1.1); }}
 
       .product-info {{ 
-          padding: 16px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; 
+          padding: 20px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; 
       }}
+      .product-header {{ margin-bottom: 10px; }}
       .product-name {{ 
-          font-size: 1.1rem; font-weight: 700; margin: 0 0 6px; 
-          line-height: 1.25; color: var(--text-main);
+          font-size: 1.2rem; font-weight: 700; margin: 0 0 8px; 
+          line-height: 1.3; color: var(--text-main); letter-spacing: -0.01em;
       }}
       .product-desc {{ 
-          font-size: 0.85rem; color: #64748b; line-height: 1.5; margin-bottom: 12px; 
+          font-size: 0.9rem; color: #64748b; line-height: 1.5; margin-bottom: 15px; 
           display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
       }}
 
       .product-footer {{ 
           display: flex; justify-content: space-between; align-items: center; 
-          margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-light);
+          margin-top: auto; padding-top: 15px; border-top: 1px solid var(--border-light);
       }}
-      .product-price {{ font-size: 1.15rem; font-weight: 800; color: var(--text-main); }}
+      .product-price {{ font-size: 1.25rem; font-weight: 800; color: var(--text-main); }}
       
       .add-btn {{
           background: var(--primary); color: white; border: none;
-          padding: 8px 16px; border-radius: var(--radius-sm);
-          font-weight: 600; cursor: pointer; font-size: 0.9rem;
-          display: flex; align-items: center; gap: 6px;
-          transition: all 0.2s var(--ease-out);
+          padding: 10px 20px; border-radius: var(--radius-sm);
+          font-weight: 600; cursor: pointer; font-size: 0.95rem;
+          display: flex; align-items: center; gap: 8px;
+          transition: all 0.2s var(--ease-out); z-index: 2; position: relative;
       }}
-      .add-btn:hover {{ background: color-mix(in srgb, var(--primary), black 10%); transform: translateY(-1px); }}
+      .add-btn:hover {{ background: color-mix(in srgb, var(--primary), black 15%); transform: translateY(-2px); box-shadow: 0 4px 12px color-mix(in srgb, var(--primary), transparent 60%); }}
       .add-btn:active {{ transform: scale(0.95); }}
-      .add-btn i {{ font-size: 0.9rem; }}
 
-      /* --- MOBILE SPECIFIC OVERRIDES (Compact) --- */
+      /* --- MOBILE SPECIFIC OVERRIDES --- */
       @media (max-width: 768px) {{
-          header {{ height: 30vh; min-height: 220px; border-radius: 0 0 25px 25px; margin-bottom: 15px; }}
-          header h1 {{ font-size: 2rem; }}
-          .header-logo {{ height: 60px; margin-bottom: 10px; }}
+          header {{ height: 35vh; min-height: 260px; border-radius: 0 0 30px 30px; margin-bottom: 20px; }}
+          header h1 {{ font-size: 2.2rem; }}
+          .header-logo {{ height: 70px; margin-bottom: 15px; }}
           
-          .category-nav-wrapper {{ padding: 0 10px; top: 10px; margin-bottom: 20px; }}
-          .category-nav a {{ padding: 8px 16px; font-size: 0.85rem; }}
-          .category-title {{ font-size: 1.5rem; margin-bottom: 15px; }}
+          .category-nav-wrapper {{ padding: 0 10px; top: 10px; margin-bottom: 25px; }}
+          .category-nav {{ padding: 6px; gap: 5px; }}
+          .category-nav a {{ padding: 8px 18px; font-size: 0.85rem; }}
+          .category-title {{ font-size: 1.6rem; margin-bottom: 20px; }}
           
           /* Two columns on mobile */
           .products-grid {{ 
@@ -225,12 +243,13 @@ WEB_ORDER_HTML = """
           }}
           
           .product-info {{ padding: 12px; }}
-          .product-name {{ font-size: 0.95rem; margin-bottom: 4px; }}
+          .product-name {{ font-size: 1rem; margin-bottom: 6px; }}
           .product-desc {{ font-size: 0.75rem; margin-bottom: 10px; -webkit-line-clamp: 2; }}
-          .product-price {{ font-size: 1rem; }}
+          .product-price {{ font-size: 1.1rem; }}
+          .product-footer {{ padding-top: 10px; }}
           
           /* Icon only button on mobile to save space */
-          .add-btn {{ padding: 0; width: 32px; height: 32px; border-radius: 50%; justify-content: center; }}
+          .add-btn {{ padding: 0; width: 36px; height: 36px; border-radius: 50%; justify-content: center; }}
           .add-btn span {{ display: none; }}
           .add-btn i {{ font-size: 1rem; }}
           
@@ -240,173 +259,199 @@ WEB_ORDER_HTML = """
 
       /* --- FLOATING CART --- */
       #cart-toggle {{
-          position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px;
+          position: fixed; bottom: 30px; right: 30px; width: 70px; height: 70px;
           background: var(--primary); color: white; border-radius: 50%; border: none;
-          box-shadow: 0 12px 30px rgba(0,0,0,0.25); cursor: pointer; z-index: 99;
+          box-shadow: var(--shadow-float); cursor: pointer; z-index: 99;
           display: flex; justify-content: center; align-items: center; 
-          transition: transform 0.3s var(--ease-out);
+          transition: transform 0.3s var(--ease-bounce);
       }}
-      #cart-toggle:hover {{ transform: scale(1.1); }}
-      #cart-toggle i {{ font-size: 1.6rem; }}
+      #cart-toggle:hover {{ transform: scale(1.1) rotate(5deg); }}
+      #cart-toggle i {{ font-size: 1.8rem; }}
       #cart-count {{ 
-          position: absolute; top: 0; right: 0; background: white; color: var(--primary);
-          width: 24px; height: 24px; border-radius: 50%; font-size: 0.8rem; font-weight: 800; 
-          display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+          position: absolute; top: -2px; right: -2px; background: #ff3b30; color: white;
+          width: 26px; height: 26px; border-radius: 50%; font-size: 0.85rem; font-weight: 800; 
+          display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+          border: 2px solid white;
       }}
       
       @media (max-width: 768px) {{
-          #cart-toggle {{ width: 56px; height: 56px; bottom: 20px; right: 20px; }}
-          #cart-toggle i {{ font-size: 1.4rem; }}
+          #cart-toggle {{ width: 60px; height: 60px; bottom: 25px; right: 20px; }}
+          #cart-toggle i {{ font-size: 1.5rem; }}
       }}
 
       /* --- SIDEBAR (Cart) --- */
       #cart-sidebar {{
-          position: fixed; top: 0; right: -100%; width: 100%; max-width: 420px; height: 100%;
+          position: fixed; top: 0; right: -100%; width: 100%; max-width: 450px; height: 100%;
           z-index: 1000; display: flex; flex-direction: column;
-          transition: right 0.4s var(--ease-out);
-          box-shadow: -10px 0 40px rgba(0,0,0,0.15);
+          transition: right 0.5s var(--ease-out);
+          box-shadow: -10px 0 50px rgba(0,0,0,0.2);
       }}
       #cart-sidebar.open {{ right: 0; }}
       @media (max-width: 768px) {{ #cart-sidebar {{ max-width: 100%; }} }}
       
       .cart-content-wrapper {{
           height: 100%; display: flex; flex-direction: column;
-          background: rgba(255, 255, 255, 0.95); 
-          backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+          background: var(--surface-glass); 
+          backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
       }}
       
       .cart-header {{ 
-          padding: 20px 25px; display: flex; justify-content: space-between; align-items: center; 
-          background: rgba(255,255,255,0.6); border-bottom: 1px solid var(--border-light);
+          padding: 25px 30px; display: flex; justify-content: space-between; align-items: center; 
+          background: rgba(255,255,255,0.5); border-bottom: 1px solid var(--border-light);
       }}
-      .cart-header h3 {{ font-size: 1.3rem; font-weight: 700; }}
+      .cart-header h3 {{ font-size: 1.5rem; font-weight: 800; }}
       
-      .cart-items {{ flex-grow: 1; overflow-y: auto; padding: 20px; }}
+      .cart-items {{ flex-grow: 1; overflow-y: auto; padding: 25px; }}
       
       .cart-item {{ 
           display: flex; justify-content: space-between; align-items: center; 
-          margin-bottom: 15px; padding: 15px; background: white; 
-          border-radius: 12px; box-shadow: var(--shadow-sm);
-          animation: fadeUp 0.3s ease;
+          margin-bottom: 18px; padding: 18px; background: white; 
+          border-radius: 16px; box-shadow: var(--shadow-sm);
+          animation: fadeUp 0.3s ease; border: 1px solid transparent;
+          transition: border 0.2s;
       }}
+      .cart-item:hover {{ border-color: var(--primary); }}
       
-      .cart-item-info {{ flex-grow: 1; padding-right: 10px; }}
-      .cart-item-name {{ font-weight: 600; font-size: 0.95rem; display: block; margin-bottom: 4px; }}
-      .cart-item-mods {{ font-size: 0.8rem; color: #888; }}
-      .cart-item-price {{ color: var(--primary); font-weight: 700; font-size: 0.95rem; margin-top: 4px; display: block; }}
+      .cart-item-info {{ flex-grow: 1; padding-right: 15px; }}
+      .cart-item-name {{ font-weight: 700; font-size: 1rem; display: block; margin-bottom: 5px; }}
+      .cart-item-mods {{ font-size: 0.85rem; color: #888; display: block; }}
+      .cart-item-price {{ color: var(--primary); font-weight: 800; font-size: 1rem; margin-top: 6px; display: block; }}
       
-      .qty-control {{ display: flex; align-items: center; gap: 8px; background: #f8fafc; padding: 4px; border-radius: 8px; }}
+      .qty-control {{ display: flex; align-items: center; gap: 10px; background: #f1f5f9; padding: 5px; border-radius: 10px; }}
       .qty-btn {{ 
-          width: 28px; height: 28px; background: white; border-radius: 6px; border: 1px solid #eee; 
+          width: 32px; height: 32px; background: white; border-radius: 8px; border: none; 
           cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: 700;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: all 0.1s;
       }}
+      .qty-btn:active {{ transform: scale(0.9); }}
+      .qty-val {{ font-weight: 600; min-width: 20px; text-align: center; }}
       
-      .cart-footer {{ padding: 25px; background: white; box-shadow: 0 -5px 20px rgba(0,0,0,0.03); }}
-      .cart-total-row {{ display: flex; justify-content: space-between; font-size: 1.3rem; font-weight: 800; margin-bottom: 20px; }}
+      .cart-footer {{ padding: 30px; background: white; box-shadow: 0 -10px 40px rgba(0,0,0,0.05); }}
+      .cart-total-row {{ display: flex; justify-content: space-between; font-size: 1.4rem; font-weight: 800; margin-bottom: 25px; color: var(--text-main); }}
       
       .main-btn {{ 
-          width: 100%; padding: 16px; background: var(--primary); color: white; 
-          border: none; border-radius: var(--radius-md); font-size: 1.1rem; font-weight: 600; 
-          cursor: pointer; transition: all 0.2s; display: flex; justify-content: center; align-items: center; gap: 10px;
+          width: 100%; padding: 18px; background: var(--primary); color: white; 
+          border: none; border-radius: var(--radius-md); font-size: 1.1rem; font-weight: 700; 
+          cursor: pointer; transition: all 0.2s; display: flex; justify-content: center; align-items: center; gap: 12px;
+          box-shadow: 0 8px 20px color-mix(in srgb, var(--primary), transparent 60%);
       }}
+      .main-btn:hover {{ background: color-mix(in srgb, var(--primary), black 10%); transform: translateY(-2px); }}
       .main-btn:active {{ transform: scale(0.98); }}
-      .main-btn:disabled {{ background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }}
+      .main-btn:disabled {{ background: #e2e8f0; color: #94a3b8; cursor: not-allowed; box-shadow: none; transform: none; }}
 
-      /* --- MODALS (Desktop Center / Mobile Bottom Sheet) --- */
+      /* --- MODALS (General) --- */
       .modal-overlay {{
           position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-          background: rgba(0,0,0,0.5); backdrop-filter: blur(5px);
+          background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
           z-index: 2000; display: none; justify-content: center; align-items: center;
           opacity: 0; transition: opacity 0.3s ease;
       }}
       .modal-overlay.visible {{ display: flex; opacity: 1; }}
       
       .modal-content {{
-          background: #fff; padding: 30px; border-radius: 24px; 
-          width: 90%; max-width: 480px; max-height: 85vh; overflow-y: auto; 
-          transform: scale(0.95); opacity: 0; transition: all 0.3s var(--ease-out);
+          background: #fff; padding: 35px; border-radius: 28px; 
+          width: 90%; max-width: 550px; max-height: 90vh; overflow-y: auto; 
+          transform: scale(0.9) translateY(20px); opacity: 0; transition: all 0.4s var(--ease-bounce);
           box-shadow: var(--shadow-lg);
       }}
-      .modal-overlay.visible .modal-content {{ transform: scale(1); opacity: 1; }}
+      .modal-overlay.visible .modal-content {{ transform: scale(1) translateY(0); opacity: 1; }}
       
       @media (max-width: 768px) {{
           .modal-overlay {{ align-items: flex-end; }}
           .modal-content {{ 
-              width: 100%; max-width: 100%; border-radius: 24px 24px 0 0; 
+              width: 100%; max-width: 100%; border-radius: 30px 30px 0 0; 
               padding: 25px; max-height: 85vh; transform: translateY(100%);
           }}
           .modal-overlay.visible .modal-content {{ transform: translateY(0); }}
       }}
-      
-      /* Inputs & Forms */
-      .form-group {{ margin-bottom: 20px; }}
-      .form-group label {{ display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }}
+
+      /* --- PRODUCT DETAILS MODAL --- */
+      .product-detail-img {{ 
+          width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 18px; margin-bottom: 20px; 
+          box-shadow: var(--shadow-sm);
+      }}
+      .detail-title {{ font-size: 1.8rem; font-weight: 800; margin-bottom: 10px; line-height: 1.2; }}
+      .detail-price {{ font-size: 1.5rem; color: var(--primary); font-weight: 800; margin-bottom: 20px; }}
+      .detail-desc {{ color: #64748b; font-size: 1rem; line-height: 1.6; margin-bottom: 25px; }}
+
+      /* --- CHECKOUT FORM --- */
+      .form-group {{ margin-bottom: 22px; }}
+      .form-group label {{ display: block; margin-bottom: 8px; font-weight: 700; font-size: 0.9rem; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; }}
       
       .form-control {{ 
-          width: 100%; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; 
-          font-size: 1rem; font-family: var(--font-sans); background: #f8fafc;
+          width: 100%; padding: 16px; border: 2px solid #e2e8f0; border-radius: 14px; 
+          font-size: 1rem; font-family: var(--font-sans); background: #f8fafc; transition: all 0.2s;
       }}
-      .form-control:focus {{ outline: none; background: white; border-color: var(--primary); }}
+      .form-control:focus {{ outline: none; background: white; border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary), transparent 90%); }}
       
-      .radio-group {{ display: flex; gap: 10px; }}
+      .radio-group {{ display: flex; gap: 12px; }}
       .radio-group label {{ 
-          flex: 1; padding: 12px; text-align: center; cursor: pointer; 
-          border-radius: 12px; border: 1px solid #f1f5f9; background: white;
-          color: #64748b; font-weight: 500; transition: all 0.2s;
-          display: flex; flex-direction: column; gap: 5px; font-size: 0.9rem;
+          flex: 1; padding: 15px; text-align: center; cursor: pointer; 
+          border-radius: 14px; border: 2px solid #f1f5f9; background: white;
+          color: #64748b; font-weight: 600; transition: all 0.2s;
+          display: flex; flex-direction: column; gap: 8px; font-size: 0.95rem;
       }}
       .radio-group input {{ display: none; }}
       .radio-group input:checked + label {{ 
           background: color-mix(in srgb, var(--primary), white 95%); 
-          border-color: var(--primary); color: var(--primary); font-weight: 700;
+          border-color: var(--primary); color: var(--primary); box-shadow: var(--shadow-sm); transform: translateY(-2px);
       }}
+      .radio-group label i {{ font-size: 1.4rem; margin-bottom: 2px; }}
 
+      /* --- MODIFIERS --- */
       .modifier-item {{
           display: flex; justify-content: space-between; align-items: center;
-          padding: 12px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer;
+          padding: 14px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer;
       }}
       .checkbox-circle {{
-          width: 22px; height: 22px; border: 2px solid #cbd5e1; border-radius: 6px;
-          display: flex; align-items: center; justify-content: center; margin-right: 12px;
+          width: 24px; height: 24px; border: 2px solid #cbd5e1; border-radius: 8px;
+          display: flex; align-items: center; justify-content: center; margin-right: 15px;
           transition: all 0.2s;
       }}
       .modifier-item.selected .checkbox-circle {{ border-color: var(--primary); background: var(--primary); }}
-      .modifier-item.selected .checkbox-circle::after {{ content: '✓'; color: white; font-size: 12px; font-weight: 900; }}
+      .modifier-item.selected .checkbox-circle::after {{ content: '✓'; color: white; font-size: 14px; font-weight: 900; }}
 
       /* --- FOOTER --- */
       footer {{ 
           background: var(--footer-bg); color: var(--footer-text); 
-          padding: 60px 20px 30px; margin-top: auto; 
+          padding: 80px 20px 40px; margin-top: auto; 
       }}
       .footer-content {{ 
-          display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
-          gap: 40px; max-width: var(--container-width); margin: 0 auto; 
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
+          gap: 50px; max-width: 1200px; margin: 0 auto; 
       }}
       .footer-section h4 {{ 
-          font-size: 0.9rem; margin-bottom: 20px; opacity: 0.6; 
-          text-transform: uppercase; font-weight: 700; letter-spacing: 1px;
+          font-size: 1rem; margin-bottom: 25px; opacity: 0.7; 
+          text-transform: uppercase; font-weight: 800; letter-spacing: 1.5px;
       }}
       .footer-link {{ 
-          display: flex; align-items: center; gap: 10px; margin-bottom: 12px; 
-          color: inherit; text-decoration: none; opacity: 0.8; transition: opacity 0.2s;
+          display: flex; align-items: center; gap: 12px; margin-bottom: 16px; 
+          color: inherit; text-decoration: none; opacity: 0.85; transition: opacity 0.2s; font-size: 1.05rem;
       }}
       .footer-link:hover {{ opacity: 1; }}
+      .footer-link i {{ width: 20px; text-align: center; }}
       
-      .social-links {{ display: flex; gap: 10px; }}
+      /* Socials Correction */
+      .social-links {{ display: flex; gap: 15px; }}
       .social-links a {{ 
-          display: flex; width: 40px; height: 40px; border-radius: 10px; 
-          background: rgba(255,255,255,0.1); align-items: center; justify-content: center; 
-          color: inherit; text-decoration: none; transition: all 0.3s;
+          display: flex; width: 45px; height: 45px; border-radius: 12px; 
+          background: rgba(255,255,255,0.15); align-items: center; justify-content: center; 
+          color: white; text-decoration: none; transition: all 0.3s;
+          font-size: 1.3rem;
       }}
-      .social-links a:hover {{ background: var(--primary); color: white; }}
+      .social-links a:hover {{ background: var(--primary); transform: translateY(-3px); }}
 
       /* --- ANIMATIONS & UTILS --- */
-      @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(15px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+      @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
       @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
       .spinner {{ 
-          border: 2px solid rgba(0,0,0,0.1); border-top: 2px solid var(--primary); 
+          border: 3px solid rgba(0,0,0,0.1); border-top: 3px solid var(--primary); 
           border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; 
       }}
+      
+      /* Modal Page Content Style */
+      .page-content-body img {{ max-width: 100%; border-radius: 12px; margin: 10px 0; }}
+      .page-content-body h1, .page-content-body h2 {{ color: var(--primary); margin-top: 15px; }}
     </style>
 </head>
 <body>
@@ -436,40 +481,58 @@ WEB_ORDER_HTML = """
     <aside id="cart-sidebar">
         <div class="cart-content-wrapper">
             <div class="cart-header">
-                <h3 style="margin:0;">Кошик</h3>
-                <button id="close-cart-btn" style="background:none; border:none; font-size:1.5rem; cursor:pointer; color: #94a3b8;">&times;</button>
+                <h3 style="margin:0;">Ваше замовлення</h3>
+                <button id="close-cart-btn" style="background:none; border:none; font-size:1.8rem; cursor:pointer; color: #94a3b8; transition: color 0.2s;">&times;</button>
             </div>
             <div id="cart-items-container" class="cart-items"></div>
             <div class="cart-footer">
                 <div class="cart-total-row">
-                    <span>Всього:</span>
+                    <span>Разом:</span>
                     <span id="cart-total-price">0.00 грн</span>
                 </div>
-                <button id="checkout-btn" class="main-btn" disabled>Оформити замовлення</button>
+                <button id="checkout-btn" class="main-btn" disabled>
+                    <span>Оформити замовлення</span> <i class="fa-solid fa-arrow-right"></i>
+                </button>
             </div>
         </div>
     </aside>
 
+    <div id="product-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; position: absolute; top: 20px; right: 20px; z-index: 10;">
+                <span class="close-modal" style="font-size:2rem; cursor:pointer; color:#333; background: white; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">&times;</span>
+            </div>
+            <img src="" id="detail-img" class="product-detail-img">
+            <div class="detail-title" id="detail-name"></div>
+            <div class="detail-price" id="detail-price"></div>
+            <div class="detail-desc" id="detail-desc"></div>
+            
+            <button id="detail-add-btn" class="main-btn">
+                <span>В кошик</span> <i class="fa-solid fa-plus"></i>
+            </button>
+        </div>
+    </div>
+
     <div id="modifier-modal" class="modal-overlay">
         <div class="modal-content">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                <h3 id="mod-product-name" style="font-size:1.2rem; margin:0;">Назва</h3>
-                <span class="close-modal" style="font-size:1.5rem; cursor:pointer; color:#cbd5e1;">&times;</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px; padding-bottom: 15px; border-bottom: 1px solid #f1f5f9;">
+                <h3 id="mod-product-name" style="font-size:1.4rem; margin:0;">Назва</h3>
+                <span class="close-modal" style="font-size:1.8rem; cursor:pointer; color:#cbd5e1;">&times;</span>
             </div>
-            <p style="color:#64748b; margin-bottom:15px; font-size:0.9rem;">Додайте інгредієнти:</p>
-            <div id="mod-list" style="margin-bottom: 25px;"></div>
-            <button id="mod-add-btn" class="main-btn" style="width:100%;">
+            <p style="color:#64748b; margin-bottom:20px; font-size:1rem; font-weight: 500;">Додайте інгредієнти:</p>
+            <div id="mod-list" style="margin-bottom: 30px;"></div>
+            <button id="mod-add-btn" class="main-btn">
                 <span>Додати</span>
-                <span id="mod-total-price" style="background:rgba(255,255,255,0.2); padding:2px 8px; border-radius:6px; font-size:0.9rem; margin-left:auto;"></span>
+                <span id="mod-total-price" style="background:rgba(255,255,255,0.25); padding:4px 10px; border-radius:8px; font-size:0.95rem; margin-left:auto;"></span>
             </button>
         </div>
     </div>
 
     <div id="checkout-modal" class="modal-overlay">
         <div class="modal-content">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px;">
-                <h3 style="font-size:1.4rem; margin:0;">Оформлення</h3>
-                <span class="close-modal" style="font-size:1.5rem; cursor:pointer; color:#cbd5e1;">&times;</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px; padding-bottom: 15px; border-bottom: 1px solid #f1f5f9;">
+                <h3 style="font-size:1.6rem; margin:0;">Оформлення</h3>
+                <span class="close-modal" style="font-size:1.8rem; cursor:pointer; color:#cbd5e1;">&times;</span>
             </div>
             
             <form id="checkout-form">
@@ -485,7 +548,7 @@ WEB_ORDER_HTML = """
                 
                 <div class="form-group">
                     <label>Контакти</label>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
                         <input type="text" id="customer_name" class="form-control" placeholder="Ваше ім'я" required>
                         <input type="tel" id="phone_number" class="form-control" placeholder="Телефон" required>
                     </div>
@@ -519,8 +582,8 @@ WEB_ORDER_HTML = """
                     </div>
                 </div>
 
-                <button type="submit" id="place-order-submit" class="main-btn" style="margin-top:10px;">
-                    Підтвердити
+                <button type="submit" id="place-order-submit" class="main-btn" style="margin-top:20px;">
+                    Підтвердити замовлення
                 </button>
             </form>
         </div>
@@ -528,11 +591,11 @@ WEB_ORDER_HTML = """
 
     <div id="page-modal" class="modal-overlay">
         <div class="modal-content">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:10px; border-bottom:1px solid #f1f5f9;">
-                <h3 id="page-modal-title" style="margin:0; font-size:1.3rem;"></h3>
-                <span class="close-modal" style="font-size:1.5rem; cursor:pointer; color:#cbd5e1;">&times;</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:15px; border-bottom:1px solid #f1f5f9;">
+                <h3 id="page-modal-title" style="margin:0; font-size:1.5rem;"></h3>
+                <span class="close-modal" style="font-size:1.8rem; cursor:pointer; color:#cbd5e1;">&times;</span>
             </div>
-            <div id="page-modal-body" class="page-content-body" style="line-height:1.6; color:#475569;"></div>
+            <div id="page-modal-body" class="page-content-body" style="line-height:1.7; color:#334155; font-size: 1.05rem;"></div>
         </div>
     </div>
 
@@ -545,12 +608,18 @@ WEB_ORDER_HTML = """
                 <div class="footer-link"><i class="fa-regular fa-clock"></i> <span>{working_hours}</span></div>
             </div>
             <div class="footer-section">
-                <h4>Соціальні мережі</h4>
+                <h4>Інформація</h4>
+                <div class="menu-pages-links">
+                    {menu_links_html}
+                </div>
+            </div>
+            <div class="footer-section">
+                <h4>Ми в соцмережах</h4>
                 <div class="social-links">{social_links_html}</div>
             </div>
         </div>
-        <div style="text-align:center; margin-top:50px; opacity:0.5; font-size:0.8rem;">
-            &copy; 2024 {site_title}
+        <div style="text-align:center; margin-top:60px; opacity:0.4; font-size:0.85rem;">
+            &copy; 2024 {site_title}. All rights reserved.
         </div>
     </footer>
 
@@ -569,6 +638,14 @@ WEB_ORDER_HTML = """
             const cartCountEl = document.getElementById('cart-count');
             const checkoutBtn = document.getElementById('checkout-btn');
             
+            // Product Detail Elements
+            const productModal = document.getElementById('product-modal');
+            const detailImg = document.getElementById('detail-img');
+            const detailName = document.getElementById('detail-name');
+            const detailPrice = document.getElementById('detail-price');
+            const detailDesc = document.getElementById('detail-desc');
+            const detailAddBtn = document.getElementById('detail-add-btn');
+
             fetchMenu();
 
             async function fetchMenu() {{
@@ -611,6 +688,10 @@ WEB_ORDER_HTML = """
                             const img = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
                             const prodJson = JSON.stringify(prod).replace(/"/g, '&quot;');
                             
+                            card.onclick = (e) => {{
+                                if(!e.target.closest('.add-btn')) openProductDetails(prod);
+                            }};
+
                             card.innerHTML = `
                                 <div class="product-image-wrapper"><img src="${{img}}" class="product-image" loading="lazy"></div>
                                 <div class="product-info">
@@ -620,7 +701,7 @@ WEB_ORDER_HTML = """
                                     </div>
                                     <div class="product-footer">
                                         <div class="product-price">${{prod.price}} грн</div>
-                                        <button class="add-btn" data-product="${{prodJson}}" onclick="handleClick(this)">
+                                        <button class="add-btn" data-product="${{prodJson}}" onclick="handleAddClick(this)">
                                             <span>Додати</span> <i class="fa-solid fa-plus"></i>
                                         </button>
                                     </div>
@@ -635,7 +716,7 @@ WEB_ORDER_HTML = """
                 setupScrollSpy();
             }}
 
-            window.handleClick = (btn) => {{
+            window.handleAddClick = (btn) => {{
                 const prod = JSON.parse(btn.dataset.product);
                 
                 const originalHTML = btn.innerHTML;
@@ -645,11 +726,31 @@ WEB_ORDER_HTML = """
                 setTimeout(() => {{ 
                     btn.classList.remove('added'); 
                     btn.innerHTML = originalHTML;
-                }}, 1200);
+                }}, 1000);
 
                 if (prod.modifiers && prod.modifiers.length > 0) openModModal(prod);
                 else addToCart(prod, []);
             }};
+
+            // Product Details Modal Logic
+            function openProductDetails(prod) {{
+                detailImg.src = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
+                detailName.textContent = prod.name;
+                detailPrice.textContent = prod.price + ' грн';
+                detailDesc.textContent = prod.description || 'Немає опису';
+                
+                detailAddBtn.onclick = () => {{
+                    if (prod.modifiers && prod.modifiers.length > 0) {{
+                        productModal.classList.remove('visible');
+                        setTimeout(() => openModModal(prod), 300);
+                    }} else {{
+                        addToCart(prod, []);
+                        productModal.classList.remove('visible');
+                    }}
+                }};
+                
+                productModal.classList.add('visible');
+            }}
 
             function addToCart(prod, mods) {{
                 const modIds = mods.map(m => m.id).sort().join('-');
@@ -668,8 +769,8 @@ WEB_ORDER_HTML = """
                 updateCartView();
                 
                 const toggle = document.getElementById('cart-toggle');
-                toggle.style.transform = 'scale(1.15)';
-                setTimeout(() => toggle.style.transform = 'scale(1)', 200);
+                toggle.style.transform = 'scale(1.15) rotate(10deg)';
+                setTimeout(() => toggle.style.transform = 'scale(1) rotate(0)', 300);
             }}
 
             function updateCartView() {{
@@ -679,7 +780,7 @@ WEB_ORDER_HTML = """
                 const items = Object.values(cart);
                 
                 if (items.length === 0) {{
-                    cartItemsContainer.innerHTML = '<div style="text-align:center;color:#94a3b8;margin-top:60px;"><i class="fa-solid fa-basket-shopping" style="font-size:2.5rem; opacity:0.2; margin-bottom:10px;"></i><p>Кошик порожній</p></div>';
+                    cartItemsContainer.innerHTML = '<div style="text-align:center;color:#94a3b8;margin-top:80px;"><i class="fa-solid fa-basket-shopping" style="font-size:3rem; opacity:0.2; margin-bottom:15px;"></i><p>Кошик порожній</p></div>';
                 }}
 
                 items.forEach(item => {{
@@ -742,9 +843,9 @@ WEB_ORDER_HTML = """
                     div.innerHTML = `
                         <div style="display:flex; align-items:center;">
                             <div class="checkbox-circle"></div>
-                            <span style="font-weight:500; font-size:0.95rem; color:#334155;">${{mod.name}}</span>
+                            <span style="font-weight:600; font-size:1rem; color:#334155;">${{mod.name}}</span>
                         </div>
-                        <b style="color:var(--primary); font-size:0.9rem;">+${{mod.price}}</b>
+                        <b style="color:var(--primary); font-size:0.95rem;">+${{mod.price}}</b>
                     `;
                     modList.appendChild(div);
                 }});
@@ -851,12 +952,15 @@ WEB_ORDER_HTML = """
                 btn.onclick = (e) => e.target.closest('.modal-overlay').classList.remove('visible');
             }});
 
+            // Page Modal Logic
             const pageModal = document.getElementById('page-modal');
-            document.querySelectorAll('.menu-popup-trigger').forEach(link => {{
-                link.onclick = async (e) => {{
+            // Event delegation for dynamically added links
+            document.body.addEventListener('click', async (e) => {{
+                const link = e.target.closest('.menu-popup-trigger');
+                if (link) {{
                     e.preventDefault();
                     pageModal.classList.add('visible');
-                    document.getElementById('page-modal-body').innerHTML = '<div style="text-align:center; padding:40px;"><div class="spinner"></div></div>';
+                    document.getElementById('page-modal-body').innerHTML = '<div style="text-align:center; padding:60px;"><div class="spinner"></div></div>';
                     document.getElementById('page-modal-title').innerText = link.innerText;
                     try {{
                         const res = await fetch('/api/page/' + link.dataset.itemId);
@@ -864,9 +968,13 @@ WEB_ORDER_HTML = """
                             const d = await res.json();
                             document.getElementById('page-modal-title').innerText = d.title;
                             document.getElementById('page-modal-body').innerHTML = d.content;
+                        }} else {{
+                            throw new Error("Not found");
                         }}
-                    }} catch(err) {{ document.getElementById('page-modal-body').innerText = 'Помилка.'; }}
-                }};
+                    }} catch(err) {{ 
+                        document.getElementById('page-modal-body').innerText = 'Не вдалося завантажити сторінку.'; 
+                    }}
+                }}
             }});
 
             function setupScrollSpy() {{
@@ -881,7 +989,7 @@ WEB_ORDER_HTML = """
                             }}
                         }}
                     }});
-                }}, {{rootMargin: '-30% 0px -70% 0px'}});
+                }}, {{rootMargin: '-20% 0px -70% 0px'}});
                 document.querySelectorAll('.category-section').forEach(s => observer.observe(s));
             }}
         }});
