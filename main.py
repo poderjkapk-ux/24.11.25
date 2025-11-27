@@ -36,7 +36,7 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import IntegrityError
 import sqlalchemy as sa
-from sqlalchemy import select, func, desc, or_  # <--- ВАЖНО: Добавлен импорт select
+from sqlalchemy import select, func, desc, or_
 
 # --- Локальні імпорти ---
 from templates import (
@@ -45,7 +45,6 @@ from templates import (
     ADMIN_REPORTS_BODY
 )
 from models import *
-# Импортируем модели склада
 import inventory_models 
 from inventory_models import Unit, Warehouse, Modifier
 
@@ -69,7 +68,6 @@ from admin_menu_pages import router as admin_menu_pages_router
 from admin_employees import router as admin_employees_router
 from admin_statuses import router as admin_statuses_router
 from admin_inventory import router as admin_inventory_router
-# -----------------------------------------------
 
 # --- КОНФІГУРАЦІЯ ---
 from dotenv import load_dotenv
@@ -86,7 +84,6 @@ class CheckoutStates(StatesGroup):
     waiting_for_order_time = State()
     waiting_for_specific_time = State()
 
-# --- NEW: Состояния для выбора модификаторов ---
 class OrderStates(StatesGroup):
     choosing_modifiers = State()
 
@@ -136,12 +133,9 @@ async def handle_dynamic_menu_item(message: Message, session: AsyncSession):
 @dp.message(CommandStart())
 async def command_start_handler(message: Message, state: FSMContext, session: AsyncSession):
     await state.clear()
-    
     settings = await session.get(Settings, 1) or Settings()
-    
     default_welcome = f"Шановний {{user_name}}, ласкаво просимо! 👋\n\nМи раді вас бачити. Оберіть опцію:"
     welcome_template = settings.telegram_welcome_message or default_welcome
-    
     try:
         caption = welcome_template.format(user_name=html.escape(message.from_user.full_name))
     except (KeyError, ValueError):
@@ -179,10 +173,8 @@ async def cancel_checkout(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "start_menu")
 async def back_to_start_menu(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     await state.clear()
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest as e:
-        logging.warning(f"Не вдалося видалити повідомлення в back_to_start_menu: {e}")
+    try: await callback.message.delete()
+    except TelegramBadRequest: pass
 
     settings = await session.get(Settings, 1) or Settings()
     default_welcome = f"Шановний {{user_name}}, ласкаво просимо! 👋\n\nМи раді вас бачити. Оберіть опцію:"
@@ -220,7 +212,6 @@ async def show_my_orders(message_or_callback: Message | CallbackQuery, session: 
         
         lines = []
         for item in order.items:
-            # Отображаем модификаторы в истории
             mods_str = ""
             if item.modifiers:
                 mod_names = [m.get('name', '') for m in item.modifiers]
@@ -369,8 +360,6 @@ async def show_product(callback: CallbackQuery, session: AsyncSession):
     else:
         await callback.message.answer(text, reply_markup=kb.as_markup())
 
-# --- ЛОГИКА ДОБАВЛЕНИЯ С МОДИФИКАТОРАМИ (ТЕЛЕГРАМ) ---
-
 @dp.callback_query(F.data.startswith("add_to_cart_"))
 async def add_to_cart_start(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     try:
@@ -378,22 +367,16 @@ async def add_to_cart_start(callback: CallbackQuery, state: FSMContext, session:
     except (IndexError, ValueError):
         return await callback.answer("Помилка! Не вдалося обробити запит.", show_alert=True)
 
-    user_id = callback.from_user.id
-    
-    # --- ЗМІНА: Завантажуємо продукт разом з прив'язаними модифікаторами ---
     product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
     
     if not product or not product.is_active:
         return await callback.answer("Ця страва тимчасово недоступна.", show_alert=True)
 
-    # Використовуємо product.modifiers, а не всі модифікатори
     modifiers = product.modifiers
     
     if not modifiers:
-        # Если модификаторов нет, добавляем сразу
         await _add_item_to_db_cart(callback, product, [], session)
     else:
-        # Если есть, показываем меню выбора
         await state.set_state(OrderStates.choosing_modifiers)
         await state.update_data(selected_product_id=product.id, selected_modifiers=[])
         await _show_modifier_menu(callback, product, [], modifiers)
@@ -412,12 +395,10 @@ async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, av
     kb.adjust(1)
     kb.row(InlineKeyboardButton(text="📥 Додати в кошик", callback_data="confirm_add_to_cart"))
     
-    # Формируем текст с текущей ценой
     current_price = product.price + sum(m.price for m in available_modifiers if m.id in selected_ids)
     
     text = f"<b>{html.escape(product.name)}</b>\nЦіна з добавками: {current_price} грн\n\nОберіть добавки:"
     
-    # Если сообщение с фото, редактируем caption, иначе text
     if callback.message.photo:
         await callback.message.edit_caption(caption=text, reply_markup=kb.as_markup())
     else:
@@ -437,8 +418,6 @@ async def toggle_modifier_callback(callback: CallbackQuery, state: FSMContext, s
     await state.update_data(selected_modifiers=selected_ids)
     
     product = await session.get(Product, data["selected_product_id"], options=[selectinload(Product.modifiers)])
-    
-    # Передаємо правильний список модифікаторів (прив'язаних до продукту)
     await _show_modifier_menu(callback, product, selected_ids, product.modifiers)
     await callback.answer()
 
@@ -460,8 +439,6 @@ async def confirm_add_to_cart_callback(callback: CallbackQuery, state: FSMContex
 async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifiers: list[Modifier], session: AsyncSession):
     user_id = callback.from_user.id
     
-    # Формируем список словарей для JSON
-    # --- ВИПРАВЛЕННЯ: Використовуємо float(m.price or 0) для уникнення помилки якщо price NULL ---
     mods_json = [{"id": m.id, "name": m.name, "price": float(m.price or 0), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty or 0)} for m in modifiers]
     
     cart_item = CartItem(
@@ -480,10 +457,7 @@ async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifi
     msg += " додано до кошика!"
     
     await callback.answer(msg, show_alert=False)
-    # Можно вернуть пользователя к категории
-    await show_category_paginated(callback, session) # Перезагрузит категорию, но сбросит пагинацию на 1
-
-# ---
+    await show_category_paginated(callback, session)
 
 async def show_cart(message_or_callback: Message | CallbackQuery, session: AsyncSession):
     is_callback = isinstance(message_or_callback, CallbackQuery)
@@ -508,14 +482,12 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 
     for item in cart_items:
         if item.product:
-            # Считаем цену с учетом модификаторов
             item_base_price = item.product.price
             mods_price = Decimal(0)
             mods_str = ""
             
             if item.modifiers:
                 for m in item.modifiers:
-                    # --- ВИПРАВЛЕННЯ: Перевірка на None перед конвертацією ---
                     price_val = m.get('price', 0)
                     if price_val is None: price_val = 0
                     mods_price += Decimal(str(price_val))
@@ -546,8 +518,8 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
     if is_callback:
         try:
             if message.photo:
-                await message.delete() # Удаляем сообщение с фото
-                await message.answer(text, reply_markup=kb.as_markup()) # Отправляем новое
+                await message.delete() 
+                await message.answer(text, reply_markup=kb.as_markup())
             else:
                 await message.edit_text(text, reply_markup=kb.as_markup())
         except TelegramBadRequest:
@@ -560,8 +532,6 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 @dp.callback_query(F.data == "cart")
 async def show_cart_callback(callback: CallbackQuery, session: AsyncSession):
     await show_cart(callback, session)
-
-# --- Updated Cart Handlers using CartItem.id ---
 
 @dp.callback_query(F.data.startswith("cart_change_"))
 async def change_cart_item_quantity(callback: CallbackQuery, session: AsyncSession):
@@ -629,7 +599,6 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
     kb.adjust(1)
 
     try:
-        # If there was a photo, delete and send new
         if callback.message.photo:
             await callback.message.delete()
             await callback.message.answer("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
@@ -741,7 +710,7 @@ async def process_order_time(callback: CallbackQuery, state: FSMContext, session
         except TelegramBadRequest as e:
             logging.warning(f"Не вдалося видалити повідомлення в process_order_time: {e}")
         await finalize_order(callback.message, state, session)
-    else: # "specific"
+    else: 
         await state.set_state(CheckoutStates.waiting_for_specific_time)
         await callback.message.edit_text("Будь ласка, введіть бажаний час доставки (наприклад, '18:30' або 'на 14:00'):")
     await callback.answer()
@@ -759,8 +728,6 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     data = await state.get_data()
     user_id = data.get('user_id')
     
-    admin_bot = message.bot 
-    
     cart_items_res = await session.execute(
         select(CartItem).options(joinedload(CartItem.product)).where(CartItem.user_id == user_id)
     )
@@ -776,10 +743,8 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     for cart_item in cart_items:
         if cart_item.product:
             item_price = cart_item.product.price
-            # Считаем стоимость модификаторов
             if cart_item.modifiers:
                 for m in cart_item.modifiers:
-                    # --- ВИПРАВЛЕННЯ: Обробка None ---
                     p_val = m.get('price', 0)
                     if p_val is None: p_val = 0
                     item_price += Decimal(str(p_val))
@@ -792,7 +757,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
                 quantity=cart_item.quantity,
                 price_at_moment=item_price,
                 preparation_area=cart_item.product.preparation_area,
-                modifiers=cart_item.modifiers # Сохраняем модификаторы в заказ
+                modifiers=cart_item.modifiers
             ))
 
     order = Order(
@@ -832,7 +797,6 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     await state.clear()
     await command_start_handler(message, state, session)
 
-# --- Функция start_bot ---
 async def start_bot(client_dp: Dispatcher, admin_dp: Dispatcher, client_bot: Bot, admin_bot: Bot):
     try:
         admin_dp["client_bot"] = client_bot
@@ -863,20 +827,16 @@ async def start_bot(client_dp: Dispatcher, admin_dp: Dispatcher, client_bot: Bot
     except Exception as e:
         logging.critical(f"Не вдалося запустити ботів: {e}", exc_info=True)
 
-# --- Lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.info("Запуск додатка...")
     os.makedirs("static/images", exist_ok=True)
     os.makedirs("static/favicons", exist_ok=True)
     
-    # --- Инициализация БД ---
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
-    # --- Инициализация данных (Статусы, Роли, Склад) ---
     async with async_session_maker() as session:
-        # Статусы
         result_status = await session.execute(select(OrderStatus).limit(1))
         if not result_status.scalars().first():
             default_statuses = {
@@ -890,7 +850,6 @@ async def lifespan(app: FastAPI):
             for name, props in default_statuses.items():
                 session.add(OrderStatus(name=name, **props))
 
-        # Роли
         result_roles = await session.execute(select(Role).limit(1))
         if not result_roles.scalars().first():
             session.add(Role(name="Адміністратор", can_manage_orders=True, can_be_assigned=True, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
@@ -900,7 +859,6 @@ async def lifespan(app: FastAPI):
             session.add(Role(name="Повар", can_manage_orders=False, can_be_assigned=False, can_serve_tables=False, can_receive_kitchen_orders=True, can_receive_bar_orders=False))
             session.add(Role(name="Бармен", can_manage_orders=False, can_be_assigned=False, can_serve_tables=False, can_receive_kitchen_orders=False, can_receive_bar_orders=True))
 
-        # --- Инициализация Склада (Единицы измерения и Склады) ---
         result_units = await session.execute(select(Unit).limit(1))
         if not result_units.scalars().first():
             session.add_all([
@@ -920,7 +878,6 @@ async def lifespan(app: FastAPI):
 
         await session.commit()
     
-    # --- Запуск ботов ---
     client_token = os.environ.get('CLIENT_BOT_TOKEN')
     admin_token = os.environ.get('ADMIN_BOT_TOKEN')
     
@@ -959,7 +916,6 @@ app = FastAPI(lifespan=lifespan)
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- ПОДКЛЮЧЕНИЕ РОУТЕРОВ ---
 app.include_router(in_house_menu_router)
 app.include_router(clients_router)
 app.include_router(admin_order_router)
@@ -974,7 +930,6 @@ app.include_router(admin_employees_router)
 app.include_router(admin_statuses_router) 
 app.include_router(admin_inventory_router)
 
-# --- Спеціальний роут для Service Worker ---
 @app.get("/sw.js", response_class=FileResponse)
 async def get_service_worker():
     return FileResponse("sw.js", media_type="application/javascript")
@@ -996,20 +951,30 @@ async def get_settings(session: AsyncSession) -> Settings:
     if not settings.telegram_welcome_message: settings.telegram_welcome_message = f"Шановний {{user_name}}, ласкаво просимо!"
     return settings
 
-# --- FastAPI ендпоінти для КЛІЄНТА (WEB) ---
-
 @app.get("/", response_class=HTMLResponse)
 async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session)):
     settings = await get_settings(session)
     logo_html = f'<img src="/{settings.logo_url}" alt="Логотип" class="header-logo">' if settings.logo_url else ''
 
+    # Отримуємо сторінки меню для футера
     menu_items_res = await session.execute(
         select(MenuItem).where(MenuItem.show_on_website == True).order_by(MenuItem.sort_order)
     )
     menu_items = menu_items_res.scalars().all()
+    
     menu_links_html = "".join(
-        [f'<a href="#" class="menu-popup-trigger" data-item-id="{item.id}">{html.escape(item.title)}</a>' for item in menu_items]
+        [f'<a href="#" class="footer-link menu-popup-trigger" data-item-id="{item.id}"><i class="fa-solid fa-file-lines"></i> <span>{html.escape(item.title)}</span></a>' for item in menu_items]
     )
+
+    # --- ВИПРАВЛЕННЯ СОЦМЕРЕЖ ---
+    social_links = []
+    if settings.instagram_url:
+        social_links.append(f'<a href="{html.escape(settings.instagram_url)}" target="_blank"><i class="fa-brands fa-instagram"></i></a>')
+    if settings.facebook_url:
+        social_links.append(f'<a href="{html.escape(settings.facebook_url)}" target="_blank"><i class="fa-brands fa-facebook"></i></a>')
+    
+    social_links_html = "".join(social_links)
+    # ---------------------------
 
     template_params = {
         "logo_html": logo_html,
@@ -1030,7 +995,7 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         "footer_address": html.escape(settings.footer_address or "Адреса не вказана"),
         "footer_phone": html.escape(settings.footer_phone or ""),
         "working_hours": html.escape(settings.working_hours or ""),
-        "social_links_html": "", 
+        "social_links_html": social_links_html, 
         "category_nav_bg_color": settings.category_nav_bg_color or "#ffffff",
         "category_nav_text_color": settings.category_nav_text_color or "#333333",
         "header_image_url": settings.header_image_url or "",
@@ -1047,11 +1012,9 @@ async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(ge
         raise HTTPException(status_code=404, detail="Сторінку не знайдено")
     return {"title": menu_item.title, "content": menu_item.content}
 
-# --- ВИПРАВЛЕНА ФУНКЦІЯ ЗАВАНТАЖЕННЯ МЕНЮ ---
 @app.get("/api/menu")
 async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
     try:
-        # 1. Отримуємо категорії
         categories_res = await session.execute(
             select(Category)
             .where(Category.show_on_delivery_site == True)
@@ -1059,8 +1022,6 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
         )
         categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
         
-        # 2. Отримуємо продукти
-        # Використовуємо selectinload для модифікаторів та join(Category) без явних умов
         products_res = await session.execute(
             select(Product)
             .options(selectinload(Product.modifiers)) 
@@ -1070,11 +1031,9 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
         
         products = []
         for p in products_res.scalars().all():
-            # Формуємо список модифікаторів для фронтенду
             mods_list = []
             if p.modifiers:
                 for m in p.modifiers:
-                    # Безпечна конвертація ціни (Decimal -> float)
                     price_val = m.price if m.price is not None else 0
                     mods_list.append({
                         "id": m.id, 
@@ -1092,11 +1051,9 @@ async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
                 "modifiers": mods_list 
             })
 
-        # Повертаємо JSONResponse для правильної серіалізації
         return JSONResponse(content={"categories": categories, "products": products})
     except Exception as e:
         logging.error(f"Error in /api/menu: {e}", exc_info=True)
-        # Повертаємо JSON з помилкою, а не 500 HTML
         return JSONResponse(status_code=500, content={"detail": "Internal Server Error", "error": str(e)})
 
 @app.get("/api/customer_info/{phone_number}")
@@ -1132,7 +1089,6 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
             product = db_products[pid]
             qty = int(item.get('quantity', 1))
             
-            # Поддержка модификаторов
             modifiers_data = item.get('modifiers', [])
             mods_price = sum(Decimal(str(m.get('price', 0) or 0)) for m in modifiers_data)
             
@@ -1145,7 +1101,7 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                 quantity=qty,
                 price_at_moment=item_total_price,
                 preparation_area=product.preparation_area,
-                modifiers=modifiers_data # Сохраняем
+                modifiers=modifiers_data
             ))
 
     is_delivery = order_data.get('is_delivery', True)
@@ -1171,8 +1127,6 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
 
     return JSONResponse(content={"message": "Замовлення успішно розміщено", "order_id": order.id})
 
-# --- АДМИН ПАНЕЛЬ (DASHBOARD) ---
-
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
     settings = await get_settings(session)
@@ -1196,8 +1150,6 @@ async def admin_dashboard(session: AsyncSession = Depends(get_db_session), usern
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
         title="Головна панель", body=body, site_title=settings.site_title or "Назва", **active_classes
     ))
-
-# --- МАРШРУТЫ КАТЕГОРИЙ ---
 
 @app.get("/admin/categories", response_class=HTMLResponse)
 async def admin_categories(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
@@ -1241,8 +1193,6 @@ async def delete_category(cat_id: int, session: AsyncSession = Depends(get_db_se
         await session.delete(category)
         await session.commit()
     return RedirectResponse(url="/admin/categories", status_code=303)
-
-# --- МАРШРУТЫ СПИСКА ЗАКАЗОВ И СОЗДАНИЯ ---
 
 @app.get("/admin/orders", response_class=HTMLResponse)
 async def admin_orders(page: int = Query(1, ge=1), q: str = Query(None, alias="search"), session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
@@ -1449,8 +1399,6 @@ async def api_update_order(order_id: int, request: Request, session: AsyncSessio
     except Exception as e:
         logging.error(f"Update order error: {e}", exc_info=True)
         raise HTTPException(500, "Failed to update order")
-
-# --- ВОССТАНОВЛЕННЫЕ РАЗДЕЛЫ: ЗВІТИ ТА НАЛАШТУВАННЯ ---
 
 @app.get("/admin/reports", response_class=HTMLResponse)
 async def admin_reports_menu(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
