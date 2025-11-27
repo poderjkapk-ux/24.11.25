@@ -14,7 +14,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
     
     <style>
       :root {{
-        /* --- Dynamic Variables --- */
+        /* --- COPY FROM WEB TEMPLATE --- */
         --primary: {primary_color_val};
         --secondary: {secondary_color_val};
         --bg-color: {background_color_val};
@@ -25,265 +25,274 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         --nav-text: {category_nav_text_color};
         --header-img: url('/{header_image_url}');
         
-        /* --- System Colors & Shadows --- */
         --surface: #ffffff;
-        --surface-glass: rgba(255, 255, 255, 0.98);
+        --surface-glass: rgba(255, 255, 255, 0.95);
         --border-light: rgba(0, 0, 0, 0.08);
         
-        --shadow-sm: 0 4px 12px rgba(0,0,0,0.03);
-        --shadow-lg: 0 20px 50px rgba(0,0,0,0.12);
+        --shadow-sm: 0 4px 12px rgba(0,0,0,0.05);
+        --shadow-md: 0 12px 30px rgba(0,0,0,0.08);
+        --shadow-lg: 0 20px 60px rgba(0,0,0,0.15);
+        --shadow-float: 0 15px 35px rgba(0,0,0,0.2);
         
-        --radius: 16px;
-        --ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --radius-lg: 24px;
+        --radius-md: 16px;
+        --radius-sm: 10px;
         
-        --font-sans: '{font_family_sans_val}', sans-serif;
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+        --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+        
+        --font-sans: '{font_family_sans_val}', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         --font-serif: '{font_family_serif_val}', serif;
 
-        /* --- Status Colors --- */
+        /* QR Specific Colors */
         --st-new-bg: #e0f2fe; --st-new-text: #0284c7;
         --st-work-bg: #fff7ed; --st-work-text: #ea580c;
         --st-ready-bg: #dcfce7; --st-ready-text: #16a34a;
         --st-done-bg: #f1f5f9; --st-done-text: #64748b;
       }}
       
+      html {{ scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }}
       * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; outline: none; }}
-      body {{
-        margin: 0; font-family: var(--font-sans); background: var(--bg-color); color: var(--text-main);
-        display: flex; flex-direction: column; min-height: 100vh;
-      }}
       
-      /* HEADER */
+      body {{
+        margin: 0; background-color: var(--bg-color);
+        background-image: 
+            radial-gradient(at 0% 0%, color-mix(in srgb, var(--primary), transparent 97%), transparent 60%),
+            radial-gradient(at 100% 100%, color-mix(in srgb, var(--secondary), transparent 97%), transparent 60%);
+        background-attachment: fixed;
+        color: var(--text-main); font-family: var(--font-sans);
+        display: flex; flex-direction: column; min-height: 100vh;
+        -webkit-font-smoothing: antialiased; font-size: 15px; line-height: 1.5;
+      }}
+
+      h1, h2, h3, h4, .serif {{ font-family: var(--font-serif); margin: 0; color: var(--text-main); }}
+      button, input, textarea, select {{ font-family: var(--font-sans); }}
+
+      /* --- HEADER (MATCH WEB) --- */
       header {{
-          position: relative; height: 35vh; min-height: 280px;
+          position: relative; height: 35vh; min-height: 280px; max-height: 400px;
           display: flex; flex-direction: column; align-items: center; justify-content: center;
-          text-align: center; color: white; border-radius: 0 0 40px 40px; overflow: hidden;
-          box-shadow: 0 10px 40px rgba(0,0,0,0.1); margin-bottom: 20px;
+          text-align: center; color: white; border-radius: 0 0 50px 50px;
+          overflow: hidden; box-shadow: 0 10px 50px rgba(0,0,0,0.15); margin-bottom: 20px;
       }}
       .header-bg {{
           position: absolute; inset: 0; background-image: var(--header-img);
-          background-size: cover; background-position: center; z-index: 0;
+          background-size: cover; background-position: center; z-index: 0; transition: transform 10s ease;
       }}
+      header:hover .header-bg {{ transform: scale(1.05); }}
       header::after {{
           content: ''; position: absolute; inset: 0;
-          background: linear-gradient(to bottom, rgba(0,0,0,0.2), rgba(0,0,0,0.6)); z-index: 1;
+          background: linear-gradient(to bottom, rgba(0,0,0,0.3), rgba(0,0,0,0.7));
+          z-index: 1; backdrop-filter: blur(1px);
       }}
-      .header-content {{ position: relative; z-index: 2; width: 90%; animation: fadeUp 0.8s var(--ease); display:flex; flex-direction:column; align-items:center; }}
-      .header-logo {{ height: 90px; width: auto; margin-bottom: 15px; filter: drop-shadow(0 5px 15px rgba(0,0,0,0.2)); }}
-      header h1 {{ font-family: var(--font-serif); font-size: 2.2rem; margin: 0; font-weight: 700; }}
+      .header-content {{ position: relative; z-index: 2; width: 90%; max-width: 800px; animation: fadeUp 1s var(--ease-out); }}
+      .header-logo {{ height: 110px; width: auto; margin-bottom: 20px; filter: drop-shadow(0 10px 25px rgba(0,0,0,0.3)); transition: transform 0.3s ease; }}
+      .header-logo:hover {{ transform: scale(1.05) rotate(-2deg); }}
+      header h1 {{ font-size: clamp(2.2rem, 6vw, 4rem); font-weight: 700; text-shadow: 0 4px 25px rgba(0,0,0,0.4); line-height: 1.1; letter-spacing: -0.02em; }}
+      
       .table-badge {{
-          display: inline-block; background: rgba(255,255,255,0.2); backdrop-filter: blur(10px);
-          padding: 6px 14px; border-radius: 30px; font-size: 0.9rem; margin-top: 10px;
-          border: 1px solid rgba(255,255,255,0.3);
+          display: inline-block; background: rgba(255,255,255,0.25); backdrop-filter: blur(10px);
+          padding: 8px 18px; border-radius: 30px; font-size: 1rem; margin-top: 15px; font-weight: 600;
+          border: 1px solid rgba(255,255,255,0.4); box-shadow: 0 4px 15px rgba(0,0,0,0.1);
       }}
 
-      /* NAV */
-      .category-nav-wrapper {{ position: sticky; top: 10px; z-index: 90; padding: 0 10px; margin-bottom: 30px; display: flex; justify-content: center; }}
+      /* --- NAVIGATION --- */
+      .category-nav-wrapper {{ position: sticky; top: 15px; z-index: 90; display: flex; justify-content: center; padding: 0 15px; margin-bottom: 40px; }}
       .category-nav {{
-          display: flex; gap: 5px; overflow-x: auto; padding: 6px; border-radius: 50px;
+          display: flex; gap: 8px; overflow-x: auto; padding: 8px; border-radius: 100px;
           background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(20px);
-          box-shadow: var(--shadow-sm); border: 1px solid var(--border-light); max-width: 100%;
+          border: 1px solid rgba(255,255,255,0.6); box-shadow: var(--shadow-md);
+          scrollbar-width: none; max-width: 100%;
       }}
+      .category-nav::-webkit-scrollbar {{ display: none; }}
       .category-nav a {{
-          padding: 10px 20px; border-radius: 40px; font-weight: 600; font-size: 0.9rem;
-          color: var(--nav-text); text-decoration: none; white-space: nowrap; transition: all 0.3s;
+          color: var(--nav-text); text-decoration: none; padding: 10px 24px;
+          border-radius: 50px; font-weight: 600; white-space: nowrap; font-size: 0.95rem;
+          transition: all 0.3s var(--ease-out); border: 1px solid transparent;
       }}
       .category-nav a.active {{ background: var(--primary); color: white; box-shadow: 0 4px 15px color-mix(in srgb, var(--primary), transparent 60%); }}
 
-      /* MENU */
-      .container {{ max-width: 1280px; margin: 0 auto; padding: 0 15px; }}
-      .category-title {{ font-family: var(--font-serif); font-size: 1.8rem; margin: 40px 0 20px; display: flex; align-items: center; gap: 15px; }}
-      .category-title::after {{ content: ''; height: 1px; background: var(--border-light); flex-grow: 1; }}
-      
-      .products-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 15px; }}
-      @media (min-width: 768px) {{ .products-grid {{ grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 25px; }} }}
+      /* --- MAIN --- */
+      .container {{ max-width: 1280px; margin: 0 auto; padding: 0 25px; }}
+      .category-section {{ margin-bottom: 60px; scroll-margin-top: 120px; }}
+      .category-title {{ font-size: 2rem; margin-bottom: 30px; font-weight: 800; display: flex; align-items: center; gap: 20px; letter-spacing: -0.03em; }}
+      .category-title::after {{ content: ''; height: 2px; background: var(--secondary); flex-grow: 1; opacity: 0.3; border-radius: 2px; }}
 
-      .product-card {{
-          background: var(--surface); border-radius: var(--radius); overflow: hidden;
-          box-shadow: var(--shadow-sm); border: 1px solid var(--border-light);
-          display: flex; flex-direction: column; height: 100%; cursor: pointer;
-          transition: transform 0.2s;
-      }}
-      .product-card:active {{ transform: scale(0.98); }}
+      /* --- GRID & CARDS --- */
+      .products-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 30px; }}
+      @media (min-width: 1200px) {{ .products-grid {{ grid-template-columns: repeat(4, 1fr); }} }}
+      @media (min-width: 1600px) {{ .products-grid {{ grid-template-columns: repeat(5, 1fr); }} }}
       
-      .product-img {{ width: 100%; aspect-ratio: 4/3; object-fit: cover; background: #f5f5f5; }}
-      .product-info {{ padding: 12px; flex-grow: 1; display: flex; flex-direction: column; }}
-      .product-name {{ font-weight: 700; font-size: 1rem; margin-bottom: 5px; line-height: 1.2; }}
-      .product-desc {{ font-size: 0.8rem; color: #666; margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }}
-      .product-footer {{ margin-top: auto; display: flex; justify-content: space-between; align-items: center; }}
-      .product-price {{ font-weight: 800; font-size: 1.1rem; color: var(--text-main); }}
+      .product-card {{
+          background: var(--surface); border-radius: var(--radius-md); overflow: hidden; display: flex; flex-direction: column;
+          box-shadow: var(--shadow-sm); border: 1px solid var(--border-light); transition: all 0.4s var(--ease-out);
+          height: 100%; position: relative; cursor: pointer;
+      }}
+      .product-card:hover {{ transform: translateY(-8px) scale(1.01); box-shadow: var(--shadow-lg); border-color: color-mix(in srgb, var(--primary), transparent 80%); }}
+      
+      .product-image-wrapper {{ width: 100%; aspect-ratio: 4/3; overflow: hidden; background: #f5f5f7; }}
+      .product-image {{ width: 100%; height: 100%; object-fit: cover; transition: transform 0.6s var(--ease-out); }}
+      .product-card:hover .product-image {{ transform: scale(1.1); }}
+      
+      .product-info {{ padding: 20px; flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; }}
+      .product-name {{ font-size: 1.2rem; font-weight: 700; margin: 0 0 8px; line-height: 1.3; color: var(--text-main); }}
+      .product-desc {{ font-size: 0.9rem; color: #64748b; line-height: 1.5; margin-bottom: 15px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }}
+      .product-footer {{ display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 15px; border-top: 1px solid var(--border-light); }}
+      .product-price {{ font-size: 1.25rem; font-weight: 800; color: var(--text-main); }}
       
       .add-btn {{
-          width: 32px; height: 32px; border-radius: 50%; background: var(--primary); color: white;
-          border: none; display: flex; align-items: center; justify-content: center; font-size: 1rem;
-          box-shadow: 0 4px 10px color-mix(in srgb, var(--primary), transparent 70%);
+          background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: var(--radius-sm);
+          font-weight: 600; cursor: pointer; font-size: 0.95rem; display: flex; align-items: center; gap: 8px;
+          transition: all 0.2s var(--ease-out);
+      }}
+      .add-btn:hover {{ background: color-mix(in srgb, var(--primary), black 15%); transform: translateY(-2px); box-shadow: 0 4px 12px color-mix(in srgb, var(--primary), transparent 60%); }}
+      .add-btn:active {{ transform: scale(0.95); }}
+
+      /* --- MOBILE --- */
+      @media (max-width: 768px) {{
+          header {{ height: 35vh; min-height: 260px; border-radius: 0 0 30px 30px; margin-bottom: 20px; }}
+          header h1 {{ font-size: 2.2rem; }}
+          .header-logo {{ height: 70px; margin-bottom: 15px; }}
+          
+          .category-nav-wrapper {{ padding: 0 10px; top: 10px; margin-bottom: 25px; }}
+          .category-nav {{ padding: 6px; gap: 5px; }}
+          .category-nav a {{ padding: 8px 18px; font-size: 0.85rem; }}
+          .category-title {{ font-size: 1.6rem; margin-bottom: 20px; }}
+          
+          .products-grid {{ grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 0 5px; }}
+          .product-info {{ padding: 12px; }}
+          .product-name {{ font-size: 1rem; margin-bottom: 6px; }}
+          .product-desc {{ font-size: 0.75rem; margin-bottom: 10px; -webkit-line-clamp: 2; }}
+          .product-price {{ font-size: 1.1rem; }}
+          .product-footer {{ padding-top: 10px; }}
+          
+          .add-btn {{ padding: 0; width: 36px; height: 36px; border-radius: 50%; justify-content: center; }}
+          .add-btn span {{ display: none; }}
+          .add-btn i {{ font-size: 1rem; }}
+          .container {{ padding: 0 10px; }}
       }}
 
-      /* UNIFIED SIDEBAR (CART + HISTORY) */
-      .sidebar {{
-          position: fixed; top: 0; right: 0; width: 100%; max-width: 480px; height: 100%;
-          background: #fff; z-index: 1000; display: flex; flex-direction: column;
-          transform: translateX(100%); transition: transform 0.4s var(--ease);
-          box-shadow: -10px 0 40px rgba(0,0,0,0.1);
+      /* --- FLOATING BUTTON --- */
+      #cart-toggle {{
+          position: fixed; bottom: 30px; right: 30px; width: 70px; height: 70px;
+          background: var(--primary); color: white; border-radius: 50%; border: none;
+          box-shadow: var(--shadow-float); cursor: pointer; z-index: 99;
+          display: flex; justify-content: center; align-items: center; 
+          transition: transform 0.3s var(--ease-bounce);
       }}
-      .sidebar.open {{ transform: translateX(0); }}
+      #cart-toggle:hover {{ transform: scale(1.1) rotate(5deg); }}
+      #cart-toggle i {{ font-size: 1.8rem; }}
+      #cart-count {{ 
+          position: absolute; top: -2px; right: -2px; background: #ff3b30; color: white;
+          width: 26px; height: 26px; border-radius: 50%; font-size: 0.85rem; font-weight: 800; 
+          display: flex; align-items: center; justify-content: center; border: 2px solid white;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      }}
+
+      /* --- SIDEBAR (QR SPECIFIC) --- */
+      #cart-sidebar {{
+          position: fixed; top: 0; right: -100%; width: 100%; max-width: 450px; height: 100%;
+          z-index: 1000; display: flex; flex-direction: column; transition: right 0.5s var(--ease-out);
+          box-shadow: -10px 0 50px rgba(0,0,0,0.2); background: white;
+      }}
+      #cart-sidebar.open {{ right: 0; }}
+      @media (max-width: 768px) {{ #cart-sidebar {{ max-width: 100%; }} }}
       
-      .sidebar-header {{
-          padding: 15px 20px; background: white; border-bottom: 1px solid var(--border-light);
+      .cart-content-wrapper {{ height: 100%; display: flex; flex-direction: column; background: var(--surface-glass); backdrop-filter: blur(30px); }}
+      
+      .sidebar-header-row {{
+          padding: 20px 25px; background: rgba(255,255,255,0.5); border-bottom: 1px solid var(--border-light);
           display: flex; flex-direction: column; gap: 15px;
       }}
+      .sidebar-top {{ display: flex; justify-content: space-between; align-items: center; }}
       
-      .header-top {{ display: flex; justify-content: space-between; align-items: center; }}
-      .header-title {{ font-family: var(--font-serif); font-size: 1.4rem; font-weight: 700; }}
-      .close-btn {{ background: none; border: none; font-size: 1.5rem; color: #999; cursor: pointer; padding: 5px; }}
+      /* Tabs in Sidebar */
+      .sidebar-tabs {{ display: flex; background: #f1f5f9; padding: 4px; border-radius: 12px; }}
+      .sb-tab {{ 
+          flex: 1; text-align: center; padding: 10px; cursor: pointer; font-weight: 600; color: #64748b;
+          border-radius: 8px; transition: all 0.2s; border: none; background: transparent;
+      }}
+      .sb-tab.active {{ background: white; color: var(--primary); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
 
-      /* SEGMENTED CONTROL (TABS) */
-      .tabs-container {{
-          background: #f1f5f9; padding: 4px; border-radius: 12px; display: flex; position: relative;
-      }}
-      .tab-btn {{
-          flex: 1; border: none; background: transparent; padding: 10px; border-radius: 10px;
-          font-weight: 600; font-size: 0.95rem; color: #64748b; cursor: pointer; z-index: 2;
-          transition: color 0.2s; text-align: center;
-      }}
-      .tab-btn.active {{ color: var(--primary); }}
+      .sidebar-scroll-area {{ flex-grow: 1; overflow-y: auto; padding: 20px; }}
       
-      .tab-indicator {{
-          position: absolute; top: 4px; left: 4px; width: calc(50% - 4px); height: calc(100% - 8px);
-          background: white; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-          transition: transform 0.3s var(--ease); z-index: 1;
+      /* Cart Item */
+      .cart-item {{ 
+          display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; 
+          padding: 15px; background: white; border-radius: 16px; box-shadow: var(--shadow-sm); 
+          border: 1px solid transparent; transition: border 0.2s;
       }}
-      /* Logic for indicator slide */
-      .tabs-container[data-active="history"] .tab-indicator {{ transform: translateX(100%); }}
-
-      /* SIDEBAR CONTENT */
-      .sidebar-body {{ flex-grow: 1; overflow-y: auto; padding: 20px; background: #f8fafc; position: relative; }}
+      .cart-item-info {{ flex-grow: 1; padding-right: 10px; }}
+      .cart-item-name {{ font-weight: 700; font-size: 1rem; display: block; margin-bottom: 4px; }}
+      .cart-item-mods {{ font-size: 0.85rem; color: #888; display: block; }}
+      .cart-item-price {{ color: var(--primary); font-weight: 800; font-size: 1rem; margin-top: 6px; display: block; }}
+      .qty-control {{ display: flex; gap: 10px; background: #f1f5f9; padding: 5px; border-radius: 10px; align-items: center; }}
+      .qty-btn {{ width: 30px; height: 30px; background: white; border-radius: 8px; border: none; font-weight: 700; box-shadow: var(--shadow-sm); cursor: pointer; }}
       
-      .tab-view {{ display: none; animation: fadeIn 0.3s ease; }}
-      .tab-view.active {{ display: block; }}
-
-      /* CART ITEMS */
-      .cart-item {{
-          background: white; padding: 15px; border-radius: 16px; margin-bottom: 15px;
-          display: flex; justify-content: space-between; align-items: center;
-          box-shadow: var(--shadow-sm); border: 1px solid var(--border-light);
-      }}
-      .item-info {{ flex-grow: 1; }}
-      .item-name {{ font-weight: 700; display: block; margin-bottom: 4px; }}
-      .item-mods {{ font-size: 0.8rem; color: #888; display: block; }}
-      .item-price {{ color: var(--primary); font-weight: 700; font-size: 0.95rem; }}
-      
-      .qty-control {{ display: flex; align-items: center; gap: 10px; background: #f1f5f9; padding: 4px; border-radius: 8px; }}
-      .qty-btn {{ width: 28px; height: 28px; background: white; border-radius: 6px; border: none; font-weight: 700; box-shadow: var(--shadow-sm); cursor: pointer; }}
-      .qty-val {{ min-width: 20px; text-align: center; font-weight:600; }}
-
-      /* HISTORY ITEMS (UPDATED STYLE) */
+      /* History Item */
       .history-card {{
           background: white; border-radius: 16px; padding: 20px; margin-bottom: 15px;
           box-shadow: var(--shadow-sm); border: 1px solid var(--border-light);
-          position: relative; overflow: hidden;
       }}
-      .h-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }}
-      .h-id {{ font-weight: 700; color: #333; }}
-      .h-time {{ font-size: 0.8rem; color: #999; }}
-      
-      /* Status Badges */
-      .status-badge {{
-          padding: 5px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700;
-          display: inline-flex; align-items: center; gap: 6px;
-      }}
+      .h-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+      .status-badge {{ padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 700; }}
       .st-new {{ background: var(--st-new-bg); color: var(--st-new-text); }}
       .st-work {{ background: var(--st-work-bg); color: var(--st-work-text); }}
-      .st-ready {{ background: var(--st-ready-bg); color: var(--st-ready-text); border: 1px solid #86efac; }}
+      .st-ready {{ background: var(--st-ready-bg); color: var(--st-ready-text); }}
       .st-done {{ background: var(--st-done-bg); color: var(--st-done-text); }}
       
-      .h-body {{ font-size: 0.95rem; line-height: 1.6; color: #444; margin-bottom: 12px; }}
-      .h-item {{ display: block; }}
-      
-      .h-footer {{ display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px dashed #eee; }}
-      .h-total {{ font-weight: 800; font-size: 1.1rem; color: var(--text-main); }}
-
-      /* SIDEBAR FOOTER */
-      .sidebar-footer {{
-          padding: 20px; background: white; border-top: 1px solid var(--border-light);
-          box-shadow: 0 -5px 20px rgba(0,0,0,0.03);
-      }}
+      .cart-footer {{ padding: 25px; background: white; box-shadow: 0 -10px 40px rgba(0,0,0,0.05); }}
       .total-row {{ display: flex; justify-content: space-between; font-size: 1.3rem; font-weight: 800; margin-bottom: 20px; color: var(--text-main); }}
       
-      .main-btn {{
-          width: 100%; padding: 16px; border-radius: 14px; border: none;
-          font-size: 1.1rem; font-weight: 700; cursor: pointer; color: white;
-          display: flex; justify-content: center; align-items: center; gap: 10px;
-          background: var(--primary); transition: transform 0.1s;
+      .main-btn {{ 
+          width: 100%; padding: 16px; background: var(--primary); color: white; border: none; 
+          border-radius: var(--radius-md); font-size: 1.1rem; font-weight: 700; cursor: pointer;
+          display: flex; justify-content: center; align-items: center; gap: 10px; box-shadow: 0 8px 20px color-mix(in srgb, var(--primary), transparent 60%);
       }}
       .main-btn:active {{ transform: scale(0.98); }}
-      .main-btn.secondary {{ background: #f1f5f9; color: #333; margin-top: 10px; }}
+      .main-btn:disabled {{ background: #e2e8f0; color: #94a3b8; cursor: not-allowed; box-shadow: none; transform: none; }}
+      .main-btn.secondary {{ background: #f1f5f9; color: #333; margin-top: 10px; box-shadow: none; }}
 
-      /* UNIFIED FAB (Main Button) */
-      #main-fab {{
-          position: fixed; bottom: 30px; right: 30px; width: 65px; height: 65px;
-          background: var(--primary); color: white; border-radius: 50%;
-          box-shadow: 0 10px 30px color-mix(in srgb, var(--primary), transparent 60%);
-          display: flex; justify-content: center; align-items: center; cursor: pointer;
-          z-index: 900; transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-      }}
-      #main-fab:hover {{ transform: scale(1.1); }}
-      #main-fab i {{ font-size: 1.6rem; }}
-      #fab-badge {{
-          position: absolute; top: 0; right: 0; background: #ef4444; color: white;
-          width: 24px; height: 24px; border-radius: 50%; font-size: 0.8rem; font-weight: 800;
-          display: flex; align-items: center; justify-content: center; border: 2px solid white;
-      }}
-
-      /* MODALS */
+      /* --- MODALS --- */
       .modal-overlay {{
           position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-          background: rgba(0,0,0,0.5); backdrop-filter: blur(5px);
+          background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
           z-index: 2000; display: none; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.3s;
       }}
       .modal-overlay.visible {{ display: flex; opacity: 1; }}
       .modal-content {{
-          background: white; width: 90%; max-width: 450px; padding: 30px;
-          border-radius: 24px; transform: translateY(20px); transition: transform 0.3s;
-          max-height: 85vh; overflow-y: auto;
+          background: #fff; padding: 30px; border-radius: 28px; width: 90%; max-width: 500px;
+          max-height: 90vh; overflow-y: auto; transform: translateY(20px); transition: transform 0.3s;
+          box-shadow: var(--shadow-lg);
       }}
       .modal-overlay.visible .modal-content {{ transform: translateY(0); }}
       
       /* Product Detail Modal */
-      .detail-img {{ width: 100%; border-radius: 16px; margin-bottom: 20px; }}
-      .detail-title {{ font-size: 1.6rem; font-weight: 800; margin-bottom: 10px; line-height: 1.2; }}
-      .detail-desc {{ color: #666; margin-bottom: 20px; line-height: 1.5; }}
-      .detail-price {{ font-size: 1.4rem; font-weight: 800; color: var(--primary); margin-bottom: 25px; }}
-
-      /* --- MODIFIERS IN MODAL (NEW) --- */
-      #detail-modifiers {{
-          margin-bottom: 20px; border-top: 1px solid #f1f5f9; padding-top: 15px;
-      }}
-      .mod-detail-item {{
-          display: flex; justify-content: space-between; align-items: center;
-          padding: 10px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer;
-      }}
-      .mod-detail-item label {{ display: flex; align-items: center; width: 100%; cursor: pointer; }}
-      .mod-detail-checkbox {{ width: 20px; height: 20px; margin-right: 12px; accent-color: var(--primary); cursor: pointer; }}
-      .mod-detail-name {{ font-weight: 600; font-size: 0.95rem; color: var(--text-main); flex-grow: 1; }}
-      .mod-detail-price {{ font-weight: 700; color: var(--primary); font-size: 0.9rem; }}
-
-      /* FOOTER */
-      footer {{ padding: 60px 20px 40px; background: var(--footer-bg); color: var(--footer-text); margin-top: auto; }}
-      .footer-grid {{ display: grid; gap: 30px; max-width: 1000px; margin: 0 auto; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }}
-      .footer-col h4 {{ text-transform: uppercase; font-size: 0.9rem; margin-bottom: 20px; opacity: 0.7; letter-spacing: 1px; }}
-      .footer-link {{ display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: inherit; text-decoration: none; opacity: 0.8; }}
-      .socials a {{ display: inline-flex; width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 10px; justify-content: center; align-items: center; color: white; text-decoration: none; margin-right: 10px; font-size: 1.2rem; }}
-
-      @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
-      @keyframes fadeIn {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+      .product-detail-img {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 18px; margin-bottom: 20px; box-shadow: var(--shadow-sm); }}
+      .detail-title {{ font-size: 1.8rem; font-weight: 800; margin-bottom: 10px; line-height: 1.2; }}
+      .detail-price {{ font-size: 1.5rem; color: var(--primary); font-weight: 800; margin-bottom: 20px; }}
+      .detail-desc {{ color: #64748b; font-size: 1rem; line-height: 1.6; margin-bottom: 25px; }}
       
-      /* Payment Options */
+      /* Modifiers */
+      #detail-modifiers {{ margin-bottom: 30px; border-top: 1px solid #f1f5f9; padding-top: 15px; }}
+      .mod-detail-item {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer; }}
+      .mod-detail-item label {{ display: flex; align-items: center; width: 100%; cursor: pointer; }}
+      .mod-detail-checkbox {{ width: 22px; height: 22px; margin-right: 15px; accent-color: var(--primary); cursor: pointer; }}
+      .mod-detail-name {{ font-weight: 600; font-size: 1rem; color: var(--text-main); flex-grow: 1; }}
+      .mod-detail-price {{ font-weight: 700; color: var(--primary); font-size: 0.95rem; }}
+      
+      /* Footer */
+      footer {{ background: var(--footer-bg); color: var(--footer-text); padding: 80px 20px 40px; margin-top: auto; }}
+      .footer-grid {{ display: grid; gap: 30px; max-width: 1000px; margin: 0 auto; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }}
+      .footer-link {{ display: flex; align-items: center; gap: 12px; margin-bottom: 16px; color: inherit; text-decoration: none; opacity: 0.85; font-size: 1.05rem; }}
+      .socials a {{ display: inline-flex; width: 45px; height: 45px; background: rgba(255,255,255,0.15); border-radius: 12px; justify-content: center; align-items: center; color: white; font-size: 1.3rem; margin-right: 10px; }}
+      
       .pay-option {{ padding: 15px; border: 2px solid #e2e8f0; border-radius: 12px; margin-bottom: 10px; cursor: pointer; display: flex; align-items: center; gap: 15px; font-weight: 600; transition: all 0.2s; }}
       .pay-option:hover {{ border-color: var(--primary); background: #f8faff; }}
       
-      /* Spinner */
-      .spinner {{ width: 24px; height: 24px; border: 3px solid rgba(0,0,0,0.1); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }}
+      .spinner {{ width: 24px; height: 24px; border: 3px solid rgba(0,0,0,0.1); border-top: 3px solid var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }}
       @keyframes spin {{ 100% {{ transform: rotate(360deg); }} }}
+      @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
     </style>
 </head>
 <body>
@@ -301,62 +310,56 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
     </div>
     
     <div class="container">
-        <main id="menu"></main>
-    </div>
-    
-    <div style="height: 100px;"></div> <div id="main-fab">
-        <i class="fa-solid fa-utensils" id="fab-icon"></i>
-        <span id="fab-badge" style="display:none;">0</span>
+        <main id="menu">
+            <div style="text-align:center; padding: 80px;"><div class="spinner" style="margin:0 auto;"></div></div>
+        </main>
     </div>
 
-    <aside id="unified-sidebar" class="sidebar">
-        <div class="sidebar-header">
-            <div class="header-top">
-                <div class="header-title">Замовлення</div>
-                <button id="close-sidebar" class="close-btn">&times;</button>
-            </div>
-            
-            <div class="tabs-container" id="tabs-ctrl">
-                <div class="tab-indicator"></div>
-                <button class="tab-btn active" onclick="switchTab('cart')">Кошик</button>
-                <button class="tab-btn" onclick="switchTab('history')">Історія</button>
-            </div>
-        </div>
-        
-        <div class="sidebar-body">
-            <div id="view-cart" class="tab-view active">
-                <div id="cart-list"></div>
-                <div id="empty-cart-msg" style="text-align:center; padding:40px; color:#999; display:none;">
-                    <i class="fa-solid fa-basket-shopping" style="font-size:3rem; opacity:0.3; margin-bottom:15px;"></i>
-                    <p>Кошик порожній</p>
+    <button id="cart-toggle">
+        <i class="fa-solid fa-utensils"></i>
+        <span id="cart-count">0</span>
+    </button>
+
+    <aside id="cart-sidebar">
+        <div class="cart-content-wrapper">
+            <div class="sidebar-header-row">
+                <div class="sidebar-top">
+                    <h3 style="margin:0; font-size:1.5rem;">Замовлення</h3>
+                    <button id="close-cart-btn" style="background:none; border:none; font-size:1.8rem; cursor:pointer; color: #94a3b8;">&times;</button>
+                </div>
+                <div class="sidebar-tabs">
+                    <button class="sb-tab active" onclick="switchTab('cart')">Кошик</button>
+                    <button class="sb-tab" onclick="switchTab('history')">Історія</button>
                 </div>
             </div>
             
-            <div id="view-history" class="tab-view">
-                <div id="history-list"></div>
-                <div id="empty-history-msg" style="text-align:center; padding:40px; color:#999; display:none;">
-                    <i class="fa-solid fa-clock-rotate-left" style="font-size:3rem; opacity:0.3; margin-bottom:15px;"></i>
-                    <p>Історія порожня</p>
+            <div id="view-cart" class="sidebar-scroll-area">
+                <div id="cart-items-container"></div>
+            </div>
+            
+            <div id="view-history" class="sidebar-scroll-area" style="display:none;">
+                <div id="history-items-container"></div>
+            </div>
+            
+            <div class="cart-footer">
+                <div class="total-row">
+                    <span id="total-label">Разом:</span>
+                    <span id="cart-total-price">0.00 грн</span>
                 </div>
-            </div>
-        </div>
-        
-        <div class="sidebar-footer">
-            <div class="total-row">
-                <span id="footer-label">До сплати:</span>
-                <span id="footer-total">0.00 грн</span>
-            </div>
-            
-            <div id="cart-actions">
-                <button id="place-order-btn" class="main-btn">Замовити <i class="fa-solid fa-arrow-right"></i></button>
-                <button id="call-waiter-btn" class="main-btn secondary"><i class="fa-solid fa-bell"></i> Викликати офіціанта</button>
-            </div>
-            
-            <div id="history-actions" style="display:none;">
-                <button id="request-bill-btn" class="main-btn" style="background:#1e293b;">
-                    <i class="fa-solid fa-receipt"></i> Попросити рахунок
-                </button>
-                <button onclick="switchTab('cart')" class="main-btn secondary">Додати ще страв</button>
+                
+                <div id="cart-actions">
+                    <button id="place-order-btn" class="main-btn" disabled>
+                        <span>Замовити</span> <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                    <button id="call-waiter-btn" class="main-btn secondary"><i class="fa-solid fa-bell"></i> Викликати офіціанта</button>
+                </div>
+                
+                <div id="history-actions" style="display:none;">
+                    <button id="request-bill-btn" class="main-btn" style="background:#1e293b;">
+                        <i class="fa-solid fa-receipt"></i> Попросити рахунок
+                    </button>
+                    <button onclick="switchTab('cart')" class="main-btn secondary">Додати ще страв</button>
+                </div>
             </div>
         </div>
     </aside>
@@ -364,7 +367,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
     <div id="product-modal" class="modal-overlay">
         <div class="modal-content">
             <div style="position:relative;">
-                <button class="close-modal close-btn" style="position:absolute; top:-10px; right:-10px; background:white; border-radius:50%; width:35px; height:35px; display:flex; align-items:center; justify-content:center; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">&times;</button>
+                <button class="close-modal" style="position:absolute; top:-10px; right:-10px; background:white; border-radius:50%; width:35px; height:35px; border:none; box-shadow:0 2px 10px rgba(0,0,0,0.1); font-size:1.5rem; cursor:pointer;">&times;</button>
                 <img src="" id="det-img" class="product-detail-img">
                 <h2 id="det-name" class="detail-title"></h2>
                 <div id="det-desc" class="detail-desc"></div>
@@ -372,7 +375,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
                 
                 <div id="detail-modifiers"></div>
                 
-                <button id="det-add-btn" class="main-btn">Додати в кошик</button>
+                <button id="det-add-btn" class="main-btn">В кошик</button>
             </div>
         </div>
     </div>
@@ -387,6 +390,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
             <div class="pay-option" onclick="sendBillRequest('card')">
                 <i class="fa-regular fa-credit-card" style="color:#1565c0; font-size:1.5rem;"></i> Картка / Термінал
             </div>
+            <button class="main-btn secondary close-modal" style="margin-top:20px;">Скасувати</button>
         </div>
     </div>
 
@@ -397,17 +401,17 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
             </div>
             <h3 id="success-title" style="margin-bottom:10px; font-size:1.5rem;">Успішно!</h3>
             <p id="success-msg" style="color:#64748b; margin-bottom:25px; font-size:1rem;"></p>
-            <button class="main-btn" onclick="document.getElementById('success-modal').classList.remove('visible')">Гаразд</button>
+            <button class="main-btn close-modal">Гаразд</button>
         </div>
     </div>
 
     <div id="page-modal" class="modal-overlay">
         <div class="modal-content">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:10px; border-bottom:1px solid #eee;">
-                <h3 id="page-title" style="margin:0;"></h3>
-                <button class="close-modal close-btn">&times;</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:15px; border-bottom:1px solid #f1f5f9;">
+                <h3 id="page-title" style="margin:0; font-size:1.5rem;"></h3>
+                <span class="close-modal" style="font-size:1.8rem; cursor:pointer; color:#cbd5e1;">&times;</span>
             </div>
-            <div id="page-body" class="page-content-body" style="line-height:1.6; color:#333;"></div>
+            <div id="page-body" class="page-content-body" style="line-height:1.7; color:#334155;"></div>
         </div>
     </div>
 
@@ -433,8 +437,8 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
                 <div class="socials">{social_links_html}</div>
             </div>
         </div>
-        <div style="text-align:center; margin-top:40px; font-size:0.8rem; opacity:0.5;">
-            &copy; 2024 {site_title}
+        <div style="text-align:center; margin-top:60px; opacity:0.4; font-size:0.85rem;">
+            &copy; 2024 {site_title}. All rights reserved.
         </div>
     </footer>
 
@@ -443,65 +447,56 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         const MENU = {menu_data};
         let HISTORY = {history_data};
         let GRAND_TOTAL = {grand_total};
-        let cart = {{}}; // Глобальный объект корзины
+        let cart = {{}};
         
-        let curProd = null;
+        let currentDetailProduct = null;
 
         document.addEventListener('DOMContentLoaded', () => {{
-            // Очистка и восстановление корзины
+            // Restore cart
             try {{
                 const saved = localStorage.getItem('qrCart');
                 if (saved) {{
                     const parsed = JSON.parse(saved);
-                    // Проверка на валидность (старый формат был массивом, новый - объектом)
                     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {{
                         cart = parsed;
-                    }} else {{
-                        cart = {{}}; // Сброс, если формат неверный
                     }}
                 }}
-            }} catch (e) {{
-                console.error("Cart load error", e);
-                cart = {{}};
-                localStorage.removeItem('qrCart');
-            }}
+            }} catch (e) {{ cart = {{}}; }}
 
             renderMenu();
-            initUI();
+            updateCartView();
+            initListeners();
             
-            // Poll for updates
             setInterval(fetchUpdates, 5000);
         }});
 
-        function initUI() {{
-            // Sidebar Toggles
-            const sidebar = document.getElementById('unified-sidebar');
-            document.getElementById('main-fab').onclick = () => sidebar.classList.add('open');
-            document.getElementById('close-sidebar').onclick = () => sidebar.classList.remove('open');
+        function initListeners() {{
+            // Sidebar
+            const sidebar = document.getElementById('cart-sidebar');
+            document.getElementById('cart-toggle').onclick = () => sidebar.classList.add('open');
+            document.getElementById('close-cart-btn').onclick = () => sidebar.classList.remove('open');
             
-            // Modals close
+            // Modals
             document.querySelectorAll('.close-modal').forEach(b => {{
                 b.onclick = (e) => e.target.closest('.modal-overlay').classList.remove('visible');
             }});
 
-            // Buttons
+            // Actions
             document.getElementById('place-order-btn').onclick = placeOrder;
             document.getElementById('call-waiter-btn').onclick = callWaiter;
             document.getElementById('request-bill-btn').onclick = () => document.getElementById('pay-modal').classList.add('visible');
             
-            // "Add to cart" in modal
+            // Add to cart from modal
             document.getElementById('det-add-btn').onclick = () => {{
                 const selectedMods = [];
-                const container = document.getElementById('detail-modifiers');
-                container.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => {{
+                document.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => {{
                     selectedMods.push({{
                         id: parseInt(cb.value),
                         name: cb.dataset.name,
                         price: parseFloat(cb.dataset.price)
                     }});
                 }});
-                
-                addToCart(curProd, selectedMods);
+                addToCart(currentDetailProduct, selectedMods);
                 document.getElementById('product-modal').classList.remove('visible');
             }};
 
@@ -513,137 +508,122 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
                     openPageModal(link.dataset.itemId, link.innerText);
                 }}
             }});
-
-            updateUI();
         }}
 
         // --- TABS LOGIC ---
         window.switchTab = (tab) => {{
-            document.getElementById('tabs-ctrl').dataset.active = tab;
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.querySelector(`.tab-btn[onclick="switchTab('${{tab}}')"]`).classList.add('active');
+            document.querySelectorAll('.sb-tab').forEach(b => b.classList.remove('active'));
+            document.querySelector(`.sb-tab[onclick="switchTab('${{tab}}')"]`).classList.add('active');
             
-            document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
-            document.getElementById(`view-${{tab}}`).classList.add('active');
+            document.getElementById('view-cart').style.display = tab === 'cart' ? 'block' : 'none';
+            document.getElementById('view-history').style.display = tab === 'history' ? 'block' : 'none';
             
-            const cartActs = document.getElementById('cart-actions');
-            const histActs = document.getElementById('history-actions');
-            const label = document.getElementById('footer-label');
-            const total = document.getElementById('footer-total');
+            document.getElementById('cart-actions').style.display = tab === 'cart' ? 'block' : 'none';
+            document.getElementById('history-actions').style.display = tab === 'history' ? 'block' : 'none';
             
-            if (tab === 'cart') {{
-                cartActs.style.display = 'block';
-                histActs.style.display = 'none';
-                label.innerText = 'Разом (Кошик):';
-                const items = Object.values(cart);
-                const cartSum = items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-                total.innerText = cartSum.toFixed(2) + ' грн';
-            }} else {{
-                cartActs.style.display = 'none';
-                histActs.style.display = 'block';
-                label.innerText = 'Всього до сплати:';
-                const items = Object.values(cart);
-                const cartSum = items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-                total.innerText = (GRAND_TOTAL + cartSum).toFixed(2) + ' грн';
-            }}
+            updateFooterTotal(tab);
         }};
 
-        // --- MENU RENDER ---
-        function renderMenu() {{
-            const nav = document.getElementById('category-nav');
-            const main = document.getElementById('menu');
+        function updateFooterTotal(tab) {{
+            const label = document.getElementById('total-label');
+            const totalEl = document.getElementById('cart-total-price');
             
-            // Очистка и защита от ошибок
-            try {{
-                nav.innerHTML = '';
-                main.innerHTML = '';
-
-                MENU.categories.forEach((cat, i) => {{
-                    const link = document.createElement('a');
-                    link.href = `#c-${{cat.id}}`;
-                    link.textContent = cat.name;
-                    if(i===0) link.classList.add('active');
-                    nav.appendChild(link);
-
-                    const section = document.createElement('div');
-                    section.id = `c-${{cat.id}}`;
-                    section.className = 'category-section';
-                    section.innerHTML = `<h2 class="category-title">${{cat.name}}</h2>`;
-
-                    const grid = document.createElement('div');
-                    grid.className = 'products-grid';
-
-                    const products = MENU.products.filter(p => p.category_id === cat.id);
-                    if (products.length > 0) {{
-                        products.forEach(prod => {{
-                            const card = document.createElement('div');
-                            card.className = 'product-card';
-                            const img = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
-                            const prodJson = JSON.stringify(prod).replace(/"/g, '&quot;');
-                            
-                            // Клик по карточке открывает детали
-                            card.onclick = (e) => {{
-                                if(!e.target.closest('.add-btn')) openDetail(prod);
-                            }};
-
-                            card.innerHTML = `
-                                <div class="product-image-wrapper"><img src="${{img}}" class="product-image" loading="lazy"></div>
-                                <div class="product-info">
-                                    <div class="product-header">
-                                        <div class="product-name">${{prod.name}}</div>
-                                        <div class="product-desc">${{prod.description||''}}</div>
-                                    </div>
-                                    <div class="product-footer">
-                                        <div class="product-price">${{prod.price}} грн</div>
-                                        <button class="add-btn" onclick="event.stopPropagation(); handleAdd(JSON.parse(this.dataset.product), this)" data-product="${{prodJson}}">
-                                            <i class="fa-solid fa-plus"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            `;
-                            grid.appendChild(card);
-                        }});
-                        section.appendChild(grid);
-                        main.appendChild(section);
-                    }}
-                }});
-                
-                setupScrollSpy();
-            }} catch (e) {{
-                console.error("Render error", e);
-                main.innerHTML = '<div style="text-align:center; padding:40px;">Помилка відображення меню. Спробуйте оновити сторінку.</div>';
+            const cartItems = Object.values(cart);
+            const cartSum = cartItems.reduce((s, i) => s + (i.price * i.quantity), 0);
+            
+            if (tab === 'cart') {{
+                label.innerText = 'Разом (Кошик):';
+                totalEl.innerText = cartSum.toFixed(2) + ' грн';
+            }} else {{
+                label.innerText = 'До сплати (Всього):';
+                totalEl.innerText = (GRAND_TOTAL + cartSum).toFixed(2) + ' грн';
             }}
         }}
 
+        // --- MENU RENDER ---
+        function renderMenu() {{
+            const main = document.getElementById('menu');
+            const nav = document.getElementById('category-nav');
+            main.innerHTML = ''; nav.innerHTML = '';
+
+            MENU.categories.forEach((cat, idx) => {{
+                const link = document.createElement('a');
+                link.href = `#c-${{cat.id}}`;
+                link.textContent = cat.name;
+                if(idx===0) link.classList.add('active');
+                nav.appendChild(link);
+
+                const section = document.createElement('div');
+                section.id = `c-${{cat.id}}`;
+                section.className = 'category-section';
+                section.innerHTML = `<h2 class="category-title">${{cat.name}}</h2>`;
+
+                const grid = document.createElement('div');
+                grid.className = 'products-grid';
+
+                const products = MENU.products.filter(p => p.category_id === cat.id);
+                if (products.length > 0) {{
+                    products.forEach(prod => {{
+                        const card = document.createElement('div');
+                        card.className = 'product-card';
+                        const img = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
+                        const prodJson = JSON.stringify(prod).replace(/"/g, '&quot;');
+                        
+                        card.onclick = (e) => {{
+                            if(!e.target.closest('.add-btn')) openDetail(prod);
+                        }};
+
+                        card.innerHTML = `
+                            <div class="product-image-wrapper"><img src="${{img}}" class="product-image" loading="lazy"></div>
+                            <div class="product-info">
+                                <div class="product-header">
+                                    <div class="product-name">${{prod.name}}</div>
+                                    <div class="product-desc">${{prod.description||''}}</div>
+                                </div>
+                                <div class="product-footer">
+                                    <div class="product-price">${{prod.price}} грн</div>
+                                    <button class="add-btn" onclick="event.stopPropagation(); handleAdd(this, JSON.parse(this.dataset.product))" data-product="${{prodJson}}">
+                                        <i class="fa-solid fa-plus"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                        grid.appendChild(card);
+                    }});
+                    section.appendChild(grid);
+                    main.appendChild(section);
+                }}
+            }});
+            setupScrollSpy();
+        }}
+
         // --- ACTIONS ---
-        window.handleAdd = (prod, btn) => {{
+        window.handleAdd = (btn, prod) => {{
             if(prod.modifiers && prod.modifiers.length > 0) {{
-                // Open modal if modifiers exist
                 openDetail(prod);
             }} else {{
-                // Direct add
                 addToCart(prod, []);
-                if(btn) animateBtn(btn);
+                // Animation
+                btn.style.background = '#22c55e';
+                const i = btn.querySelector('i');
+                i.className = 'fa-solid fa-check';
+                setTimeout(() => {{ 
+                    btn.style.background = ''; i.className = 'fa-solid fa-plus'; 
+                }}, 1000);
             }}
         }};
 
         function openDetail(prod) {{
-            curProd = prod;
-            const img = curProd.image_url ? `/${{curProd.image_url}}` : '/static/images/placeholder.jpg';
-            document.getElementById('det-img').src = img;
-            document.getElementById('det-name').innerText = curProd.name;
-            document.getElementById('det-desc').innerText = curProd.description || '';
+            currentDetailProduct = prod;
+            document.getElementById('det-img').src = prod.image_url ? `/${{prod.image_url}}` : '/static/images/placeholder.jpg';
+            document.getElementById('det-name').innerText = prod.name;
+            document.getElementById('det-desc').innerText = prod.description || '';
             
-            // Generate modifiers
             const modContainer = document.getElementById('detail-modifiers');
             modContainer.innerHTML = '';
             
             if(prod.modifiers && prod.modifiers.length > 0) {{
-                const title = document.createElement('p');
-                title.style.cssText = "font-weight:600; color:#64748b; margin-bottom:10px;";
-                title.textContent = "Добавки:";
-                modContainer.appendChild(title);
-                
+                modContainer.innerHTML = '<p style="font-weight:600;color:#64748b;margin-bottom:10px;">Добавки:</p>';
                 prod.modifiers.forEach(m => {{
                     modContainer.innerHTML += `
                     <div class="mod-detail-item">
@@ -661,15 +641,11 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         }}
         
         window.updateDetailPrice = () => {{
-            if(!curProd) return;
-            let price = curProd.price;
-            const modContainer = document.getElementById('detail-modifiers');
-            modContainer.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => {{
-                price += parseFloat(cb.dataset.price);
-            }});
-            
+            if(!currentDetailProduct) return;
+            let price = currentDetailProduct.price;
+            document.querySelectorAll('.mod-detail-checkbox:checked').forEach(cb => price += parseFloat(cb.dataset.price));
             document.getElementById('det-price').innerText = price.toFixed(2) + ' грн';
-            document.getElementById('det-add-btn').innerText = `В кошик за ${{price.toFixed(2)}} грн`;
+            document.getElementById('det-add-btn').innerText = `В кошик (${{price.toFixed(2)}} грн)`;
         }};
 
         function addToCart(prod, mods) {{
@@ -682,143 +658,128 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
                 let price = prod.price;
                 mods.forEach(m => price += m.price);
                 cart[key] = {{
-                    key: key, 
-                    id: prod.id, 
-                    name: prod.name, 
-                    price: price, 
-                    qty: 1, 
-                    mods: mods 
+                    id: prod.id, name: prod.name, price: price, quantity: 1, modifiers: mods, key: key
                 }};
             }}
             saveCart();
-            updateUI();
+            updateCartView();
             
-            const fab = document.getElementById('main-fab');
-            fab.style.transform = 'scale(1.2)';
-            setTimeout(() => fab.style.transform = 'scale(1)', 200);
+            // Bounce
+            const toggle = document.getElementById('cart-toggle');
+            toggle.style.transform = 'scale(1.2)';
+            setTimeout(() => toggle.style.transform = 'scale(1)', 200);
         }}
 
-        function updateUI() {{
-            const list = document.getElementById('cart-list');
-            list.innerHTML = '';
-            let cartTotal = 0;
+        function updateCartView() {{
+            const container = document.getElementById('cart-items-container');
+            container.innerHTML = '';
             let count = 0;
             
             const items = Object.values(cart);
-            
-            items.forEach((item) => {{
-                cartTotal += item.price * item.qty;
-                count += item.qty;
-                const modStr = item.mods.map(m => m.name).join(', ');
-                list.innerHTML += `
-                <div class="cart-item">
-                    <div class="item-info">
-                        <span class="item-name">${{item.name}}</span>
-                        <span class="item-mods">${{modStr}}</span>
-                        <span class="item-price">${{(item.price * item.qty).toFixed(2)}}</span>
-                    </div>
-                    <div class="qty-control">
-                        <button class="qty-btn" onclick="changeQty('${{item.key}}', -1)">-</button>
-                        <div class="qty-val">${{item.qty}}</div>
-                        <button class="qty-btn" onclick="changeQty('${{item.key}}', 1)">+</button>
-                    </div>
-                </div>`;
-            }});
-            
-            document.getElementById('empty-cart-msg').style.display = count === 0 ? 'block' : 'none';
-            document.getElementById('place-order-btn').disabled = count === 0;
-            document.getElementById('place-order-btn').style.opacity = count === 0 ? '0.5' : '1';
-            
-            // History Render
-            const hList = document.getElementById('history-list');
-            hList.innerHTML = '';
-            
-            if (HISTORY.length === 0) {{
-                document.getElementById('empty-history-msg').style.display = 'block';
+            if (items.length === 0) {{
+                container.innerHTML = '<div style="text-align:center;padding:40px;color:#999;"><i class="fa-solid fa-utensils" style="font-size:3rem;opacity:0.2;margin-bottom:10px;"></i><p>Кошик порожній</p></div>';
             }} else {{
-                document.getElementById('empty-history-msg').style.display = 'none';
-                HISTORY.forEach(o => {{
-                    // Determine Status Style and Icon
-                    let stClass = 'st-done';
-                    let stIcon = 'fa-check';
-                    const s = o.status.toLowerCase();
-                    
-                    if(s.includes('новий') || s.includes('new')) {{
-                        stClass = 'st-new'; stIcon = 'fa-hourglass-start';
-                    }} else if(s.includes('обробці') || s.includes('роботі')) {{
-                        stClass = 'st-work'; stIcon = 'fa-fire-burner';
-                    }} else if(s.includes('готовий') || s.includes('ready')) {{
-                        stClass = 'st-ready'; stIcon = 'fa-bell';
-                    }}
-                    
-                    hList.innerHTML += `
-                    <div class="history-card">
-                        <div class="h-header">
-                            <span class="h-id">#${{o.id}}</span>
-                            <div class="status-badge ${{stClass}}">
-                                <i class="fa-solid ${{stIcon}}"></i> ${{o.status}}
-                            </div>
+                items.forEach(item => {{
+                    count += item.quantity;
+                    const modStr = item.modifiers.map(m => m.name).join(', ');
+                    container.innerHTML += `
+                    <div class="cart-item">
+                        <div class="cart-item-info">
+                            <span class="cart-item-name">${{item.name}}</span>
+                            <span class="cart-item-mods">${{modStr}}</span>
+                            <span class="cart-item-price">${{(item.price * item.quantity).toFixed(2)}} грн</span>
                         </div>
-                        <div class="h-body">
-                            ${{o.products.split(', ').map(p => `<span class="h-item">• ${{p}}</span>`).join('')}}
-                        </div>
-                        <div class="h-footer">
-                            <span class="h-time">${{o.time}}</span>
-                            <span class="h-total">${{o.total_price.toFixed(2)}} грн</span>
+                        <div class="qty-control">
+                            <button class="qty-btn" onclick="updateQty('${{item.key}}', -1)">-</button>
+                            <span class="qty-val">${{item.quantity}}</span>
+                            <button class="qty-btn" onclick="updateQty('${{item.key}}', 1)">+</button>
                         </div>
                     </div>`;
                 }});
             }}
-
-            const fabBadge = document.getElementById('fab-badge');
-            fabBadge.innerText = count || '!';
-            fabBadge.style.display = (count > 0 || HISTORY.length > 0) ? 'flex' : 'none';
-            fabBadge.style.backgroundColor = count > 0 ? '#ef4444' : '#22c55e';
             
-            document.getElementById('fab-icon').className = count > 0 ? 'fa-solid fa-basket-shopping' : 'fa-solid fa-clock-rotate-left';
+            document.getElementById('cart-count').innerText = count;
+            document.getElementById('cart-count').style.display = count > 0 ? 'flex' : 'none';
+            document.getElementById('place-order-btn').disabled = count === 0;
+            document.getElementById('place-order-btn').style.opacity = count === 0 ? '0.5' : '1';
             
-            const activeTab = document.querySelector('.tab-btn.active').getAttribute('onclick').includes('cart') ? 'cart' : 'history';
-            switchTab(activeTab);
+            updateHistoryView();
         }}
 
-        window.changeQty = (key, delta) => {{
+        window.updateQty = (key, delta) => {{
             if (cart[key]) {{
-                cart[key].qty += delta;
-                if (cart[key].qty <= 0) delete cart[key];
+                cart[key].quantity += delta;
+                if (cart[key].quantity <= 0) delete cart[key];
                 saveCart();
-                updateUI();
+                updateCartView();
             }}
         }};
         
         function saveCart() {{ localStorage.setItem('qrCart', JSON.stringify(cart)); }}
 
+        function updateHistoryView() {{
+            const container = document.getElementById('history-items-container');
+            container.innerHTML = '';
+            
+            if (HISTORY.length === 0) {{
+                container.innerHTML = '<div style="text-align:center;padding:40px;color:#999;"><i class="fa-solid fa-clock-rotate-left" style="font-size:3rem;opacity:0.2;margin-bottom:10px;"></i><p>Історія порожня</p></div>';
+            }} else {{
+                HISTORY.forEach(o => {{
+                    let stClass = 'st-done';
+                    const s = o.status.toLowerCase();
+                    if(s.includes('нов')) stClass = 'st-new';
+                    else if(s.includes('роб') || s.includes('оброб')) stClass = 'st-work';
+                    else if(s.includes('гот')) stClass = 'st-ready';
+                    
+                    container.innerHTML += `
+                    <div class="history-card">
+                        <div class="h-header">
+                            <span style="font-weight:700;">#${{o.id}}</span>
+                            <span class="status-badge ${{stClass}}">${{o.status}}</span>
+                        </div>
+                        <div style="font-size:0.9rem; color:#444; margin-bottom:10px;">
+                            ${{o.products.split(', ').map(p => `<div>• ${{p}}</div>`).join('')}}
+                        </div>
+                        <div style="display:flex; justify-content:space-between; border-top:1px dashed #eee; padding-top:8px;">
+                            <span style="color:#888; font-size:0.85rem;">${{o.time}}</span>
+                            <span style="font-weight:800;">${{o.total_price.toFixed(2)}} грн</span>
+                        </div>
+                    </div>`;
+                }});
+            }}
+            
+            const activeTab = document.querySelector('.sb-tab.active').innerText === 'Кошик' ? 'cart' : 'history';
+            updateFooterTotal(activeTab);
+        }}
+
+        // --- API CALLS ---
         async function placeOrder() {{
             const btn = document.getElementById('place-order-btn');
-            const originalText = btn.innerHTML;
+            const originalHTML = btn.innerHTML;
             btn.innerHTML = '<div class="spinner"></div>';
             
             try {{
                 const items = Object.values(cart).map(i => ({{
-                    id: i.id, quantity: i.qty, modifiers: i.mods
+                    id: i.id, quantity: i.qty, modifiers: i.modifiers
                 }}));
                 
                 const res = await fetch(`/api/menu/table/${{TABLE_ID}}/place_order`, {{
                     method: 'POST', headers: {{'Content-Type': 'application/json'}}, 
                     body: JSON.stringify(items)
                 }});
+                
                 if(res.ok) {{
-                    cart = {{}}; 
-                    saveCart();
-                    fetchUpdates();
+                    cart = {{}}; saveCart();
+                    await fetchUpdates();
                     switchTab('history');
-                    showSuccess('Замовлення прийнято!', 'Офіціант незабаром підтвердить його.');
+                    showSuccess('Прийнято!', 'Замовлення відправлено на кухню.');
                 }} else {{
-                    throw new Error('Server error');
+                    throw new Error();
                 }}
             }} catch(e) {{ 
                 alert('Помилка при створенні замовлення.'); 
             }} finally {{ 
-                btn.innerHTML = 'Замовити <i class="fa-solid fa-arrow-right"></i>';
+                btn.innerHTML = originalHTML;
             }}
         }}
 
@@ -829,24 +790,21 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
                     const data = await res.json();
                     HISTORY = data.history_data;
                     GRAND_TOTAL = data.grand_total;
-                    updateUI();
+                    updateCartView(); // re-renders history
                 }}
             }} catch(e) {{}}
         }}
 
         async function callWaiter() {{
-            try {{ 
-                await fetch(`/api/menu/table/${{TABLE_ID}}/call_waiter`, {{method:'POST'}}); 
-                showSuccess('Викликано!', 'Офіціант вже прямує до вас.');
-            }} catch(e) {{}}
+            try {{ await fetch(`/api/menu/table/${{TABLE_ID}}/call_waiter`, {{method:'POST'}}); showSuccess('Викликано!', 'Офіціант вже йде.'); }} catch(e){{}}
         }}
 
         async function sendBillRequest(method) {{
             try {{ 
                 await fetch(`/api/menu/table/${{TABLE_ID}}/request_bill?method=${{method}}`, {{method:'POST'}}); 
                 document.getElementById('pay-modal').classList.remove('visible');
-                showSuccess('Запит надіслано', 'Офіціант принесе рахунок.');
-            }} catch(e) {{}}
+                showSuccess('Запит надіслано', 'Очікуйте офіціанта з рахунком.');
+            }} catch(e){{}}
         }}
         
         function showSuccess(title, msg) {{
@@ -856,26 +814,17 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         }}
 
         async function openPageModal(id, title) {{
-            document.getElementById('page-modal').classList.add('visible');
+            const modal = document.getElementById('page-modal');
             document.getElementById('page-title').innerText = title;
-            document.getElementById('page-body').innerHTML = '<div style="text-align:center; padding:20px;"><div class="spinner" style="border-top-color:#333; margin:0 auto;"></div></div>';
+            document.getElementById('page-body').innerHTML = '<div style="text-align:center; padding:30px;"><div class="spinner" style="border-top-color:#333; margin:0 auto;"></div></div>';
+            modal.classList.add('visible');
             try {{
                 const res = await fetch('/api/page/'+id);
-                const data = await res.json();
-                document.getElementById('page-body').innerHTML = data.content;
+                const d = await res.json();
+                document.getElementById('page-body').innerHTML = d.content;
             }} catch(e) {{ document.getElementById('page-body').innerText = 'Помилка'; }}
         }}
 
-        function animateBtn(btn) {{
-            const icon = btn.querySelector('i');
-            if(icon) {{
-                const oldClass = icon.className;
-                icon.className = 'fa-solid fa-check';
-                btn.style.background = '#22c55e';
-                setTimeout(() => {{ icon.className = oldClass; btn.style.background = ''; }}, 1000);
-            }}
-        }}
-        
         function setupScrollSpy() {{
             const observer = new IntersectionObserver(entries => {{
                 entries.forEach(entry => {{
