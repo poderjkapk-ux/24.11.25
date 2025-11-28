@@ -26,7 +26,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, FSInputFile, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
@@ -83,6 +83,7 @@ class CheckoutStates(StatesGroup):
     confirm_data = State()
     waiting_for_order_time = State()
     waiting_for_specific_time = State()
+    confirm_order = State()
 
 class OrderStates(StatesGroup):
     choosing_modifiers = State()
@@ -165,10 +166,12 @@ async def handle_help_message(message: Message):
     text = "Шановний клієнте, ось інструкція:\n- /start: Розпочати роботу з ботом\n- Додайте страви до кошика\n- Оформлюйте замовлення з доставкою\n- Переглядайте свої замовлення\nМи завжди раді допомогти!"
     await message.answer(text)
 
+@dp.message(F.text == "❌ Скасувати")
 @dp.message(Command("cancel"))
-async def cancel_checkout(message: Message, state: FSMContext):
+async def cancel_checkout(message: Message, state: FSMContext, session: AsyncSession):
     await state.clear()
-    await message.answer("Шановний клієнте, оформлення замовлення скасовано. Будь ласка, звертайтеся, якщо потрібна допомога.")
+    kb = await get_main_reply_keyboard(session)
+    await message.answer("Шановний клієнте, оформлення замовлення скасовано.", reply_markup=kb)
 
 @dp.callback_query(F.data == "start_menu")
 async def back_to_start_menu(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -193,20 +196,24 @@ async def show_my_orders(message_or_callback: Message | CallbackQuery, session: 
     message = message_or_callback.message if is_callback else message_or_callback
     user_id = message_or_callback.from_user.id
 
+    # --- ПОКРАЩЕННЯ: Ліміт 5 останніх замовлень ---
     orders_result = await session.execute(
-        select(Order).options(joinedload(Order.status), selectinload(Order.items)).where(Order.user_id == user_id).order_by(Order.id.desc())
+        select(Order).options(joinedload(Order.status), selectinload(Order.items))
+        .where(Order.user_id == user_id)
+        .order_by(Order.id.desc())
+        .limit(5)
     )
     orders = orders_result.scalars().all()
 
     if not orders:
-        text = "Шановний клієнте, у вас поки що немає замовлень. Чекаємо на ваше перше!"
+        text = "Шановний клієнте, у вас поки що немає замовлень."
         if is_callback:
             await message_or_callback.answer(text, show_alert=True)
         else:
             await message.answer(text)
         return
 
-    text = "📋 <b>Ваші замовлення:</b>\n\n"
+    text = "📋 <b>Ваші останні замовлення:</b>\n\n"
     for order in orders:
         status_name = order.status.name if order.status else 'Невідомий'
         
@@ -254,10 +261,15 @@ async def show_menu(message_or_callback: Message | CallbackQuery, session: Async
 
     for category in categories:
         keyboard.add(InlineKeyboardButton(text=category.name, callback_data=f"show_category_{category.id}_1"))
-    keyboard.add(InlineKeyboardButton(text="⬅️ Головне меню", callback_data="start_menu"))
-    keyboard.adjust(1)
+    
+    # --- ПОКРАЩЕННЯ: Сетка 2 колонки ---
+    keyboard.adjust(2) 
+    # -----------------------------------
+    
+    keyboard.row(InlineKeyboardButton(text="🛒 Відкрити кошик", callback_data="cart"))
+    keyboard.row(InlineKeyboardButton(text="⬅️ Головне меню", callback_data="start_menu"))
 
-    text = "Шановний клієнте, ось категорії страв:"
+    text = "Шановний клієнте, оберіть категорію:"
 
     if is_callback:
         try:
@@ -300,6 +312,7 @@ async def show_category_paginated(callback: CallbackQuery, session: AsyncSession
     keyboard = InlineKeyboardBuilder()
     for product in products_on_page:
         keyboard.add(InlineKeyboardButton(text=f"{product.name} - {product.price} грн", callback_data=f"show_product_{product.id}"))
+    keyboard.adjust(1) # Продукти в 1 колонку, щоб вміщувались довгі назви
 
     nav_buttons = []
     if page > 1:
@@ -311,8 +324,11 @@ async def show_category_paginated(callback: CallbackQuery, session: AsyncSession
     if nav_buttons:
         keyboard.row(*nav_buttons)
 
-    keyboard.row(InlineKeyboardButton(text="Меню категорій", callback_data="menu"))
-    keyboard.adjust(1)
+    # --- ПОКРАЩЕННЯ: Швидка навігація ---
+    keyboard.row(InlineKeyboardButton(text="🛒 Кошик", callback_data="cart"))
+    keyboard.row(InlineKeyboardButton(text="🔙 Назад до категорій", callback_data="menu"))
+    keyboard.row(InlineKeyboardButton(text="🏠 Головна", callback_data="start_menu"))
+    # ------------------------------------
 
     text = f"<b>{html.escape(category.name)}</b> (Сторінка {page}):"
 
@@ -346,8 +362,12 @@ async def show_product(callback: CallbackQuery, session: AsyncSession):
 
     kb = InlineKeyboardBuilder()
     kb.add(InlineKeyboardButton(text="➕ Додати в кошик", callback_data=f"add_to_cart_{product.id}"))
-    kb.add(InlineKeyboardButton(text="⬅️ Назад до страв", callback_data=f"show_category_{product.category_id}_1"))
     kb.adjust(1)
+    
+    # --- ПОКРАЩЕННЯ: Кнопки навігації ---
+    kb.row(InlineKeyboardButton(text="🔙 Назад до страв", callback_data=f"show_category_{product.category_id}_1"))
+    kb.row(InlineKeyboardButton(text="🛒 Кошик", callback_data="cart"), InlineKeyboardButton(text="🏠 Головна", callback_data="start_menu"))
+    # ------------------------------------
 
     photo_input = await get_photo_input(product.image_url)
     try:
@@ -394,6 +414,8 @@ async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, av
     
     kb.adjust(1)
     kb.row(InlineKeyboardButton(text="📥 Додати в кошик", callback_data="confirm_add_to_cart"))
+    # Додаємо кнопку "Назад" у вибір модифікаторів
+    kb.row(InlineKeyboardButton(text="🔙 Скасувати", callback_data=f"show_product_{product.id}"))
     
     current_price = product.price + sum(m.price for m in available_modifiers if m.id in selected_ids)
     
@@ -457,6 +479,11 @@ async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifi
     msg += " додано до кошика!"
     
     await callback.answer(msg, show_alert=False)
+    
+    # --- ИСПРАВЛЕНИЕ: Устанавливаем правильный callback.data для возврата в меню ---
+    callback.data = f"show_category_{product.category_id}_1"
+    # -------------------------------------------------------------------------------
+    
     await show_category_paginated(callback, session)
 
 async def show_cart(message_or_callback: Message | CallbackQuery, session: AsyncSession):
@@ -469,11 +496,13 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
 
     if not cart_items:
         text = "Шановний клієнте, ваш кошик порожній. Оберіть щось смачненьке з меню!"
+        kb = InlineKeyboardBuilder().add(InlineKeyboardButton(text="🍽 До меню", callback_data="menu")).as_markup()
         if is_callback:
             await message_or_callback.answer(text, show_alert=True)
-            await show_menu(message_or_callback, session)
+            try: await message.edit_text(text, reply_markup=kb)
+            except: await message.answer(text, reply_markup=kb)
         else:
-            await message.answer(text)
+            await message.answer(text, reply_markup=kb)
         return
 
     text = "🛒 <b>Ваш кошик:</b>\n\n"
@@ -514,6 +543,7 @@ async def show_cart(message_or_callback: Message | CallbackQuery, session: Async
     kb.row(InlineKeyboardButton(text="✅ Оформити замовлення", callback_data="checkout"))
     kb.row(InlineKeyboardButton(text="🗑️ Очистити кошик", callback_data="clear_cart"))
     kb.row(InlineKeyboardButton(text="⬅️ Продовжити покупки", callback_data="menu"))
+    kb.row(InlineKeyboardButton(text="🏠 Головна", callback_data="start_menu"))
 
     if is_callback:
         try:
@@ -566,6 +596,8 @@ async def clear_cart(callback: CallbackQuery, session: AsyncSession):
     await callback.answer("Кошик очищено!", show_alert=True)
     await show_menu(callback, session)
 
+# --- ПРОЦЕС ОФОРМЛЕННЯ ЗАМОВЛЕННЯ ---
+
 @dp.callback_query(F.data == "checkout")
 async def start_checkout(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     user_id = callback.from_user.id
@@ -597,16 +629,21 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
     kb.add(InlineKeyboardButton(text="🚚 Доставка", callback_data="delivery_type_delivery"))
     kb.add(InlineKeyboardButton(text="🏠 Самовивіз", callback_data="delivery_type_pickup"))
     kb.adjust(1)
+    
+    # Кнопка отмены
+    kb.row(InlineKeyboardButton(text="🔙 Повернутись в кошик", callback_data="cart"))
 
+    text = "Шановний клієнте, оберіть тип отримання замовлення:"
+    
     try:
         if callback.message.photo:
             await callback.message.delete()
-            await callback.message.answer("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
+            await callback.message.answer(text, reply_markup=kb.as_markup())
         else:
-            await callback.message.edit_text("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
+            await callback.message.edit_text(text, reply_markup=kb.as_markup())
     except TelegramBadRequest:
         await callback.message.delete()
-        await callback.message.answer("Шановний клієнте, оберіть тип отримання замовлення:", reply_markup=kb.as_markup())
+        await callback.message.answer(text, reply_markup=kb.as_markup())
 
     await callback.answer()
 
@@ -615,12 +652,13 @@ async def process_delivery_type(callback: CallbackQuery, state: FSMContext, sess
     delivery_type = callback.data.split("_")[2]
     is_delivery = delivery_type == "delivery"
     await state.update_data(is_delivery=is_delivery, order_type=delivery_type)
+    
     customer = await session.get(Customer, callback.from_user.id)
     if customer and customer.name and customer.phone_number and (not is_delivery or customer.address):
-        text = f"Шановний клієнте, ми маємо ваші дані:\nІм'я: {customer.name}\nТелефон: {customer.phone_number}"
+        text = f"Шановний клієнте, ми маємо ваші дані:\n👤 Ім'я: {customer.name}\n📱 Телефон: {customer.phone_number}"
         if is_delivery:
-            text += f"\nАдреса: {customer.address}"
-        text += "\nБажаєте використати ці дані?"
+            text += f"\n🏠 Адреса: {customer.address}"
+        text += "\n\nБажаєте використати ці дані?"
         kb = InlineKeyboardBuilder()
         kb.add(InlineKeyboardButton(text="✅ Так", callback_data="confirm_data_yes"))
         kb.add(InlineKeyboardButton(text="✏️ Змінити", callback_data="confirm_data_no"))
@@ -628,7 +666,16 @@ async def process_delivery_type(callback: CallbackQuery, state: FSMContext, sess
         await state.set_state(CheckoutStates.confirm_data)
     else:
         await state.set_state(CheckoutStates.waiting_for_name)
-        await callback.message.edit_text("Шановний клієнте, будь ласка, введіть ваше ім'я (наприклад, Іван):")
+        
+        # Юзабіліті: Кнопки для скасування
+        kb = ReplyKeyboardBuilder()
+        kb.add(KeyboardButton(text="❌ Скасувати"))
+        
+        # Видаляємо старе інлайн повідомлення, щоб відправити нове з Reply клавіатурою (якщо потрібно)
+        try: await callback.message.delete()
+        except Exception: pass
+        
+        await callback.message.answer("Шановний клієнте, будь ласка, введіть ваше ім'я (наприклад, Іван):", reply_markup=kb.as_markup(resize_keyboard=True))
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_data_"))
@@ -651,40 +698,74 @@ async def process_confirm_data(callback: CallbackQuery, state: FSMContext, sessi
         await ask_for_order_time(message, state, session)
     else:
         await state.set_state(CheckoutStates.waiting_for_name)
-        await message.answer("Шановний клієнте, будь ласка, введіть ваше ім'я (наприклад, Іван Іванов):")
+        
+        kb = ReplyKeyboardBuilder()
+        kb.add(KeyboardButton(text="❌ Скасувати"))
+        await message.answer("Шановний клієнте, будь ласка, введіть ваше ім'я:", reply_markup=kb.as_markup(resize_keyboard=True))
     await callback.answer()
 
 @dp.message(CheckoutStates.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     name = message.text.strip()
-    if not name or len(name) < 3:
-        await message.answer("Шановний клієнте, ім'я повинно бути не менше 3 символів! Спробуйте ще раз.")
+    if not name or len(name) < 2:
+        await message.answer("Шановний клієнте, ім'я повинно бути не менше 2 символів! Спробуйте ще раз.")
         return
     await state.update_data(customer_name=name)
     await state.set_state(CheckoutStates.waiting_for_phone)
-    await message.answer("Будь ласка, введіть номер телефону (наприклад, +380XXXXXXXXX):")
+    
+    # Юзабіліті: Кнопка відправки контакту
+    kb = ReplyKeyboardBuilder()
+    kb.row(KeyboardButton(text="📱 Надіслати мій номер", request_contact=True))
+    kb.row(KeyboardButton(text="❌ Скасувати"))
+    
+    await message.answer("Будь ласка, введіть номер телефону (або натисніть кнопку):", reply_markup=kb.as_markup(resize_keyboard=True))
 
 @dp.message(CheckoutStates.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext, session: AsyncSession):
-    phone = message.text.strip()
-    if not re.match(r'^\+?\d{10,15}$', phone):
-        await message.answer("Шановний клієнте, некоректний номер телефону! Він повинен бути у форматі +380XXXXXXXXX. Спробуйте ще раз.")
+    phone = None
+    
+    if message.contact:
+        phone = message.contact.phone_number
+        if not phone.startswith('+'): phone = '+' + phone
+    elif message.text:
+        phone = message.text.strip()
+        # Базова перевірка формату, якщо введено вручну
+        if not re.match(r'^\+?\d{10,15}$', phone):
+            await message.answer("Некоректний номер! Формат: +380XXXXXXXXX. Або скористайтесь кнопкою.", 
+                                 reply_markup=message.reply_markup)
+            return
+    else:
+        await message.answer("Будь ласка, надішліть контакт або введіть номер текстом.")
         return
+
     await state.update_data(phone_number=phone)
     data = await state.get_data()
+    
+    # Прибираємо клавіатуру з контактом
+    remove_kb = ReplyKeyboardRemove()
+    
     if data.get('is_delivery'):
         await state.set_state(CheckoutStates.waiting_for_address)
-        await message.answer("Будь ласка, введіть вулицю та номер будинку для доставки (наприклад, вул. Головна, 1):")
+        
+        kb = ReplyKeyboardBuilder()
+        kb.add(KeyboardButton(text="❌ Скасувати"))
+        
+        await message.answer("Дякую! Тепер введіть адресу доставки (Вулиця, будинок, під'їзд):", reply_markup=kb.as_markup(resize_keyboard=True))
     else:
+        # Якщо самовивіз - прибираємо клавіатуру перед інлайн вибором часу
+        await message.answer("Номер прийнято.", reply_markup=remove_kb)
         await ask_for_order_time(message, state, session)
 
 @dp.message(CheckoutStates.waiting_for_address)
 async def process_address(message: Message, state: FSMContext, session: AsyncSession):
     address = message.text.strip()
     if not address or len(address) < 5:
-        await message.answer("Шановний клієнте, адреса повинна бути не менше 5 символів! Спробуйте ще раз.")
+        await message.answer("Адреса занадто коротка. Спробуйте ще раз.")
         return
     await state.update_data(address=address)
+    
+    # Прибираємо клавіатуру скасування перед вибором часу
+    await message.answer("Адресу збережено.", reply_markup=ReplyKeyboardRemove())
     await ask_for_order_time(message, state, session)
 
 async def ask_for_order_time(message_or_callback: Message | CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -692,7 +773,7 @@ async def ask_for_order_time(message_or_callback: Message | CallbackQuery, state
     kb = InlineKeyboardBuilder()
     kb.add(InlineKeyboardButton(text="🚀 Якнайшвидше", callback_data="order_time_asap"))
     kb.add(InlineKeyboardButton(text="🕒 На конкретний час", callback_data="order_time_specific"))
-    text = "Чудово! Останній крок: коли доставити замовлення?"
+    text = "Коли хочете отримати замовлення?"
 
     current_message = message_or_callback if isinstance(message_or_callback, Message) else message_or_callback.message
     await current_message.answer(text, reply_markup=kb.as_markup())
@@ -705,24 +786,71 @@ async def process_order_time(callback: CallbackQuery, state: FSMContext, session
 
     if time_choice == "asap":
         await state.update_data(delivery_time="Якнайшвидше")
-        try:
-            await callback.message.delete()
-        except TelegramBadRequest as e:
-            logging.warning(f"Не вдалося видалити повідомлення в process_order_time: {e}")
-        await finalize_order(callback.message, state, session)
+        await ask_confirm_order(callback.message, state)
     else: 
         await state.set_state(CheckoutStates.waiting_for_specific_time)
-        await callback.message.edit_text("Будь ласка, введіть бажаний час доставки (наприклад, '18:30' або 'на 14:00'):")
+        
+        kb = ReplyKeyboardBuilder()
+        kb.add(KeyboardButton(text="❌ Скасувати"))
+        
+        # Видаляємо інлайн повідомлення, щоб відправити запит з Reply кнопкою
+        try: await callback.message.delete()
+        except Exception: pass
+        
+        await callback.message.answer("На котру годину? (наприклад, '19:00' або 'на 14:30')", reply_markup=kb.as_markup(resize_keyboard=True))
     await callback.answer()
 
 @dp.message(CheckoutStates.waiting_for_specific_time)
 async def process_specific_time(message: Message, state: FSMContext, session: AsyncSession):
     specific_time = message.text.strip()
     if not specific_time:
-        await message.answer("Час не може бути порожнім. Спробуйте ще раз.")
+        await message.answer("Час не може бути порожнім.")
         return
     await state.update_data(delivery_time=specific_time)
-    await finalize_order(message, state, session)
+    
+    # Прибираємо кнопку скасування
+    await message.answer("Час встановлено.", reply_markup=ReplyKeyboardRemove())
+    await ask_confirm_order(message, state)
+
+# --- НОВИЙ ЕТАП: ПІДТВЕРДЖЕННЯ ЗАМОВЛЕННЯ ---
+async def ask_confirm_order(message: Message, state: FSMContext):
+    data = await state.get_data()
+    
+    delivery_text = "🚚 Доставка" if data.get('is_delivery') else "🏠 Самовивіз"
+    address_info = f"\n📍 Адреса: {data.get('address')}" if data.get('is_delivery') else ""
+    
+    summary = (
+        f"📝 <b>Перевірте дані замовлення:</b>\n\n"
+        f"👤 Ім'я: {data.get('customer_name')}\n"
+        f"📱 Телефон: {data.get('phone_number')}\n"
+        f"{delivery_text}{address_info}\n"
+        f"⏰ Час: {data.get('delivery_time')}\n"
+        f"💳 Сума до сплати: <b>{data.get('total_price')} грн</b>"
+    )
+    
+    kb = InlineKeyboardBuilder()
+    kb.add(InlineKeyboardButton(text="✅ Підтвердити замовлення", callback_data="checkout_confirm"))
+    kb.add(InlineKeyboardButton(text="❌ Скасувати", callback_data="checkout_cancel"))
+    kb.adjust(1)
+    
+    await state.set_state(CheckoutStates.confirm_order)
+    await message.answer(summary, reply_markup=kb.as_markup())
+
+@dp.callback_query(CheckoutStates.confirm_order, F.data == "checkout_confirm")
+async def confirm_order_handler(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await callback.message.edit_reply_markup(reply_markup=None) # Прибираємо кнопки щоб не натиснули двічі
+    await finalize_order(callback.message, state, session)
+    await callback.answer()
+
+@dp.callback_query(CheckoutStates.confirm_order, F.data == "checkout_cancel")
+async def cancel_order_handler(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await state.clear()
+    await callback.message.edit_text("❌ Замовлення скасовано.")
+    
+    # Повертаємо головне меню
+    kb = await get_main_reply_keyboard(session)
+    await callback.message.answer("Ви можете продовжити покупки:", reply_markup=kb)
+    await callback.answer()
 
 async def finalize_order(message: Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
@@ -792,7 +920,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
     if app_admin_bot:
         await notify_new_order_to_staff(app_admin_bot, order, session)
 
-    await message.answer("Шановний клієнте, ваше замовлення оформлено! Дякуємо за вибір. Смачного!")
+    await message.answer(f"✅ <b>Дякуємо! Ваше замовлення #{order.id} прийнято!</b>\nМи зв'яжемося з вами для підтвердження.", reply_markup=ReplyKeyboardRemove())
 
     await state.clear()
     await command_start_handler(message, state, session)

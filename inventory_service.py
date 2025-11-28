@@ -4,7 +4,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from decimal import Decimal
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from inventory_models import (
     Stock, InventoryDoc, InventoryDocItem, TechCard, 
@@ -48,33 +48,41 @@ async def process_movement(session: AsyncSession, doc_type: str, items: list,
         supplier_id=supplier_id,
         comment=comment,
         linked_order_id=order_id,
-        is_processed=False # Спочатку створюємо непроведений документ
+        is_processed=False 
     )
-    session.add(doc)
-    await session.flush()
-
+    # Важливо: додаємо документ в сесію, але items додамо через append, щоб оновити стан об'єкта в пам'яті
+    session.add(doc) 
+    
     for item in items:
         ing_id = int(item['ingredient_id'])
-        # Безпечне перетворення в Decimal для уникнення помилок float
+        # Безпечне перетворення в Decimal
         qty = Decimal(str(item['qty']))
         price = Decimal(str(item.get('price', 0)))
 
-        doc_item = InventoryDocItem(doc_id=doc.id, ingredient_id=ing_id, quantity=qty, price=price)
-        session.add(doc_item)
+        # ВИПРАВЛЕННЯ: Створюємо item і додаємо до списку doc.items
+        # Це гарантує, що SQLAlchemy знає про зв'язок в поточному об'єкті doc
+        doc_item = InventoryDocItem(ingredient_id=ing_id, quantity=qty, price=price)
+        doc.items.append(doc_item)
 
-    # Відразу проводимо документ (оновлюємо залишки)
+    await session.flush() # Зберігаємо і отримуємо ID для doc та items
+
+    # Відразу проводимо документ
     await apply_doc_stock_changes(session, doc.id)
     return doc
 
 async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
     """
     Проводить документ: оновлює залишки на складах.
-    Також перераховує собівартість за середньозваженою (Weighted Average) при приході.
     """
-    doc = await session.get(InventoryDoc, doc_id, options=[joinedload(InventoryDoc.items)])
+    # Використовуємо selectinload для колекцій в async (краща практика)
+    stmt = select(InventoryDoc).where(InventoryDoc.id == doc_id).options(selectinload(InventoryDoc.items))
+    result = await session.execute(stmt)
+    doc = result.scalars().first()
+
     if not doc: raise ValueError("Документ не знайдено")
     if doc.is_processed: raise ValueError("Документ вже проведено")
 
+    # Тепер doc.items гарантовано завантажено (або з пам'яті після process_movement, або з БД)
     for item in doc.items:
         qty = Decimal(str(item.quantity))
         
@@ -83,16 +91,12 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
             
             # --- ЛОГІКА СЕРЕДНЬОЗВАЖЕНОЇ СОБІВАРТОСТІ ---
             if item.price > 0:
-                # 1. Отримуємо поточний загальний залишок інгредієнта по ВСІХ складах
                 total_qty_res = await session.execute(
                     select(func.sum(Stock.quantity)).where(Stock.ingredient_id == item.ingredient_id)
                 )
                 total_existing_qty = total_qty_res.scalar() or Decimal(0)
-                
-                # Якщо залишок мінусовий, вважаємо його як 0 для розрахунку ціни
                 calc_existing_qty = total_existing_qty if total_existing_qty > 0 else Decimal(0)
 
-                # 2. Отримуємо поточну собівартість
                 ingredient = await session.get(Ingredient, item.ingredient_id)
                 if ingredient:
                     old_cost = Decimal(str(ingredient.current_cost))
@@ -105,7 +109,6 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
                     
                     if total_new_qty > 0:
                         new_avg_cost = (current_value + new_supply_value) / total_new_qty
-                        # Оновлюємо ціну в базі
                         ingredient.current_cost = new_avg_cost
                         session.add(ingredient)
             # ---------------------------------------------
@@ -113,19 +116,19 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
             stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             stock.quantity += qty
 
-        elif doc.doc_type == 'return': # Повернення на склад (скасування замовлення)
+        elif doc.doc_type == 'return': # Повернення
             if not doc.target_warehouse_id: raise ValueError("Не вказано склад для повернення")
             stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             stock.quantity += qty
 
         elif doc.doc_type == 'transfer': # Переміщення
-            if not doc.source_warehouse_id or not doc.target_warehouse_id: raise ValueError("Потрібні обидва склади (джерело і ціль)")
+            if not doc.source_warehouse_id or not doc.target_warehouse_id: raise ValueError("Потрібні обидва склади")
             src_stock = await get_stock(session, doc.source_warehouse_id, item.ingredient_id)
             tgt_stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             src_stock.quantity -= qty
             tgt_stock.quantity += qty
 
-        elif doc.doc_type in ['writeoff', 'deduction']: # Списання (в т.ч. по продажу)
+        elif doc.doc_type in ['writeoff', 'deduction']: # Списання
             if not doc.source_warehouse_id: raise ValueError("Не вказано склад списання")
             stock = await get_stock(session, doc.source_warehouse_id, item.ingredient_id)
             stock.quantity -= qty
@@ -135,34 +138,29 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
 
 async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
-    Автоматичне списання продуктів (і модифікаторів) зі складу на основі техкарт.
-    Викликається при готовності/продажу страви.
+    Автоматичне списання продуктів (і модифікаторів).
     """
-    # Перевірка на повторне списання
     if order.is_inventory_deducted:
-        logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше. Пропускаємо.")
+        logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
         return
 
+    # Перевірка на наявність items, щоб уникнути помилок
     if not order.items: 
         order.is_inventory_deducted = True
         await session.commit()
         return
 
-    # Визначаємо склади списання
     kitchen_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Кухня%')).limit(1))
     bar_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Бар%')).limit(1))
-    
-    # Резервний склад (перший знайдений або ID 1), якщо Кухня/Бар не знайдені за назвою
     first_wh = await session.scalar(select(Warehouse).limit(1))
     fallback_wh_id = first_wh.id if first_wh else 1
 
-    # Мапінг зон приготування до ID складів
     wh_map = {
         'kitchen': kitchen_wh.id if kitchen_wh else fallback_wh_id,
         'bar': bar_wh.id if bar_wh else fallback_wh_id
     }
 
-    deduction_items_by_wh = {} # {warehouse_id: [{ingredient_id, qty}, ...]}
+    deduction_items_by_wh = {} 
 
     def add_deduction(wh_id, ing_id, qty):
         if not wh_id: wh_id = fallback_wh_id
@@ -170,26 +168,23 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
 
     for order_item in order.items:
-        # Визначаємо склад для цього товару
         wh_id = wh_map.get(order_item.preparation_area, fallback_wh_id)
         
-        # 1. Списання компонентів страви (по Техкарті)
+        # Виправлений запит з правильним ланцюжком joinedload
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
-            .options(select(TechCardItem).joinedload(TechCardItem.ingredient))
+            .options(joinedload(TechCard.components).joinedload(TechCardItem.ingredient))
         )
         
         if tech_card:
             for component in tech_card.components:
-                # Decimal для точності
                 gross = Decimal(str(component.gross_amount))
                 qty_item = Decimal(str(order_item.quantity))
                 total_qty = gross * qty_item
                 add_deduction(wh_id, component.ingredient_id, total_qty)
         else:
-            logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта. Списання інгредієнтів не відбудеться.")
+            logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта.")
         
-        # 2. Списання компонентів МОДИФІКАТОРІВ
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
                 ing_id = mod_data.get('ingredient_id')
@@ -199,16 +194,13 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                     total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
                     add_deduction(wh_id, ing_id, total_mod_qty)
 
-    # Встановлюємо прапор списання (до коміту, щоб транзакція process_movement його захопила)
     order.is_inventory_deducted = True
     session.add(order)
 
-    # Якщо нічого списувати
     if not deduction_items_by_wh:
         await session.commit()
         return
 
-    # Проводимо документи списання для кожного складу
     for wh_id, items in deduction_items_by_wh.items():
         if items:
             await process_movement(
@@ -222,11 +214,9 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
 
 async def reverse_deduction(session: AsyncSession, order: Order):
     """
-    Повернення продуктів на склад при скасуванні замовлення.
-    Створює документ типу 'return'.
+    Повернення продуктів на склад.
     """
     if not order.is_inventory_deducted:
-        logger.info(f"Замовлення #{order.id} ще не списано, повернення не потрібне.")
         return
 
     if not order.items:
@@ -234,7 +224,6 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         await session.commit()
         return
 
-    # Визначаємо склади (аналогічно списанню)
     kitchen_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Кухня%')).limit(1))
     bar_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Бар%')).limit(1))
     first_wh = await session.scalar(select(Warehouse).limit(1))
@@ -250,16 +239,14 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     def add_return(wh_id, ing_id, qty):
         if not wh_id: wh_id = fallback_wh_id
         if wh_id not in return_items_by_wh: return_items_by_wh[wh_id] = []
-        # Ціна 0, щоб не впливати на середньозважену собівартість при поверненні
         return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': 0})
 
     for order_item in order.items:
         wh_id = wh_map.get(order_item.preparation_area, fallback_wh_id)
         
-        # 1. Техкарта
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
-            .options(select(TechCardItem).joinedload(TechCardItem.ingredient))
+            .options(joinedload(TechCard.components).joinedload(TechCardItem.ingredient))
         )
         
         if tech_card:
@@ -267,7 +254,6 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                 total_qty = Decimal(str(component.gross_amount)) * Decimal(str(order_item.quantity))
                 add_return(wh_id, component.ingredient_id, total_qty)
         
-        # 2. Модифікатори
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
                 ing_id = mod_data.get('ingredient_id')
@@ -276,23 +262,21 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                     total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
                     add_return(wh_id, ing_id, total_mod_qty)
 
-    # Створюємо документи повернення
     for wh_id, items in return_items_by_wh.items():
         if items:
             await process_movement(
                 session, 'return', items, 
-                target_wh_id=wh_id, # Повертаємо НА склад (target)
+                target_wh_id=wh_id, 
                 comment=f"Повернення (Скасування) замовлення #{order.id}", 
                 order_id=order.id
             )
 
-    # Скидаємо прапор списання
     order.is_inventory_deducted = False
     await session.commit()
     logger.info(f"Склад успішно повернуто для замовлення #{order.id}")
 
 async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
-    """Генерує HTML чек/бігунок для повара"""
+    """Генерує HTML чек/бігунок"""
     order = await session.get(Order, order_id)
     query = select(OrderItem).where(OrderItem.order_id == order_id)
     items = (await session.execute(query)).scalars().all()
