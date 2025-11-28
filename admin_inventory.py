@@ -17,8 +17,6 @@ from dependencies import get_db_session, check_credentials
 from templates import ADMIN_HTML_TEMPLATE
 from inventory_service import apply_doc_stock_changes
 from cash_service import add_shift_transaction, get_any_open_shift
-# Імпорт константи навігації (переконайтеся, що вона є в tpl_admin_panels.py)
-from tpl_admin_panels import ADMIN_INVENTORY_TABS 
 
 router = APIRouter(prefix="/admin/inventory", tags=["inventory"])
 
@@ -84,7 +82,8 @@ def get_nav(active_tab):
         "stock": {"icon": "fa-boxes-stacked", "label": "Залишки"},
         "docs": {"icon": "fa-file-invoice", "label": "Накладні"},
         "tech_cards": {"icon": "fa-book-open", "label": "Техкарти"},
-        "reports/usage": {"icon": "fa-chart-line", "label": "Рух (Звіт)"}
+        "reports/usage": {"icon": "fa-chart-line", "label": "Рух (Звіт)"},
+        "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"} 
     }
     html = f"{INVENTORY_STYLES}<div class='inv-nav'>"
     for k, v in tabs.items():
@@ -149,7 +148,7 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
             <div style="display:flex; flex-direction:column; gap:10px;">
                 <a href="/admin/inventory/docs/create?type=supply" class="button" style="text-align:center; justify-content:center; padding:15px;"><i class="fa-solid fa-truck-ramp-box"></i> Створити Прихід</a>
                 <a href="/admin/inventory/docs/create?type=writeoff" class="button danger" style="text-align:center; justify-content:center; padding:15px;"><i class="fa-solid fa-trash"></i> Створити Списання</a>
-                <a href="/admin/inventory/suppliers" class="button secondary" style="text-align:center; justify-content:center;"><i class="fa-solid fa-user-plus"></i> Додати контрагента</a>
+                <a href="/admin/inventory/reports/profitability" class="button secondary" style="text-align:center; justify-content:center;"><i class="fa-solid fa-money-bill-trend-up"></i> Перевірити ціни</a>
             </div>
         </div>
     </div>
@@ -930,3 +929,118 @@ async def inventory_usage_report(
     </div>
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Звіт по руху", body=body, site_title=settings.site_title, **get_active_classes()))
+
+# --- ЗВІТ ПО РЕНТАБЕЛЬНОСТІ (ЮНІТ-ЕКОНОМІКА) ---
+@router.get("/reports/profitability", response_class=HTMLResponse)
+async def report_profitability(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+    """
+    Звіт, що показує поточну собівартість (cost price) на основі техкарт та актуальних цін інгредієнтів,
+    порівнюючи її з ціною продажу (price).
+    """
+    settings = await session.get(Settings, 1) or Settings()
+    
+    # Отримуємо всі продукти з техкартами
+    products_res = await session.execute(
+        select(Product)
+        .where(Product.is_active == True)
+        .options(joinedload(Product.category))
+    )
+    products = products_res.scalars().all()
+    
+    # Для кожного продукту шукаємо техкарту і рахуємо cost price
+    data = []
+    
+    for p in products:
+        # Шукаємо техкарту для продукту
+        tc = await session.scalar(
+            select(TechCard)
+            .where(TechCard.product_id == p.id)
+            .options(joinedload(TechCard.components).joinedload(TechCardItem.ingredient))
+        )
+        
+        cost_price = 0.0
+        if tc:
+            for item in tc.components:
+                # Ціна інгредієнта * кількість брутто
+                # current_cost може бути None або Decimal
+                ing_cost = float(item.ingredient.current_cost or 0)
+                amount = float(item.gross_amount or 0)
+                cost_price += ing_cost * amount
+        
+        sale_price = float(p.price)
+        margin = sale_price - cost_price
+        
+        # Відсоток маржі (Gross Margin %)
+        margin_percent = (margin / sale_price * 100) if sale_price > 0 else 0
+        
+        # Націнка (Markup %)
+        markup_percent = (margin / cost_price * 100) if cost_price > 0 else 0
+        
+        data.append({
+            "name": p.name,
+            "category": p.category.name if p.category else "-",
+            "sale_price": sale_price,
+            "cost_price": cost_price,
+            "margin": margin,
+            "margin_percent": margin_percent,
+            "markup_percent": markup_percent
+        })
+    
+    # Сортуємо: спочатку ті, де менша маржа (проблемні)
+    data.sort(key=lambda x: x['margin_percent'])
+    
+    rows = ""
+    for item in data:
+        # Підсвітка проблемних позицій
+        row_style = ""
+        margin_badge = f"{item['margin_percent']:.1f}%"
+        
+        if item['margin_percent'] < 30:
+            row_style = "background-color: #fff1f2;" # Червонуватий
+            margin_badge = f"<span style='color:#e11d48; font-weight:bold;'>📉 {item['margin_percent']:.1f}%</span>"
+        elif item['margin_percent'] > 60:
+            margin_badge = f"<span style='color:#16a34a; font-weight:bold;'>🚀 {item['margin_percent']:.1f}%</span>"
+            
+        rows += f"""
+        <tr style="{row_style}">
+            <td><b>{html.escape(item['name'])}</b> <div style="color:#777; font-size:0.8em;">{html.escape(item['category'])}</div></td>
+            <td>{item['sale_price']:.2f}</td>
+            <td>{item['cost_price']:.2f}</td>
+            <td>{item['margin']:.2f}</td>
+            <td>{margin_badge}</td>
+            <td style="color:#666;">{item['markup_percent']:.0f}%</td>
+        </tr>
+        """
+        
+    body = f"""
+    {get_nav('reports/profitability')}
+    <div class="card">
+        <div style="margin-bottom:20px;">
+            <h2 style="margin:0;"><i class="fa-solid fa-money-bill-trend-up"></i> Рентабельність страв</h2>
+            <p style="color:#666; margin-top:5px;">
+                Розрахунок базується на <b>поточних</b> цінах інгредієнтів у складському обліку.
+                <br> <small>⚠️ Якщо собівартість 0.00 — перевірте наявність техкарти або закупівельних цін.</small>
+            </p>
+        </div>
+        
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead>
+                    <tr>
+                        <th>Страва</th>
+                        <th>Ціна продажу</th>
+                        <th>Собівартість (Cost)</th>
+                        <th>Прибуток (Margin)</th>
+                        <th>Маржа %</th>
+                        <th>Націнка %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='6' style='text-align:center; padding:30px;'>Немає активних страв</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+    
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Рентабельність", body=body, site_title=settings.site_title, **get_active_classes()))
