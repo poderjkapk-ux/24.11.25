@@ -4,29 +4,30 @@ import html
 import logging
 import json
 from decimal import Decimal
+from datetime import timedelta  # <--- ДОБАВЛЕНО
 from fastapi import APIRouter, Depends, HTTPException, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, delete
 from sqlalchemy.orm import joinedload, selectinload
 
-# Імпорт моделей та залежностей
+# Импорт моделей та залежностей
 from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
 )
-# Імпорт модели модификаторов
+# Импорт модели модификаторов
 from inventory_models import Modifier
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
-# Імпорт шаблонів
+# Импорт шаблонів
 from staff_templates import (
     STAFF_LOGIN_HTML, STAFF_DASHBOARD_HTML, 
     STAFF_TABLE_CARD, STAFF_ORDER_CARD
 )
 
-# Імпорт менеджерів сповіщень та каси
+# Импорт менеджерів сповіщень та каси
 from notification_manager import (
     notify_all_parties_on_status_change, 
     notify_new_order_to_staff, 
@@ -101,14 +102,21 @@ async def login_action(
     elif not verify_password(password, employee.password_hash):
         return RedirectResponse(url="/staff/login?error=1", status_code=303)
 
-    access_token = create_access_token(data={"sub": str(employee.id)})
+    # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ ЖИЗНИ ТОКЕНА ---
+    # Устанавливаем время жизни токена 12 часов (60 * 12 минут)
+    access_token_expires = timedelta(minutes=60 * 12)
+    
+    access_token = create_access_token(
+        data={"sub": str(employee.id)},
+        expires_delta=access_token_expires # <-- Передаем явное время жизни
+    )
     
     response = RedirectResponse(url="/staff/dashboard", status_code=303)
     response.set_cookie(
         key="staff_access_token", 
         value=access_token, 
         httponly=True, 
-        max_age=60*60*12,
+        max_age=60*60*12, # Cookie lives for 12 hours
         samesite="lax"
     )
     return response
