@@ -88,7 +88,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
       .header-content {{ position: relative; z-index: 2; width: 90%; max-width: 800px; animation: fadeUp 1s var(--ease-out); }}
       .header-logo {{ height: 110px; width: auto; margin-bottom: 20px; filter: drop-shadow(0 10px 25px rgba(0,0,0,0.3)); transition: transform 0.3s ease; }}
       .header-logo:hover {{ transform: scale(1.05) rotate(-2deg); }}
-      header h1 {{ font-size: clamp(2.2rem, 6vw, 4rem); font-weight: 700; text-shadow: 0 4px 25px rgba(0,0,0,0.4); line-height: 1.1; letter-spacing: -0.02em; }}
+      header h1 {{ font-size: clamp(2.2rem, 6vw, 4rem); font-weight: 700; text-shadow: 0 4px 25px rgba(0,0,0,0.4); line-height: 1.1; letter-spacing: -0.02em; color: white; }}
       
       .table-badge {{
           display: inline-block; background: rgba(255,255,255,0.25); backdrop-filter: blur(10px);

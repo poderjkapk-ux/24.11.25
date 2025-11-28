@@ -111,7 +111,7 @@ WEB_ORDER_HTML = """
       .header-logo:hover {{ transform: scale(1.05) rotate(-2deg); }}
       header h1 {{ 
           font-size: clamp(2.2rem, 6vw, 4rem); font-weight: 700; 
-          text-shadow: 0 4px 25px rgba(0,0,0,0.4); line-height: 1.1; letter-spacing: -0.02em;
+          text-shadow: 0 4px 25px rgba(0,0,0,0.4); line-height: 1.1; letter-spacing: -0.02em; color: white;
       }}
 
       /* --- NAVIGATION --- */
