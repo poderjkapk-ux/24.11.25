@@ -1,6 +1,7 @@
 # staff_templates.py
 
 # --- СТОРІНКА ВХОДУ ---
+# ТУТ ОДИНАРНІ ДУЖКИ { } БО ЦЕЙ ШАБЛОН НЕ ФОРМАТУЄТЬСЯ ЧЕРЕЗ PYTHON
 STAFF_LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -10,98 +11,236 @@ STAFF_LOGIN_HTML = """
     <title>Вхід для персоналу</title>
     
     <link rel="manifest" href="/staff/manifest.json">
-    <meta name="theme-color" content="#333333">
+    <meta name="theme-color" content="#4f46e5">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="apple-touch-icon" href="/static/favicons/apple-touch-icon.png">
-    <link rel="icon" type="image/png" href="/static/favicons/favicon-32x32.png">
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <style>
-        body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+        :root {
+            --primary: #4f46e5;
+            --primary-dark: #4338ca;
+            --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --white: #ffffff;
+            --gray-100: #f3f4f6;
+            --text-dark: #1f2937;
+            --text-light: #6b7280;
+            --error-bg: #fee2e2;
+            --error-text: #991b1b;
+        }
+
+        * { box-sizing: border-box; outline: none; }
+
+        body { 
+            font-family: 'Inter', sans-serif; 
             display: flex; 
             justify-content: center; 
             align-items: center; 
-            height: 100vh; 
+            min-height: 100vh; 
             margin: 0; 
-            background: #f0f2f5; 
-        }}
-        .login-card {{ 
-            background: white; 
+            background: var(--bg-gradient);
+            background-size: 200% 200%;
+            animation: gradientBG 15s ease infinite;
+            padding: 20px;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .login-card { 
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             padding: 2.5rem; 
-            border-radius: 20px; 
-            box-shadow: 0 10px 25px rgba(0,0,0,0.05); 
-            width: 90%; 
-            max-width: 360px; 
-            text-align: center; 
-        }}
-        h2 {{ margin-top: 0; color: #333; margin-bottom: 1.5rem; font-weight: 700; }}
-        input {{ 
+            border-radius: 24px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.2); 
             width: 100%; 
-            padding: 15px; 
-            margin: 8px 0; 
-            border: 1px solid #ddd; 
-            border-radius: 12px; 
-            box-sizing: border-box; 
-            font-size: 16px; 
-            background: #fafafa; 
-            transition: all 0.2s;
-            outline: none;
-            -webkit-appearance: none; 
-        }}
-        input:focus {{ border-color: #333; background: #fff; box-shadow: 0 0 0 3px rgba(0,0,0,0.05); }}
-        button {{ 
+            max-width: 380px; 
+            text-align: center; 
+            border: 1px solid rgba(255,255,255,0.5);
+            animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .brand-icon {
+            width: 70px;
+            height: 70px;
+            background: var(--primary);
+            color: white;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            margin: 0 auto 1.5rem;
+            box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
+            transform: rotate(-5deg);
+            transition: transform 0.3s ease;
+        }
+        
+        .brand-icon:hover { transform: rotate(0deg) scale(1.05); }
+
+        h2 { 
+            margin: 0 0 0.5rem 0; 
+            color: var(--text-dark); 
+            font-weight: 800; 
+            font-size: 1.8rem;
+            letter-spacing: -0.02em;
+        }
+        
+        p.subtitle {
+            color: var(--text-light);
+            margin: 0 0 2rem 0;
+            font-size: 0.95rem;
+        }
+
+        .input-group {
+            position: relative;
+            margin-bottom: 1.2rem;
+            text-align: left;
+        }
+
+        .input-group i {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-light);
+            font-size: 1.1rem;
+            transition: color 0.2s;
+            pointer-events: none;
+        }
+
+        input { 
+            width: 100%; 
+            padding: 16px 16px 16px 48px; 
+            border: 2px solid transparent; 
+            border-radius: 16px; 
+            font-size: 1rem; 
+            background: var(--gray-100); 
+            color: var(--text-dark);
+            transition: all 0.2s ease;
+            font-family: inherit;
+            font-weight: 500;
+        }
+
+        input:focus { 
+            border-color: var(--primary); 
+            background: var(--white); 
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1); 
+        }
+
+        input:focus + i { color: var(--primary); }
+
+        button { 
             width: 100%; 
             padding: 16px; 
-            background: #333; 
+            background: var(--primary); 
             color: white; 
             border: none; 
-            border-radius: 12px; 
-            font-size: 16px; 
-            font-weight: 600; 
+            border-radius: 16px; 
+            font-size: 1.05rem; 
+            font-weight: 700; 
             cursor: pointer; 
-            margin-top: 20px; 
-            transition: background 0.2s; 
-            -webkit-appearance: none; 
-        }}
-        button:hover {{ background: #000; }}
-        .error-msg {{
-            background: #fee2e2; color: #991b1b; padding: 12px; 
-            border-radius: 10px; margin-bottom: 20px; font-size: 0.9rem;
-            display: none; border: 1px solid #fecaca;
-        }}
+            margin-top: 10px; 
+            transition: all 0.2s; 
+            box-shadow: 0 10px 20px rgba(79, 70, 229, 0.25);
+            display: flex; align-items: center; justify-content: center; gap: 10px;
+        }
+
+        button:hover { 
+            background: var(--primary-dark); 
+            transform: translateY(-2px);
+            box-shadow: 0 15px 30px rgba(79, 70, 229, 0.35);
+        }
+        
+        button:active { transform: translateY(0); }
+
+        .error-msg {
+            background: var(--error-bg); 
+            color: var(--error-text); 
+            padding: 12px; 
+            border-radius: 12px; 
+            margin-bottom: 20px; 
+            font-size: 0.9rem;
+            display: none; 
+            border: 1px solid rgba(220, 38, 38, 0.1);
+            font-weight: 500;
+            animation: shake 0.4s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        .footer {
+            margin-top: 2rem;
+            font-size: 0.8rem;
+            color: var(--text-light);
+            opacity: 0.8;
+        }
     </style>
 </head>
 <body>
     <div class="login-card">
-        <h2>🔐 Staff Panel</h2>
-        <div id="error-box" class="error-msg">Невірний номер або пароль</div>
+        <div class="brand-icon">
+            <i class="fa-solid fa-user-shield"></i>
+        </div>
+        <h2>Staff Panel</h2>
+        <p class="subtitle">Система керування рестораном</p>
+        
+        <div id="error-box" class="error-msg">
+            <i class="fa-solid fa-circle-exclamation"></i> Невірний телефон або пароль
+        </div>
+        
         <form action="/staff/login" method="post">
-            <input type="tel" name="phone" placeholder="Номер телефону" required autocomplete="username">
-            <input type="password" name="password" placeholder="Пароль" required autocomplete="current-password">
-            <button type="submit">Увійти</button>
+            <div class="input-group">
+                <input type="tel" name="phone" placeholder="Номер телефону" required autocomplete="username">
+                <i class="fa-solid fa-phone"></i>
+            </div>
+            
+            <div class="input-group">
+                <input type="password" name="password" placeholder="Пароль" required autocomplete="current-password">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            
+            <button type="submit">Увійти <i class="fa-solid fa-arrow-right"></i></button>
         </form>
+        
+        <div class="footer">
+            &copy; 2024 Staff System
+        </div>
     </div>
-    <script>
-      // Показуємо помилку, якщо в URL є ?error=1
-      const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.has('error')) {{
-          document.getElementById('error-box').style.display = 'block';
-      }}
 
-      if ('serviceWorker' in navigator) {{
-        window.addEventListener('load', () => {{
-          navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('SW зареєстровано:', reg.scope))
-            .catch(err => console.log('SW помилка:', err));
-        }});
-      }}
+    <script>
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.has('error')) {
+          document.getElementById('error-box').style.display = 'block';
+      }
+
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW error:', err));
+        });
+      }
     </script>
 </body>
 </html>
 """
 
 # --- ГОЛОВНА ПАНЕЛЬ (DASHBOARD) ---
+# ТУТ ПОДВІЙНІ ДУЖКИ {{ }} ДЛЯ CSS, БО ВИКОРИСТОВУЄТЬСЯ .format()
 STAFF_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
