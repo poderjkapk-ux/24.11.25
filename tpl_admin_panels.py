@@ -7,6 +7,7 @@ ADMIN_INVENTORY_TABS = """
     <a href="/admin/inventory/stock">📦 Остатки</a>
     <a href="/admin/inventory/docs">📄 Документы</a>
     <a href="/admin/inventory/reports/usage">📉 Рух (Звіт)</a>
+    <a href="/admin/inventory/reports/suppliers">🚛 Постачальники</a>
 </div>
 """
 

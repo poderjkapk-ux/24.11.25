@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Form, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload # Добавлен selectinload
 
 from inventory_models import (
     Ingredient, Unit, Warehouse, TechCard, TechCardItem, Stock, Supplier, 
@@ -83,7 +83,8 @@ def get_nav(active_tab):
         "docs": {"icon": "fa-file-invoice", "label": "Накладні"},
         "tech_cards": {"icon": "fa-book-open", "label": "Техкарти"},
         "reports/usage": {"icon": "fa-chart-line", "label": "Рух (Звіт)"},
-        "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"} 
+        "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"},
+        "reports/suppliers": {"icon": "fa-file-invoice-dollar", "label": "Звіт по накладних"} # <-- Нова вкладка
     }
     html = f"{INVENTORY_STYLES}<div class='inv-nav'>"
     for k, v in tabs.items():
@@ -1044,3 +1045,171 @@ async def report_profitability(session: AsyncSession = Depends(get_db_session), 
     """
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Рентабельність", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.get("/reports/suppliers", response_class=HTMLResponse)
+async def report_suppliers(
+    supplier_id: int = Query(None),
+    date_from: str = Query(None),
+    date_to: str = Query(None),
+    sort_by: str = Query("date_desc"), # date_desc, date_asc, amount_desc, amount_asc
+    session: AsyncSession = Depends(get_db_session),
+    user=Depends(check_credentials)
+):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    # 1. Фильтры
+    suppliers = (await session.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
+    sup_opts = f"<option value=''>-- Всі постачальники --</option>"
+    for s in suppliers:
+        selected = "selected" if supplier_id == s.id else ""
+        sup_opts += f"<option value='{s.id}' {selected}>{html.escape(s.name)}</option>"
+
+    # 2. Запрос документов (только Supply - Приход)
+    query = select(InventoryDoc).options(
+        joinedload(InventoryDoc.supplier),
+        selectinload(InventoryDoc.items) # Загружаем товары для подсчета суммы
+    ).where(InventoryDoc.doc_type == 'supply')
+
+    if supplier_id:
+        query = query.where(InventoryDoc.supplier_id == supplier_id)
+    
+    if date_from:
+        dt_from = datetime.strptime(date_from, "%Y-%m-%d")
+        query = query.where(InventoryDoc.created_at >= dt_from)
+    
+    if date_to:
+        dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        query = query.where(InventoryDoc.created_at <= dt_to)
+
+    # Получаем сырые данные
+    docs_res = await session.execute(query)
+    docs = docs_res.scalars().all()
+
+    # 3. Обработка данных (подсчет сумм)
+    report_data = []
+    total_period_sum = Decimal(0)
+    total_period_paid = Decimal(0)
+
+    for d in docs:
+        doc_total = sum((item.quantity * item.price) for item in d.items)
+        doc_debt = doc_total - d.paid_amount
+        
+        total_period_sum += doc_total
+        total_period_paid += d.paid_amount
+
+        report_data.append({
+            "id": d.id,
+            "date": d.created_at,
+            "supplier_name": d.supplier.name if d.supplier else "Невідомий",
+            "total": doc_total,
+            "paid": d.paid_amount,
+            "debt": doc_debt,
+            "comment": d.comment or "",
+            "is_processed": d.is_processed
+        })
+
+    # 4. Сортировка (Python side, так как сумма вычисляемая)
+    if sort_by == 'date_desc':
+        report_data.sort(key=lambda x: x['date'], reverse=True)
+    elif sort_by == 'date_asc':
+        report_data.sort(key=lambda x: x['date'])
+    elif sort_by == 'amount_desc':
+        report_data.sort(key=lambda x: x['total'], reverse=True)
+    elif sort_by == 'amount_asc':
+        report_data.sort(key=lambda x: x['total'])
+
+    # 5. Генерация таблицы
+    rows = ""
+    for row in report_data:
+        status_icon = "✅" if row['is_processed'] else "⚠️"
+        date_str = row['date'].strftime('%d.%m.%Y %H:%M')
+        
+        # Подсветка долга
+        debt_display = f"{row['debt']:.2f}"
+        if row['debt'] > 0:
+            debt_display = f"<span style='color:#dc2626; font-weight:bold;'>{debt_display}</span>"
+        elif row['debt'] < 0:
+             debt_display = f"<span style='color:#2563eb;'>+{abs(row['debt']):.2f} (Переплата)</span>"
+        else:
+             debt_display = "<span style='color:#16a34a;'>Оплачено</span>"
+
+        rows += f"""
+        <tr onclick="window.location='/admin/inventory/docs/{row['id']}'" style="cursor:pointer;">
+            <td>{row['id']}</td>
+            <td>{date_str}</td>
+            <td><b>{html.escape(row['supplier_name'])}</b></td>
+            <td>{row['total']:.2f} грн</td>
+            <td>{row['paid']:.2f} грн</td>
+            <td>{debt_display}</td>
+            <td>{status_icon}</td>
+            <td style="color:#666; font-size:0.9em;">{html.escape(row['comment'])}</td>
+        </tr>
+        """
+
+    # 6. HTML Шаблон
+    body = f"""
+    {get_nav('reports/suppliers')}
+    
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0;"><i class="fa-solid fa-file-invoice-dollar"></i> Звіт по постачальниках</h2>
+            
+            <div style="text-align:right;">
+                <div style="font-size:0.9rem; color:#666;">Загальна сума закупівель:</div>
+                <div style="font-size:1.5rem; font-weight:bold; color:#0f172a;">{total_period_sum:.2f} грн</div>
+                <div style="font-size:0.8rem; color:#16a34a;">Сплачено: {total_period_paid:.2f} грн</div>
+            </div>
+        </div>
+
+        <form action="/admin/inventory/reports/suppliers" method="get" class="search-form" style="background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+            <div style="display:flex; gap:15px; flex-wrap:wrap; align-items:flex-end;">
+                <div>
+                    <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.8rem;">Постачальник:</label>
+                    <select name="supplier_id" style="padding:8px; border-radius:6px; border:1px solid #ccc; min-width:200px;">
+                        {sup_opts}
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.8rem;">Період з:</label>
+                    <input type="date" name="date_from" value="{date_from or ''}" style="padding:7px; border-radius:6px; border:1px solid #ccc;">
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.8rem;">по:</label>
+                    <input type="date" name="date_to" value="{date_to or ''}" style="padding:7px; border-radius:6px; border:1px solid #ccc;">
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.8rem;">Сортування:</label>
+                    <select name="sort_by" style="padding:8px; border-radius:6px; border:1px solid #ccc;">
+                        <option value="date_desc" {'selected' if sort_by=='date_desc' else ''}>Дата (нові)</option>
+                        <option value="date_asc" {'selected' if sort_by=='date_asc' else ''}>Дата (старі)</option>
+                        <option value="amount_desc" {'selected' if sort_by=='amount_desc' else ''}>Сума (дорогі)</option>
+                        <option value="amount_asc" {'selected' if sort_by=='amount_asc' else ''}>Сума (дешеві)</option>
+                    </select>
+                </div>
+                <button type="submit" class="button" style="height:38px;"><i class="fa-solid fa-filter"></i> Показати</button>
+            </div>
+        </form>
+
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Дата</th>
+                        <th>Постачальник</th>
+                        <th>Сума накладної</th>
+                        <th>Сплачено</th>
+                        <th>Борг</th>
+                        <th>Статус</th>
+                        <th>Коментар</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows or "<tr><td colspan='8' style='text-align:center; padding:30px; color:#999;'>Документів не знайдено</td></tr>"}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+    
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Звіт: Постачальники", body=body, site_title=settings.site_title, **get_active_classes()))
