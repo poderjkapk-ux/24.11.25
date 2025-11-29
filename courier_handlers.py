@@ -851,6 +851,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
         kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="waiter_cart_back_to_cart"))
         
         await callback.message.edit_text("Виберіть категорію:", reply_markup=kb.as_markup())
+        await callback.answer() # --- FIX: Added callback.answer()
 
     @dp_admin.callback_query(F.data == "waiter_cart_back_to_cart", WaiterCreateOrderStates.choosing_category)
     @dp_admin.callback_query(F.data == "waiter_cart_back_to_cart", WaiterCreateOrderStates.choosing_product)
@@ -872,6 +873,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
         kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="waiter_cart_back_to_categories"))
         
         await callback.message.edit_text("Виберіть страву:", reply_markup=kb.as_markup())
+        await callback.answer() # --- FIX: Added callback.answer()
 
     @dp_admin.callback_query(F.data == "waiter_cart_back_to_categories", WaiterCreateOrderStates.choosing_product)
     async def waiter_cart_back_to_categories(callback: CallbackQuery, state: FSMContext, session: AsyncSession):

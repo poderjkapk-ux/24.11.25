@@ -287,7 +287,9 @@ async def show_menu_callback(callback: CallbackQuery, session: AsyncSession):
 
 @dp.callback_query(F.data.startswith("show_category_"))
 async def show_category_paginated(callback: CallbackQuery, session: AsyncSession):
-    await callback.answer("⏳ Завантаження...")
+    # Added answer to stop loading spinner
+    await callback.answer()
+    
     parts = callback.data.split("_")
     category_id = int(parts[2])
     page = int(parts[3]) if len(parts) > 3 else 1
@@ -348,7 +350,9 @@ async def get_photo_input(image_url: str):
 
 @dp.callback_query(F.data.startswith("show_product_"))
 async def show_product(callback: CallbackQuery, session: AsyncSession):
-    await callback.answer("⏳ Завантаження...")
+    # Added answer to stop loading spinner
+    await callback.answer()
+    
     product_id = int(callback.data.split("_")[2])
     product = await session.get(Product, product_id)
 
@@ -480,11 +484,12 @@ async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifi
     
     await callback.answer(msg, show_alert=False)
     
-    # --- ИСПРАВЛЕНИЕ: Устанавливаем правильный callback.data для возврата в меню ---
-    callback.data = f"show_category_{product.category_id}_1"
-    # -------------------------------------------------------------------------------
+    # --- FIX: Use model_copy instead of direct assignment ---
+    # Creating a new callback object with updated 'data' field because the original is frozen
+    new_callback = callback.model_copy(update={"data": f"show_category_{product.category_id}_1"})
+    # --------------------------------------------------------
     
-    await show_category_paginated(callback, session)
+    await show_category_paginated(new_callback, session)
 
 async def show_cart(message_or_callback: Message | CallbackQuery, session: AsyncSession):
     is_callback = isinstance(message_or_callback, CallbackQuery)
