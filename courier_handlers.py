@@ -19,9 +19,7 @@ import os
 from decimal import Decimal
 
 from models import Employee, Order, OrderStatus, Settings, OrderStatusHistory, Table, Category, Product, OrderItem
-# Додано notify_station_completion
 from notification_manager import notify_new_order_to_staff, notify_all_parties_on_status_change, notify_station_completion
-# --- КАСА: Імпорт сервісів ---
 from cash_service import link_order_to_shift, register_employee_debt
 
 logger = logging.getLogger(__name__)
@@ -69,18 +67,12 @@ def get_staff_keyboard(employee: Employee):
     builder.row(KeyboardButton(text="🚪 Вийти"))
     return builder.as_markup(resize_keyboard=True)
 
-def get_courier_keyboard(employee: Employee): return get_staff_keyboard(employee)
-def get_operator_keyboard(employee: Employee): return get_staff_keyboard(employee)
-def get_waiter_keyboard(employee: Employee): return get_staff_keyboard(employee)
-
-
 # --- ДОПОМІЖНА ФУНКЦІЯ: Отримання відфільтрованого тексту чека ---
 async def _get_filtered_order_text(session: AsyncSession, order: Order, area: str) -> str:
     """
     Повертає текст складу замовлення, залишаючи ТІЛЬКИ товари для вказаного цеху.
-    Використовує OrderItem.
+    [FIX] Додано відображення модифікаторів.
     """
-    # Завантажуємо items якщо вони ще не завантажені
     if 'items' not in order.__dict__:
         await session.refresh(order, ['items'])
         
@@ -94,11 +86,18 @@ async def _get_filtered_order_text(session: AsyncSession, order: Order, area: st
         if area == 'bar' and item.preparation_area == 'bar':
             is_target = True
         elif area == 'kitchen' and item.preparation_area != 'bar':
-            # Все, що не бар, йде на кухню (за замовчуванням)
             is_target = True
 
         if is_target:
-            filtered_lines.append(f"- {html_module.escape(item.product_name)} x {item.quantity}")
+            # [FIX] Формуємо рядок з модифікаторами
+            mods_str = ""
+            if item.modifiers:
+                # item.modifiers це список dict з JSON поля
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                if mod_names:
+                    mods_str = f" (+ {', '.join(mod_names)})"
+            
+            filtered_lines.append(f"- {html_module.escape(item.product_name)}{mods_str} x {item.quantity}")
 
     if not filtered_lines:
         return ""
@@ -121,7 +120,6 @@ async def show_chef_orders(message_or_callback: Message | CallbackQuery, session
     kitchen_statuses_res = await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))
     kitchen_status_ids = kitchen_statuses_res.scalars().all()
 
-    # Завантажуємо items для фільтрації
     orders_res = await session.execute(
         select(Order)
         .options(joinedload(Order.status), joinedload(Order.table), selectinload(Order.items))
@@ -135,7 +133,6 @@ async def show_chef_orders(message_or_callback: Message | CallbackQuery, session
     
     kb = InlineKeyboardBuilder()
     for order in all_orders:
-        # Якщо кухня вже виконала свою частину, не показуємо
         if order.kitchen_done:
             continue
 
@@ -160,7 +157,8 @@ async def show_chef_orders(message_or_callback: Message | CallbackQuery, session
     
     try:
         if isinstance(message_or_callback, CallbackQuery):
-            await message.edit_text(text, reply_markup=kb.as_markup())
+            if message_or_callback.message.text != text: # Перевірка щоб уникнути помилки "not modified"
+                await message.edit_text(text, reply_markup=kb.as_markup())
             await message_or_callback.answer()
         else:
             await message.answer(text, reply_markup=kb.as_markup())
@@ -195,7 +193,6 @@ async def show_bartender_orders(message_or_callback: Message | CallbackQuery, se
     
     kb = InlineKeyboardBuilder()
     for order in all_orders:
-        # Якщо бар вже виконав свою частину
         if order.bar_done:
             continue
 
@@ -220,7 +217,8 @@ async def show_bartender_orders(message_or_callback: Message | CallbackQuery, se
     
     try:
         if isinstance(message_or_callback, CallbackQuery):
-            await message.edit_text(text, reply_markup=kb.as_markup())
+            if message_or_callback.message.text != text:
+                await message.edit_text(text, reply_markup=kb.as_markup())
             await message_or_callback.answer()
         else:
             await message.answer(text, reply_markup=kb.as_markup())
@@ -334,7 +332,16 @@ async def _generate_waiter_order_view(order: Order, session: AsyncSession):
     
     products_formatted = ""
     if order.items:
-        products_formatted = "\n".join([f"- {html_module.escape(item.product_name)} x {item.quantity}" for item in order.items])
+        lines = []
+        for item in order.items:
+            # [FIX] Додано відображення модифікаторів
+            mods_str = ""
+            if item.modifiers:
+                mod_names = [m.get('name', '') for m in item.modifiers]
+                if mod_names:
+                    mods_str = f" (+ {', '.join(mod_names)})"
+            lines.append(f"- {html_module.escape(item.product_name)}{mods_str} x {item.quantity}")
+        products_formatted = "\n".join(lines)
     else:
         products_formatted = "- <i>(Пусто)</i>"
     
@@ -404,10 +411,13 @@ def register_courier_handlers(dp_admin: Dispatcher):
 
     @dp_admin.message(StaffAuthStates.waiting_for_phone)
     async def process_staff_phone(message: Message, state: FSMContext, session: AsyncSession):
-        phone = message.text.strip()
+        # [FIX] Очищення номера телефону (залишаємо тільки цифри)
+        phone = re.sub(r'\D', '', message.text.strip())
+        
         data = await state.get_data()
         role_type = data.get("role_type")
         
+        # Пошук співробітника (порівнюємо тільки цифри, як в БД)
         employee = await session.scalar(select(Employee).options(joinedload(Employee.role)).where(Employee.phone_number == phone))
         
         role_checks = {
