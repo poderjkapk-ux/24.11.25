@@ -18,7 +18,10 @@ import re
 import os
 from decimal import Decimal
 
+# Импорт моделей
 from models import Employee, Order, OrderStatus, Settings, OrderStatusHistory, Table, Category, Product, OrderItem
+# Импорт модификаторов
+from inventory_models import Modifier
 from notification_manager import notify_new_order_to_staff, notify_all_parties_on_status_change, notify_station_completion
 from cash_service import link_order_to_shift, register_employee_debt
 
@@ -31,6 +34,7 @@ class WaiterCreateOrderStates(StatesGroup):
     managing_cart = State()
     choosing_category = State()
     choosing_product = State()
+    choosing_modifiers = State() # Новый статус для выбора модификаторов
 
 
 def get_staff_login_keyboard():
@@ -71,7 +75,6 @@ def get_staff_keyboard(employee: Employee):
 async def _get_filtered_order_text(session: AsyncSession, order: Order, area: str) -> str:
     """
     Повертає текст складу замовлення, залишаючи ТІЛЬКИ товари для вказаного цеху.
-    [FIX] Додано відображення модифікаторів.
     """
     if 'items' not in order.__dict__:
         await session.refresh(order, ['items'])
@@ -89,7 +92,6 @@ async def _get_filtered_order_text(session: AsyncSession, order: Order, area: st
             is_target = True
 
         if is_target:
-            # [FIX] Формуємо рядок з модифікаторами
             mods_str = ""
             if item.modifiers:
                 # item.modifiers це список dict з JSON поля
@@ -157,7 +159,7 @@ async def show_chef_orders(message_or_callback: Message | CallbackQuery, session
     
     try:
         if isinstance(message_or_callback, CallbackQuery):
-            if message_or_callback.message.text != text: # Перевірка щоб уникнути помилки "not modified"
+            if message_or_callback.message.text != text: 
                 await message.edit_text(text, reply_markup=kb.as_markup())
             await message_or_callback.answer()
         else:
@@ -334,7 +336,6 @@ async def _generate_waiter_order_view(order: Order, session: AsyncSession):
     if order.items:
         lines = []
         for item in order.items:
-            # [FIX] Додано відображення модифікаторів
             mods_str = ""
             if item.modifiers:
                 mod_names = [m.get('name', '') for m in item.modifiers]
@@ -411,13 +412,11 @@ def register_courier_handlers(dp_admin: Dispatcher):
 
     @dp_admin.message(StaffAuthStates.waiting_for_phone)
     async def process_staff_phone(message: Message, state: FSMContext, session: AsyncSession):
-        # [FIX] Очищення номера телефону (залишаємо тільки цифри)
         phone = re.sub(r'\D', '', message.text.strip())
         
         data = await state.get_data()
         role_type = data.get("role_type")
         
-        # Пошук співробітника (порівнюємо тільки цифри, як в БД)
         employee = await session.scalar(select(Employee).options(joinedload(Employee.role)).where(Employee.phone_number == phone))
         
         role_checks = {
@@ -541,7 +540,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
     async def back_to_list(callback: CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
         await show_courier_orders(callback, session)
 
-    # --- ЛОГІКА ВИДАЧІ (СПІЛЬНА ДЛЯ КУХНІ ТА БАРУ) ---
     @dp_admin.callback_query(F.data.startswith("chef_ready_"))
     async def chef_ready_for_issuance(callback: CallbackQuery, session: AsyncSession):
         client_bot = dp_admin.get("client_bot")
@@ -551,12 +549,11 @@ def register_courier_handlers(dp_admin: Dispatcher):
         order_id = int(parts[2])
         area = parts[3] if len(parts) > 3 else 'kitchen'
         
-        # Завантажуємо items для перевірки
         order = await session.get(Order, order_id, options=[
             joinedload(Order.status), 
             joinedload(Order.table), 
             joinedload(Order.accepted_by_waiter),
-            joinedload(Order.courier), # Додаємо courier
+            joinedload(Order.courier),
             selectinload(Order.items)
         ])
         if not order: return await callback.answer("Замовлення не знайдено.")
@@ -564,7 +561,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
         ready_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Готовий до видачі").limit(1))
         if not ready_status: return await callback.answer("Статус 'Готовий до видачі' не налаштовано.", show_alert=True)
         
-        # Встановлюємо флаги готовності цехів та перевіряємо чи не було натиснуто раніше
         already_done = False
         if area == 'kitchen':
             if order.kitchen_done: already_done = True
@@ -573,7 +569,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
             if order.bar_done: already_done = True
             order.bar_done = True
             
-        # Перевіряємо, чи все замовлення готове
         has_kitchen_items = any(item.preparation_area != 'bar' for item in order.items)
         has_bar_items = any(item.preparation_area == 'bar' for item in order.items)
         
@@ -589,20 +584,15 @@ def register_courier_handlers(dp_admin: Dispatcher):
         if area == 'bar': actor_info += " (Бар)"
         else: actor_info += " (Кухня)"
         
-        # Змінюємо статус тільки якщо все готово
         if is_fully_ready and order.status_id != ready_status.id:
             order.status_id = ready_status.id
             session.add(OrderStatusHistory(order_id=order.id, status_id=ready_status.id, actor_info=actor_info))
         
         await session.commit()
         
-        # --- НОВА ЛОГІКА: Сповіщення про готовність цеху ---
-        # Відправляємо, якщо цей цех ще не був позначений як готовий (щоб уникнути дублів)
         if not already_done:
             await notify_station_completion(callback.bot, order, area, session)
-        # --------------------------------------------------
         
-        # Якщо все повністю готове, спрацює стандартне сповіщення про зміну статусу
         if is_fully_ready and old_status_name != ready_status.name:
             await notify_all_parties_on_status_change(
                 order=order, 
@@ -625,7 +615,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
         
         await callback.answer(f"Сигнал видачі для #{order.id} відправлено!")
 
-    # --- ЛОГІКА ПЕРЕХОПЛЕННЯ ОПЛАТИ ---
     @dp_admin.callback_query(F.data.startswith("staff_ask_payment_"))
     async def staff_ask_payment_method(callback: CallbackQuery, session: AsyncSession):
         parts = callback.data.split("_")
@@ -668,7 +657,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
         if order.status.is_completed_status or order.status.is_cancelled_status:
              return await callback.answer("⛔️ Замовлення вже закрите. Зміна заборонена.", show_alert=True)
 
-        # Запит методу оплати, якщо це фінальний статус
         if new_status.is_completed_status and not payment_method_override:
             kb = InlineKeyboardBuilder()
             kb.row(InlineKeyboardButton(text="💵 Готівка", callback_data=f"staff_set_status_{order_id}_{new_status_id}_cash"))
@@ -688,21 +676,15 @@ def register_courier_handlers(dp_admin: Dispatcher):
         
         debt_message = ""
         
-        # --- КАСОВА ЛОГІКА ---
         if new_status.is_completed_status:
-            # 1. ФІКСАЦІЯ ВИКОНАВЦЯ (ДЛЯ ЗВІТІВ)
-            # Якщо це доставка і закриває кур'єр - записуємо його
             if order.is_delivery:
                 order.completed_by_courier_id = employee.id
 
-            # 2. Прив'язуємо до поточної зміни
             await link_order_to_shift(session, order, employee.id)
             
-            # 3. Якщо готівка - вішаємо борг на співробітника
             if order.payment_method == 'cash':
                 await register_employee_debt(session, order, employee.id)
                 debt_message = f"\n\n💰 <b>Готівка: {order.total_price} грн</b> записана на ваш баланс. Здайте її касиру в кінці зміни."
-        # ---------------------
 
         await session.commit()
         
@@ -792,7 +774,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
             return await callback.answer("Вже прийнято іншим.", show_alert=True)
 
         order.accepted_by_waiter_id = employee.id
-        # Спробуємо перевести в статус "В обробці"
         processing_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "В обробці").limit(1))
         if processing_status:
             order.status_id = processing_status.id
@@ -817,15 +798,23 @@ def register_courier_handlers(dp_admin: Dispatcher):
         if not cart:
             text += "<i>Кошик порожній</i>"
         else:
-            for prod_id, item in cart.items():
-                # Ціна тут float, тому множимо як float для відображення
+            for item_key, item in cart.items():
                 item_total = item['price'] * item['quantity']
                 total_price += item_total
-                text += f"- {html_module.escape(item['name'])} ({item['quantity']} шт.) = {item_total:.2f} грн\n"
+                
+                # Отображение модификаторов
+                mods_str = ""
+                if item.get('modifiers'):
+                    mod_names = [m['name'] for m in item['modifiers']]
+                    mods_str = f" (+ {', '.join(mod_names)})"
+
+                text += f"- {html_module.escape(item['name'])}{mods_str} ({item['quantity']} шт.) = {item_total:.2f} грн\n"
+                
+                # Используем уникальный ключ товара в корзине
                 kb.row(
-                    InlineKeyboardButton(text="➖", callback_data=f"waiter_cart_qnt_{prod_id}_-1"),
+                    InlineKeyboardButton(text="➖", callback_data=f"waiter_cart_qnt_{item_key}_-1"),
                     InlineKeyboardButton(text=f"{item['quantity']}x {html_module.escape(item['name'])}", callback_data="noop"),
-                    InlineKeyboardButton(text="➕", callback_data=f"waiter_cart_qnt_{prod_id}_1")
+                    InlineKeyboardButton(text="➕", callback_data=f"waiter_cart_qnt_{item_key}_1")
                 )
         
         text += f"\n\n<b>Загальна сума: {total_price:.2f} грн</b>"
@@ -861,7 +850,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
         kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="waiter_cart_back_to_cart"))
         
         await callback.message.edit_text("Виберіть категорію:", reply_markup=kb.as_markup())
-        await callback.answer() # --- FIX: Added callback.answer()
+        await callback.answer()
 
     @dp_admin.callback_query(F.data == "waiter_cart_back_to_cart", WaiterCreateOrderStates.choosing_category)
     @dp_admin.callback_query(F.data == "waiter_cart_back_to_cart", WaiterCreateOrderStates.choosing_product)
@@ -883,46 +872,138 @@ def register_courier_handlers(dp_admin: Dispatcher):
         kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="waiter_cart_back_to_categories"))
         
         await callback.message.edit_text("Виберіть страву:", reply_markup=kb.as_markup())
-        await callback.answer() # --- FIX: Added callback.answer()
+        await callback.answer()
 
     @dp_admin.callback_query(F.data == "waiter_cart_back_to_categories", WaiterCreateOrderStates.choosing_product)
     async def waiter_cart_back_to_categories(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
         await waiter_cart_add_item(callback, state, session)
 
+    # --- ЛОГИКА ВЫБОРА МОДИФИКАТОРОВ ---
+
     @dp_admin.callback_query(WaiterCreateOrderStates.choosing_product, F.data.startswith("waiter_cart_prod_"))
     async def waiter_cart_add_product(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
         product_id = int(callback.data.split("_")[-1])
-        product = await session.get(Product, product_id)
+        # Загружаем продукт с модификаторами
+        product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
         
+        if not product:
+            return await callback.answer("Помилка", show_alert=True)
+
+        if product.modifiers:
+            # Если есть модификаторы, переходим к их выбору
+            await state.set_state(WaiterCreateOrderStates.choosing_modifiers)
+            await state.update_data(
+                current_product_id=product.id,
+                current_product_name=product.name,
+                current_product_price=float(product.price),
+                current_product_area=product.preparation_area,
+                selected_mod_ids=[] 
+            )
+            await _show_modifier_selection(callback, product, [])
+        else:
+            # Если нет, добавляем сразу
+            await _add_product_to_fsm_cart(state, product, [])
+            await state.set_state(WaiterCreateOrderStates.managing_cart)
+            await _display_waiter_cart(callback, state, session)
+            await callback.answer(f"{product.name} додано.")
+
+    async def _show_modifier_selection(callback: CallbackQuery, product: Product, selected_ids: list):
+        kb = InlineKeyboardBuilder()
+        
+        for mod in product.modifiers:
+            is_selected = mod.id in selected_ids
+            marker = "✅" if is_selected else "⬜️"
+            kb.row(InlineKeyboardButton(
+                text=f"{marker} {mod.name} (+{mod.price} грн)", 
+                callback_data=f"waiter_mod_toggle_{mod.id}"
+            ))
+        
+        kb.row(InlineKeyboardButton(text="📥 Додати в замовлення", callback_data="waiter_mod_confirm"))
+        kb.row(InlineKeyboardButton(text="⬅️ Назад до страв", callback_data="waiter_cart_back_to_cart")) # Или back_to_products
+
+        current_total = product.price + sum(m.price for m in product.modifiers if m.id in selected_ids)
+        
+        text = f"<b>{html_module.escape(product.name)}</b>\nЦіна: {current_total} грн\nОберіть добавки:"
+        await callback.message.edit_text(text, reply_markup=kb.as_markup())
+
+    @dp_admin.callback_query(WaiterCreateOrderStates.choosing_modifiers, F.data.startswith("waiter_mod_toggle_"))
+    async def waiter_mod_toggle(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+        mod_id = int(callback.data.split("_")[-1])
+        data = await state.get_data()
+        selected_ids = data.get("selected_mod_ids", [])
+        
+        if mod_id in selected_ids:
+            selected_ids.remove(mod_id)
+        else:
+            selected_ids.append(mod_id)
+            
+        await state.update_data(selected_mod_ids=selected_ids)
+        
+        product = await session.get(Product, data["current_product_id"], options=[selectinload(Product.modifiers)])
+        await _show_modifier_selection(callback, product, selected_ids)
+        await callback.answer()
+
+    @dp_admin.callback_query(WaiterCreateOrderStates.choosing_modifiers, F.data == "waiter_mod_confirm")
+    async def waiter_mod_confirm(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+        data = await state.get_data()
+        product_id = data["current_product_id"]
+        mod_ids = data.get("selected_mod_ids", [])
+        
+        product = await session.get(Product, product_id)
+        # Загружаем объекты модификаторов для формирования структуры
+        modifiers = []
+        if mod_ids:
+            modifiers = (await session.execute(select(Modifier).where(Modifier.id.in_(mod_ids)))).scalars().all()
+            
+        await _add_product_to_fsm_cart(state, product, modifiers)
+        await state.set_state(WaiterCreateOrderStates.managing_cart)
+        await _display_waiter_cart(callback, state, session)
+        await callback.answer("Додано.")
+
+    async def _add_product_to_fsm_cart(state: FSMContext, product: Product, modifiers: list):
         data = await state.get_data()
         cart = data.get("cart", {})
         
-        if str(product_id) in cart: cart[str(product_id)]["quantity"] += 1
-        else: 
-            # Зберігаємо preparation_area для подальшого створення OrderItem
-            # Зберігаємо ціну як float для серіалізації в JSON (стан)
-            cart[str(product_id)] = {
-                "name": product.name, 
-                "price": float(product.price), # Convert Decimal to float for JSON storage in FSM
-                "quantity": 1,
-                "area": product.preparation_area
-            }
+        # Формируем уникальный ключ для позиции (чтобы отличать "Бургер" от "Бургер + Сыр")
+        mod_ids_str = "-".join(sorted([str(m.id) for m in modifiers]))
+        unique_key = f"{product.id}_{mod_ids_str}"
         
+        # Формируем структуру модификаторов для FSM (храним ID для восстановления из БД при сохранении)
+        mods_data = [{"id": m.id, "name": m.name} for m in modifiers]
+        
+        if unique_key in cart:
+            cart[unique_key]["quantity"] += 1
+        else:
+            # Расчет цены для отображения (при сохранении пересчитаем из БД)
+            unit_price = float(product.price) + sum(float(m.price) for m in modifiers)
+            
+            cart[unique_key] = {
+                "product_id": product.id,
+                "name": product.name,
+                "price": unit_price,
+                "quantity": 1,
+                "area": product.preparation_area,
+                "modifiers": mods_data
+            }
+            
         await state.update_data(cart=cart)
-        await state.set_state(WaiterCreateOrderStates.managing_cart)
-        await _display_waiter_cart(callback, state, session)
-        await callback.answer(f"{product.name} додано.")
+
+    # -----------------------------------
 
     @dp_admin.callback_query(WaiterCreateOrderStates.managing_cart, F.data.startswith("waiter_cart_qnt_"))
     async def waiter_cart_change_quantity(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-        prod_id, change = callback.data.split("_")[3:]
-        change = int(change)
+        # Получаем ключ из callback data (учтите, что он может быть длинным)
+        # Формат: waiter_cart_qnt_{UNIQUE_KEY}_{CHANGE}
+        parts = callback.data.split("_")
+        change = int(parts[-1])
+        unique_key = "_".join(parts[3:-1]) # Собираем ключ обратно, если он содержал _
+        
         data = await state.get_data()
         cart = data.get("cart", {})
         
-        if prod_id in cart:
-            cart[prod_id]["quantity"] += change
-            if cart[prod_id]["quantity"] <= 0: del cart[prod_id]
+        if unique_key in cart:
+            cart[unique_key]["quantity"] += change
+            if cart[unique_key]["quantity"] <= 0: del cart[unique_key]
         
         await state.update_data(cart=cart)
         await _display_waiter_cart(callback, state, session)
@@ -936,30 +1017,59 @@ def register_courier_handlers(dp_admin: Dispatcher):
         
         employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == callback.from_user.id))
         
-        # --- ИСПРАВЛЕНИЕ: Получаем актуальные цены и данные из БД ---
-        product_ids = [int(pid) for pid in cart.keys()]
-        if not product_ids:
+        if not cart:
              return await callback.answer("Кошик порожній.", show_alert=True)
 
-        # Загружаем продукты из базы
+        # 1. Сбор ID продуктов
+        product_ids = {item['product_id'] for item in cart.values()}
+        
+        # 2. Сбор ID модификаторов
+        all_mod_ids = set()
+        for item in cart.values():
+            for m in item.get('modifiers', []):
+                all_mod_ids.add(int(m['id']))
+
+        # 3. Загрузка данных из БД
         products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
         db_products = {p.id: p for p in products_res.scalars().all()}
+        
+        db_modifiers = {}
+        if all_mod_ids:
+            mods_res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
+            for m in mods_res.scalars().all():
+                db_modifiers[m.id] = m
         
         total_price = Decimal('0.00')
         items_to_create = []
 
-        for prod_id_str, item_data in cart.items():
-            prod_id = int(prod_id_str)
+        for item_data in cart.values():
+            prod_id = item_data['product_id']
             product = db_products.get(prod_id)
             
-            # Если товар был удален из базы, пока оформляли заказ - пропускаем
-            if not product:
-                continue
+            if not product: continue
                 
-            # Используем АКТУАЛЬНУЮ цену и данные из базы, а не из кэша
             qty = item_data['quantity']
-            actual_price = product.price
             
+            # Расчет цены на основе БД
+            base_price = product.price
+            mods_price_sum = Decimal(0)
+            final_mods_data = []
+            
+            for m_raw in item_data.get('modifiers', []):
+                mid = int(m_raw['id'])
+                if mid in db_modifiers:
+                    m_db = db_modifiers[mid]
+                    mods_price_sum += m_db.price
+                    # Сохраняем полные данные для склада
+                    final_mods_data.append({
+                        "id": m_db.id,
+                        "name": m_db.name,
+                        "price": float(m_db.price),
+                        "ingredient_id": m_db.ingredient_id,
+                        "ingredient_qty": float(m_db.ingredient_qty)
+                    })
+
+            actual_price = base_price + mods_price_sum
             total_price += actual_price * qty
             
             items_to_create.append({
@@ -967,17 +1077,16 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 "name": product.name,
                 "quantity": qty,
                 "price": actual_price,
-                "area": product.preparation_area # Берем актуальный цех
+                "area": product.preparation_area,
+                "modifiers": final_mods_data
             })
             
         if not items_to_create:
-             return await callback.answer("Помилка: товари не знайдено (можливо видалені).", show_alert=True)
-        # ------------------------------------------------------------
+             return await callback.answer("Помилка: товари не знайдено.", show_alert=True)
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))
         status_id = new_status.id if new_status else 1
 
-        # Створюємо замовлення
         order = Order(
             customer_name=f"Стіл: {table_name}", phone_number=f"table_{table_id}",
             total_price=total_price, is_delivery=False,
@@ -985,9 +1094,8 @@ def register_courier_handlers(dp_admin: Dispatcher):
             status_id=status_id, accepted_by_waiter_id=employee.id
         )
         session.add(order)
-        await session.flush() # Отримуємо ID замовлення
+        await session.flush()
 
-        # Створюємо OrderItems
         for item_data in items_to_create:
             order_item = OrderItem(
                 order_id=order.id,
@@ -995,12 +1103,12 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 product_name=item_data["name"],
                 quantity=item_data["quantity"],
                 price_at_moment=item_data["price"],
-                preparation_area=item_data["area"]
+                preparation_area=item_data["area"],
+                modifiers=item_data["modifiers"] # Сохраняем JSON
             )
             session.add(order_item)
 
         await session.commit()
-        
         await session.refresh(order, ['status'])
         
         session.add(OrderStatusHistory(order_id=order.id, status_id=order.status_id, actor_info=f"Офіціант: {employee.full_name}"))

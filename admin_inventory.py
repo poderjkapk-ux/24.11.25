@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Form, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
-from sqlalchemy.orm import joinedload, selectinload # Добавлен selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from inventory_models import (
     Ingredient, Unit, Warehouse, TechCard, TechCardItem, Stock, Supplier, 
@@ -84,7 +84,7 @@ def get_nav(active_tab):
         "tech_cards": {"icon": "fa-book-open", "label": "Техкарти"},
         "reports/usage": {"icon": "fa-chart-line", "label": "Рух (Звіт)"},
         "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"},
-        "reports/suppliers": {"icon": "fa-file-invoice-dollar", "label": "Звіт по накладних"} # <-- Нова вкладка
+        "reports/suppliers": {"icon": "fa-file-invoice-dollar", "label": "Звіт по накладних"} 
     }
     html = f"{INVENTORY_STYLES}<div class='inv-nav'>"
     for k, v in tabs.items():
@@ -102,13 +102,29 @@ def get_active_classes():
 async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
     
-    total_cost_res = await session.execute(select(func.sum(Stock.quantity * Ingredient.current_cost)).join(Ingredient))
+    # Використовуємо select_from(Stock) для ясності
+    total_cost_res = await session.execute(
+        select(func.sum(Stock.quantity * Ingredient.current_cost))
+        .select_from(Stock)
+        .join(Ingredient)
+    )
     total_cost = total_cost_res.scalar() or 0
     
-    low_stock = (await session.execute(select(Stock).join(Ingredient).where(Stock.quantity < 5, Stock.quantity > 0).limit(5))).scalars().all()
+    # FIX: Додано joinedload для Warehouse та Unit, щоб уникнути помилки 500 в циклі
+    low_stock = (await session.execute(
+        select(Stock)
+        .options(
+            joinedload(Stock.ingredient).joinedload(Ingredient.unit),
+            joinedload(Stock.warehouse)
+        )
+        .join(Ingredient)
+        .where(Stock.quantity < 5, Stock.quantity > 0)
+        .limit(5)
+    )).scalars().all()
     
     docs_today = await session.scalar(select(func.count(InventoryDoc.id)).where(func.date(InventoryDoc.created_at) == datetime.now().date()))
     
+    # Тепер s.warehouse і s.ingredient.unit доступні
     ls_rows = "".join([f"<tr><td>{s.ingredient.name}</td><td>{s.warehouse.name}</td><td style='color:#e11d48; font-weight:bold;'>{s.quantity:.2f} {s.ingredient.unit.name}</td></tr>" for s in low_stock])
     
     body = f"""
@@ -499,13 +515,12 @@ async def create_doc_page(session: AsyncSession = Depends(get_db_session), user=
 @router.post("/docs/create")
 async def create_doc_action(
     doc_type: str = Form(...), 
-    supplier_id: str = Form(None), # Змінено на str
-    source_warehouse_id: str = Form(None), # Змінено на str
-    target_warehouse_id: str = Form(None), # Змінено на str
+    supplier_id: str = Form(None), 
+    source_warehouse_id: str = Form(None), 
+    target_warehouse_id: str = Form(None), 
     comment: str = Form(None),
     session: AsyncSession = Depends(get_db_session)
 ):
-    # Перетворення порожніх рядків у None або int
     s_id = int(supplier_id) if supplier_id and supplier_id.strip().isdigit() else None
     src_id = int(source_warehouse_id) if source_warehouse_id and source_warehouse_id.strip().isdigit() else None
     tgt_id = int(target_warehouse_id) if target_warehouse_id and target_warehouse_id.strip().isdigit() else None
@@ -534,7 +549,6 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
     ])
     if not doc: return HTMLResponse("Документ не знайдено")
     
-    # Данные для селекта ингредиентов
     ingredients = (await session.execute(select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))).scalars().all()
     ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in ingredients])
     
@@ -558,7 +572,6 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         </tr>
         """
         
-    # Шапка документа
     type_label = {'supply': 'Прихід', 'transfer': 'Переміщення', 'writeoff': 'Списання', 'deduction': 'Авто-списання'}.get(doc.doc_type, doc.doc_type)
     header_info = ""
     if doc.doc_type == 'supply':
@@ -606,7 +619,6 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         </div>
         """
         
-        # Блок оплати тільки для Приходу
         pay_block = ""
         if doc.doc_type == 'supply':
             debt = float(total_sum) - float(doc.paid_amount)
@@ -831,7 +843,6 @@ async def inventory_usage_report(
     
     if ingredient_id:
         # Запит: Позиції накладних для обраного інгредієнта
-        # ВИПРАВЛЕНО: Прибрано .joinedload(InventoryDoc.linked_order_id), оскільки це колонка
         query = select(InventoryDocItem).join(InventoryDoc).options(
             joinedload(InventoryDocItem.doc)
         ).where(

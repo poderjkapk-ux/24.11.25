@@ -465,6 +465,7 @@ async def confirm_add_to_cart_callback(callback: CallbackQuery, state: FSMContex
 async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifiers: list[Modifier], session: AsyncSession):
     user_id = callback.from_user.id
     
+    # Зберігаємо модифікатори як JSON з даними для майбутнього використання
     mods_json = [{"id": m.id, "name": m.name, "price": float(m.price or 0), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty or 0)} for m in modifiers]
     
     cart_item = CartItem(
@@ -870,18 +871,47 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
         await message.answer("Помилка: кошик порожній.")
         return
 
+    # 1. Collect IDs
+    all_mod_ids = set()
+    for cart_item in cart_items:
+        if cart_item.modifiers:
+            for m in cart_item.modifiers:
+                all_mod_ids.add(int(m['id']))
+    
+    # 2. Fetch DB modifiers
+    db_modifiers = {}
+    if all_mod_ids:
+        mods_res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
+        for m in mods_res.scalars().all():
+            db_modifiers[m.id] = m
+
     total_price = Decimal(0)
     items_obj = []
 
     for cart_item in cart_items:
         if cart_item.product:
+            # Base price
             item_price = cart_item.product.price
-            if cart_item.modifiers:
-                for m in cart_item.modifiers:
-                    p_val = m.get('price', 0)
-                    if p_val is None: p_val = 0
-                    item_price += Decimal(str(p_val))
             
+            # Reconstruct modifiers from DB
+            final_mods_data = []
+            mods_price_sum = Decimal(0)
+            
+            if cart_item.modifiers:
+                for m_raw in cart_item.modifiers:
+                    mid = int(m_raw['id'])
+                    if mid in db_modifiers:
+                        mod_db = db_modifiers[mid]
+                        mods_price_sum += Decimal(str(mod_db.price))
+                        final_mods_data.append({
+                            "id": mod_db.id,
+                            "name": mod_db.name,
+                            "price": float(mod_db.price),
+                            "ingredient_id": mod_db.ingredient_id,
+                            "ingredient_qty": float(mod_db.ingredient_qty)
+                        })
+            
+            item_price += mods_price_sum
             total_price += item_price * cart_item.quantity
             
             items_obj.append(OrderItem(
@@ -890,7 +920,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
                 quantity=cart_item.quantity,
                 price_at_moment=item_price,
                 preparation_area=cart_item.product.preparation_area,
-                modifiers=cart_item.modifiers
+                modifiers=final_mods_data # Use refreshed data
             ))
 
     order = Order(
@@ -1210,11 +1240,29 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
 
     try:
         product_ids = [int(item['id']) for item in items]
+        
+        # --- FIX: Збір всіх ID модифікаторів ---
+        all_mod_ids = set()
+        for item in items:
+            for mod in item.get('modifiers', []):
+                if 'id' in mod:
+                    all_mod_ids.add(int(mod['id']))
+        # ---------------------------------------
+        
     except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Невірний формат ID товару (має бути число).")
+        raise HTTPException(status_code=400, detail="Невірний формат ID.")
 
+    # Завантажуємо продукти
     products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
     db_products = {str(p.id): p for p in products_res.scalars().all()}
+
+    # --- FIX: Завантажуємо актуальні модифікатори з БД ---
+    db_modifiers = {}
+    if all_mod_ids:
+        mods_res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
+        for m in mods_res.scalars().all():
+            db_modifiers[m.id] = m
+    # ----------------------------------------------------
 
     total_price = Decimal('0.00')
     order_items_objects = []
@@ -1225,10 +1273,27 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
             product = db_products[pid]
             qty = int(item.get('quantity', 1))
             
-            modifiers_data = item.get('modifiers', [])
-            mods_price = sum(Decimal(str(m.get('price', 0) or 0)) for m in modifiers_data)
+            # --- FIX: Формуємо список модифікаторів на основі даних з БД ---
+            final_modifiers_data = []
+            mods_price_sum = Decimal(0)
             
-            item_total_price = (product.price + mods_price)
+            raw_mods = item.get('modifiers', [])
+            for raw_mod in raw_mods:
+                mid = int(raw_mod.get('id'))
+                if mid in db_modifiers:
+                    mod_db = db_modifiers[mid]
+                    # Беремо ціну та інгредієнти з БД
+                    mods_price_sum += mod_db.price
+                    final_modifiers_data.append({
+                        "id": mod_db.id,
+                        "name": mod_db.name,
+                        "price": float(mod_db.price),
+                        "ingredient_id": mod_db.ingredient_id,
+                        "ingredient_qty": float(mod_db.ingredient_qty)
+                    })
+            # ---------------------------------------------------------------
+            
+            item_total_price = (product.price + mods_price_sum)
             total_price += item_total_price * qty
             
             order_items_objects.append(OrderItem(
@@ -1237,7 +1302,7 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                 quantity=qty,
                 price_at_moment=item_total_price,
                 preparation_area=product.preparation_area,
-                modifiers=modifiers_data
+                modifiers=final_modifiers_data # Зберігаємо актуальні дані з БД
             ))
 
     is_delivery = order_data.get('is_delivery', True)

@@ -4,7 +4,7 @@ import html
 import logging
 import json
 from decimal import Decimal
-from datetime import timedelta  # <--- ДОБАВЛЕНО
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,6 +62,24 @@ def check_edit_permissions(employee: Employee, order: Order) -> bool:
     # 3. Кур'єри, Повара, Бармени не можуть змінювати склад замовлення
     return False
 
+async def fetch_db_modifiers(session: AsyncSession, items_list: list) -> dict:
+    """
+    Збирає всі ID модифікаторів зі списку та завантажує їх з БД.
+    Використовується для отримання актуальних цін та ingredient_id перед збереженням.
+    """
+    all_mod_ids = set()
+    for item in items_list:
+        for mod in item.get('modifiers', []):
+            if 'id' in mod:
+                all_mod_ids.add(int(mod['id']))
+    
+    db_mods = {}
+    if all_mod_ids:
+        res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
+        for m in res.scalars().all():
+            db_mods[m.id] = m
+    return db_mods
+
 # --- АВТОРИЗАЦІЯ ---
 
 @router.get("/", include_in_schema=False)
@@ -92,7 +110,6 @@ async def login_action(
     )
     employee = result.scalars().first()
 
-    # --- ВИПРАВЛЕННЯ: Редірект з параметром помилки ---
     if not employee:
         return RedirectResponse(url="/staff/login?error=1", status_code=303)
     
@@ -102,13 +119,11 @@ async def login_action(
     elif not verify_password(password, employee.password_hash):
         return RedirectResponse(url="/staff/login?error=1", status_code=303)
 
-    # --- ИСПРАВЛЕНИЕ ВРЕМЕНИ ЖИЗНИ ТОКЕНА ---
-    # Устанавливаем время жизни токена 12 часов (60 * 12 минут)
     access_token_expires = timedelta(minutes=60 * 12)
     
     access_token = create_access_token(
         data={"sub": str(employee.id)},
-        expires_delta=access_token_expires # <-- Передаем явное время жизни
+        expires_delta=access_token_expires
     )
     
     response = RedirectResponse(url="/staff/dashboard", status_code=303)
@@ -116,7 +131,7 @@ async def login_action(
         key="staff_access_token", 
         value=access_token, 
         httponly=True, 
-        max_age=60*60*12, # Cookie lives for 12 hours
+        max_age=60*60*12,
         samesite="lax"
     )
     return response
@@ -401,7 +416,6 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
         """
 
         for o in group['orders']:
-            # Формування списку страв з модифікаторами
             items_html_list = []
             for item in o.items:
                 mods_str = ""
@@ -495,7 +509,6 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
 async def _get_production_orders(session: AsyncSession, employee: Employee):
     orders_data = []
     
-    # Допоміжна функція для форматування рядка
     def format_prod_item(item):
         mods_html = ""
         if item.modifiers:
@@ -663,7 +676,6 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
             courier_name = o.courier.full_name if o.courier else "Не призначено"
             extra_info = f"<div class='info-row' style='font-size:0.85rem; color:#555;'>Кур'єр: {courier_name}</div>"
         
-        # Формуємо список товарів з модифікаторами
         items_list = []
         for item in o.items:
             mods_str = ""
@@ -719,7 +731,6 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
 
     items = []
     for i in order.items:
-        # Збираємо модифікатори в читабельну строку
         modifiers_str = ""
         if i.modifiers:
             mod_names = [m['name'] for m in i.modifiers]
@@ -731,7 +742,7 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
             "name": i.product_name + modifiers_str, 
             "qty": i.quantity, 
             "price": float(i.price_at_moment),
-            "modifiers": i.modifiers  # --- ВИПРАВЛЕННЯ: Повертаємо масив модифікаторів для редагування ---
+            "modifiers": i.modifiers 
         })
     
     couriers_list = []
@@ -817,7 +828,6 @@ async def update_order_status_api(
     if payment_method:
         order.payment_method = payment_method
 
-    # Логика каси та фіксації кур'єра
     if new_status.is_completed_status:
         if order.is_delivery:
              if order.courier_id:
@@ -851,7 +861,7 @@ async def update_order_items_api(
 ):
     data = await request.json()
     order_id = int(data.get("orderId"))
-    items = data.get("items") # Очікується список об'єктів, що може містити modifiers
+    items = data.get("items") 
     
     order = await session.get(Order, order_id)
     if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
@@ -873,19 +883,34 @@ async def update_order_items_api(
         products = (await session.execute(select(Product).where(Product.id.in_(prod_ids)))).scalars().all()
         prod_map = {p.id: p for p in products}
         
+        # --- FIX: Завантажуємо модифікатори з БД ---
+        db_modifiers = await fetch_db_modifiers(session, items)
+        # -------------------------------------------
+        
         for item in items:
             pid = int(item['id'])
             qty = int(item['qty'])
             if pid in prod_map and qty > 0:
                 p = prod_map[pid]
                 
-                modifiers_data = item.get('modifiers', [])
-                item_price = p.price
-                for mod in modifiers_data:
-                    price_val = mod.get('price', 0)
-                    if price_val is None: price_val = 0
-                    item_price += Decimal(str(price_val))
+                # --- FIX: Реконструюємо модифікатори ---
+                final_mods = []
+                mods_price = Decimal(0)
+                for raw_mod in item.get('modifiers', []):
+                    mid = int(raw_mod['id'])
+                    if mid in db_modifiers:
+                        m_db = db_modifiers[mid]
+                        mods_price += m_db.price
+                        final_mods.append({
+                            "id": m_db.id,
+                            "name": m_db.name,
+                            "price": float(m_db.price),
+                            "ingredient_id": m_db.ingredient_id,
+                            "ingredient_qty": float(m_db.ingredient_qty)
+                        })
+                # ---------------------------------------
                 
+                item_price = p.price + mods_price
                 total_price += item_price * qty
                 
                 session.add(OrderItem(
@@ -895,7 +920,7 @@ async def update_order_items_api(
                     quantity=qty,
                     price_at_moment=item_price,
                     preparation_area=p.preparation_area,
-                    modifiers=modifiers_data
+                    modifiers=final_mods
                 ))
     
     order.kitchen_done = False
@@ -964,7 +989,6 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
     
     menu = []
     for c in cats:
-        # Завантажуємо продукти разом з прив'язаними модифікаторами
         prods = (await session.execute(
             select(Product)
             .where(Product.category_id==c.id, Product.is_active==True)
@@ -973,7 +997,6 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
         
         prod_list = []
         for p in prods:
-            # Формуємо список модифікаторів для продукту
             p_mods = []
             if p.modifiers:
                 for m in p.modifiers:
@@ -1008,7 +1031,7 @@ async def create_waiter_order(
     try:
         data = await request.json()
         table_id = int(data.get("tableId"))
-        cart = data.get("cart") # Очікуємо список об'єктів: [{id, qty, modifiers: [...]}, ...]
+        cart = data.get("cart") 
         
         table = await session.get(Table, table_id)
         if not table or not cart: return JSONResponse({"error": "Invalid data"}, status_code=400)
@@ -1020,6 +1043,10 @@ async def create_waiter_order(
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
         
+        # --- FIX: Завантажуємо модифікатори з БД ---
+        db_modifiers = await fetch_db_modifiers(session, cart)
+        # -------------------------------------------
+        
         for item in cart:
             pid = int(item['id'])
             qty = int(item['qty'])
@@ -1027,15 +1054,24 @@ async def create_waiter_order(
             if pid in products_map and qty > 0:
                 prod = products_map[pid]
                 
-                modifiers_data = item.get('modifiers', [])
-                modifiers_price = Decimal(0)
-                if modifiers_data:
-                    for m in modifiers_data:
-                        price_val = m.get('price', 0)
-                        if price_val is None: price_val = 0
-                        modifiers_price += Decimal(str(price_val))
+                # --- FIX: Реконструюємо модифікатори ---
+                final_mods = []
+                mods_price = Decimal(0)
+                for raw_mod in item.get('modifiers', []):
+                    mid = int(raw_mod['id'])
+                    if mid in db_modifiers:
+                        m_db = db_modifiers[mid]
+                        mods_price += m_db.price
+                        final_mods.append({
+                            "id": m_db.id,
+                            "name": m_db.name,
+                            "price": float(m_db.price),
+                            "ingredient_id": m_db.ingredient_id,
+                            "ingredient_qty": float(m_db.ingredient_qty)
+                        })
+                # ---------------------------------------
                 
-                item_price = prod.price + modifiers_price
+                item_price = prod.price + mods_price
                 total += item_price * qty
                 
                 items_obj.append(OrderItem(
@@ -1044,7 +1080,7 @@ async def create_waiter_order(
                     quantity=qty, 
                     price_at_moment=item_price, 
                     preparation_area=prod.preparation_area,
-                    modifiers=modifiers_data
+                    modifiers=final_mods
                 ))
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))
@@ -1063,9 +1099,8 @@ async def create_waiter_order(
             items=items_obj
         )
         session.add(order)
-        await session.flush() # Отримуємо ID замовлення
+        await session.flush()
 
-        # Створюємо OrderItems
         for item_data in items_obj:
             item_data.order_id = order.id
             session.add(item_data)
