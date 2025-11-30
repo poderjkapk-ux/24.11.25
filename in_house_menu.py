@@ -154,9 +154,11 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     
     social_links_html = "".join(social_links)
 
-    # --- FIX: Отримуємо сторінки меню для футера ---
+    # --- FIX: Отримуємо сторінки меню для футера, фільтруємо по show_in_qr ---
     menu_items_res = await session.execute(
-        select(MenuItem).where(MenuItem.show_on_website == True).order_by(MenuItem.sort_order)
+        select(MenuItem)
+        .where(MenuItem.show_in_qr == True) # <-- ЗМІНЕНО: Фільтр по QR
+        .order_by(MenuItem.sort_order)
     )
     menu_items = menu_items_res.scalars().all()
     

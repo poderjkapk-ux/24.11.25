@@ -52,6 +52,8 @@ class MenuItem(Base):
     sort_order: Mapped[int] = mapped_column(sa.Integer, default=100)
     show_on_website: Mapped[bool] = mapped_column(sa.Boolean, default=True)
     show_in_telegram: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    # --- НОВЕ ПОЛЕ ---
+    show_in_qr: Mapped[bool] = mapped_column(sa.Boolean, default=False)
 
 
 class Role(Base):

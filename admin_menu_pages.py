@@ -33,6 +33,8 @@ async def admin_menu_items(
         # Бейджи для статусів
         web_badge = "<span class='badge badge-success'>Так</span>" if item.show_on_website else "<span class='badge badge-secondary'>Ні</span>"
         tg_badge = "<span class='badge badge-success'>Так</span>" if item.show_in_telegram else "<span class='badge badge-secondary'>Ні</span>"
+        # НОВИЙ БЕЙДЖ
+        qr_badge = "<span class='badge badge-success'>Так</span>" if item.show_in_qr else "<span class='badge badge-secondary'>Ні</span>"
         
         rows += f"""
         <tr>
@@ -41,6 +43,7 @@ async def admin_menu_items(
             <td style="text-align:center;">{item.sort_order}</td>
             <td style="text-align:center;">{web_badge}</td>
             <td style="text-align:center;">{tg_badge}</td>
+            <td style="text-align:center;">{qr_badge}</td>
             <td class="actions">
                 <a href="/admin/menu/edit/{item.id}" class="button-sm" title="Редагувати"><i class="fa-solid fa-pen"></i></a>
                 <a href="/admin/menu/delete/{item.id}" onclick="return confirm('Ви впевнені, що хочете видалити цю сторінку?');" class="button-sm danger" title="Видалити"><i class="fa-solid fa-trash"></i></a>
@@ -74,14 +77,15 @@ async def admin_menu_items(
                     <tr>
                         <th width="50">ID</th>
                         <th>Заголовок (Назва кнопки)</th>
-                        <th width="100" style="text-align:center;">Сортування</th>
-                        <th width="100" style="text-align:center;">На сайті</th>
-                        <th width="100" style="text-align:center;">В Telegram</th>
-                        <th width="120" style="text-align:right;">Дії</th>
+                        <th width="80" style="text-align:center;">Сорт.</th>
+                        <th width="80" style="text-align:center;">Сайт</th>
+                        <th width="80" style="text-align:center;">TG</th>
+                        <th width="80" style="text-align:center;">QR</th>
+                        <th width="100" style="text-align:right;">Дії</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or "<tr><td colspan='6' style='text-align:center; padding:20px; color:#777;'>Сторінок поки немає</td></tr>"}
+                    {rows or "<tr><td colspan='7' style='text-align:center; padding:20px; color:#777;'>Сторінок поки немає</td></tr>"}
                 </tbody>
             </table>
         </div>
@@ -101,7 +105,7 @@ async def admin_menu_items(
                     <label for="sort_order">Порядок сортування</label>
                     <input type="number" id="sort_order" name="sort_order" value="100" required>
                     
-                    <div style="display: flex; gap: 20px; margin-bottom: 15px;">
+                    <div style="display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap;">
                         <div class="checkbox-group">
                             <input type="checkbox" id="show_on_website" name="show_on_website" value="true">
                             <label for="show_on_website">На сайті</label>
@@ -109,6 +113,10 @@ async def admin_menu_items(
                         <div class="checkbox-group">
                             <input type="checkbox" id="show_in_telegram" name="show_in_telegram" value="true">
                             <label for="show_in_telegram">В Telegram</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="show_in_qr" name="show_in_qr" value="true">
+                            <label for="show_in_qr">В QR Меню</label>
                         </div>
                     </div>
 
@@ -140,6 +148,7 @@ async def add_menu_item(
     sort_order: int = Form(100), 
     show_on_website: bool = Form(False), 
     show_in_telegram: bool = Form(False), 
+    show_in_qr: bool = Form(False),
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
 ):
@@ -148,7 +157,8 @@ async def add_menu_item(
         content=content, 
         sort_order=sort_order, 
         show_on_website=show_on_website, 
-        show_in_telegram=show_in_telegram
+        show_in_telegram=show_in_telegram,
+        show_in_qr=show_in_qr
     ))
     await session.commit()
     return RedirectResponse(url="/admin/menu", status_code=303)
@@ -178,7 +188,7 @@ async def get_edit_menu_item_form(
             <label for="sort_order">Порядок сортування</label>
             <input type="number" id="sort_order" name="sort_order" value="{item.sort_order}" required>
             
-            <div style="display: flex; gap: 20px; margin-bottom: 15px;">
+            <div style="display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap;">
                 <div class="checkbox-group">
                     <input type="checkbox" id="show_on_website" name="show_on_website" value="true" {'checked' if item.show_on_website else ''}>
                     <label for="show_on_website">Показувати на сайті</label>
@@ -186,6 +196,10 @@ async def get_edit_menu_item_form(
                 <div class="checkbox-group">
                     <input type="checkbox" id="show_in_telegram" name="show_in_telegram" value="true" {'checked' if item.show_in_telegram else ''}>
                     <label for="show_in_telegram">Показувати в Telegram</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="show_in_qr" name="show_in_qr" value="true" {'checked' if item.show_in_qr else ''}>
+                    <label for="show_in_qr">Показувати в QR Меню</label>
                 </div>
             </div>
 
@@ -215,7 +229,8 @@ async def edit_menu_item(
     content: str = Form(...), 
     sort_order: int = Form(100), 
     show_on_website: bool = Form(False), 
-    show_in_telegram: bool = Form(False), 
+    show_in_telegram: bool = Form(False),
+    show_in_qr: bool = Form(False),
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
 ):
@@ -226,6 +241,7 @@ async def edit_menu_item(
         item.sort_order = sort_order
         item.show_on_website = show_on_website
         item.show_in_telegram = show_in_telegram
+        item.show_in_qr = show_in_qr
         await session.commit()
     return RedirectResponse(url="/admin/menu", status_code=303)
 

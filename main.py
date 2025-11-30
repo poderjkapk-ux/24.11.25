@@ -1141,10 +1141,13 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
 @app.get("/api/page/{item_id}", response_class=JSONResponse)
 async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(get_db_session)):
     menu_item = await session.get(MenuItem, item_id)
-    if not menu_item or not menu_item.show_on_website:
+    
+    # ВИПРАВЛЕНО: Додано перевірку show_in_qr
+    # Показуємо контент, якщо сторінка увімкнена на сайті АБО в QR-меню
+    if not menu_item or (not menu_item.show_on_website and not menu_item.show_in_qr):
         raise HTTPException(status_code=404, detail="Сторінку не знайдено")
+        
     return {"title": menu_item.title, "content": menu_item.content}
-
 @app.get("/api/menu")
 async def get_menu_data(session: AsyncSession = Depends(get_db_session)):
     try:
