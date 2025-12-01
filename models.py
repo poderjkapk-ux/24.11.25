@@ -228,6 +228,9 @@ class OrderItem(Base):
     price_at_moment: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
     preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"))
     
+    # --- НОВОЕ ПОЛЕ: Готовность конкретного блюда ---
+    is_ready: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    
     # --- МОДИФІКАТОРИ (JSON) ---
     # Зберігає список обраних модифікаторів:
     # [{"id": 1, "name": "Сир", "price": 10.0, "ingredient_id": 5, "ingredient_qty": 0.05}, ...]
