@@ -10,7 +10,7 @@ from inventory_models import (
     Stock, InventoryDoc, InventoryDocItem, TechCard, 
     TechCardItem, Ingredient, Warehouse, Modifier
 )
-from models import Order, OrderItem
+from models import Order, OrderItem, Product
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,7 @@ async def process_movement(session: AsyncSession, doc_type: str, items: list,
         qty = Decimal(str(item['qty']))
         price = Decimal(str(item.get('price', 0)))
 
-        # ВИПРАВЛЕННЯ: Створюємо item і додаємо до списку doc.items
-        # Це гарантує, що SQLAlchemy знає про зв'язок в поточному об'єкті doc
+        # Створюємо item і додаємо до списку doc.items
         doc_item = InventoryDocItem(ingredient_id=ing_id, quantity=qty, price=price)
         doc.items.append(doc_item)
 
@@ -82,7 +81,7 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
     if not doc: raise ValueError("Документ не знайдено")
     if doc.is_processed: raise ValueError("Документ вже проведено")
 
-    # Тепер doc.items гарантовано завантажено (або з пам'яті після process_movement, або з БД)
+    # Тепер doc.items гарантовано завантажено
     for item in doc.items:
         qty = Decimal(str(item.quantity))
         
@@ -116,7 +115,7 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
             stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             stock.quantity += qty
 
-        elif doc.doc_type == 'return': # Повернення
+        elif doc.doc_type == 'return': # Повернення (наприклад, при скасуванні замовлення)
             if not doc.target_warehouse_id: raise ValueError("Не вказано склад для повернення")
             stock = await get_stock(session, doc.target_warehouse_id, item.ingredient_id)
             stock.quantity += qty
@@ -138,28 +137,23 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
 
 async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
-    Автоматичне списання продуктів (і модифікаторів).
+    Автоматичне списання продуктів (і модифікаторів) з відповідних складів/цехів.
     """
     if order.is_inventory_deducted:
         logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
         return
 
-    # Перевірка на наявність items, щоб уникнути помилок
+    # Перевірка на наявність items
     if not order.items: 
         order.is_inventory_deducted = True
         await session.commit()
         return
 
-    kitchen_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Кухня%')).limit(1))
-    bar_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Бар%')).limit(1))
+    # Fallback склад (якщо у товара не вказано цех, беремо перший знайдений)
     first_wh = await session.scalar(select(Warehouse).limit(1))
     fallback_wh_id = first_wh.id if first_wh else 1
 
-    wh_map = {
-        'kitchen': kitchen_wh.id if kitchen_wh else fallback_wh_id,
-        'bar': bar_wh.id if bar_wh else fallback_wh_id
-    }
-
+    # Групуємо інгредієнти для списання по складах: {warehouse_id: [items]}
     deduction_items_by_wh = {} 
 
     def add_deduction(wh_id, ing_id, qty):
@@ -168,14 +162,20 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
 
     for order_item in order.items:
-        wh_id = wh_map.get(order_item.preparation_area, fallback_wh_id)
+        # 1. Визначаємо склад списання (Цех)
+        # Завантажуємо продукт, щоб дізнатися його production_warehouse_id
+        product = await session.get(Product, order_item.product_id)
         
-        # Виправлений запит з правильним ланцюжком joinedload
+        # Якщо у страви вказано цех - використовуємо його, інакше fallback
+        wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
+        
+        # 2. Шукаємо техкарту
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
             .options(joinedload(TechCard.components).joinedload(TechCardItem.ingredient))
         )
         
+        # 3. Списуємо інгредієнти страви
         if tech_card:
             for component in tech_card.components:
                 gross = Decimal(str(component.gross_amount))
@@ -185,6 +185,7 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         else:
             logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта.")
         
+        # 4. Списуємо інгредієнти модифікаторів (з того ж складу, що і основна страва)
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
                 ing_id = mod_data.get('ingredient_id')
@@ -201,20 +202,22 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         await session.commit()
         return
 
+    # Створюємо документи списання для кожного складу окремо
     for wh_id, items in deduction_items_by_wh.items():
         if items:
             await process_movement(
                 session, 'deduction', items, 
                 source_wh_id=wh_id, 
-                comment=f"Замовлення #{order.id}", 
+                comment=f"Замовлення #{order.id} (Авто-списання)", 
                 order_id=order.id
             )
     
-    logger.info(f"Списання продуктів для замовлення #{order.id} завершено успішно.")
+    logger.info(f"Списання продуктів для замовлення #{order.id} завершено успішно по складах.")
 
 async def reverse_deduction(session: AsyncSession, order: Order):
     """
-    Повернення продуктів на склад.
+    Повернення продуктів на склад (при скасуванні замовлення).
+    Дзеркальна логіка до deduct_products_by_tech_card.
     """
     if not order.is_inventory_deducted:
         return
@@ -224,16 +227,10 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         await session.commit()
         return
 
-    kitchen_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Кухня%')).limit(1))
-    bar_wh = await session.scalar(select(Warehouse).where(Warehouse.name.ilike('%Бар%')).limit(1))
+    # Fallback склад
     first_wh = await session.scalar(select(Warehouse).limit(1))
     fallback_wh_id = first_wh.id if first_wh else 1
     
-    wh_map = {
-        'kitchen': kitchen_wh.id if kitchen_wh else fallback_wh_id,
-        'bar': bar_wh.id if bar_wh else fallback_wh_id
-    }
-
     return_items_by_wh = {} 
 
     def add_return(wh_id, ing_id, qty):
@@ -242,7 +239,9 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': 0})
 
     for order_item in order.items:
-        wh_id = wh_map.get(order_item.preparation_area, fallback_wh_id)
+        # Визначаємо склад повернення
+        product = await session.get(Product, order_item.product_id)
+        wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
         
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
@@ -266,7 +265,7 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         if items:
             await process_movement(
                 session, 'return', items, 
-                target_wh_id=wh_id, 
+                target_wh_id=wh_id, # Повертаємо НА цей склад
                 comment=f"Повернення (Скасування) замовлення #{order.id}", 
                 order_id=order.id
             )
@@ -276,7 +275,7 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     logger.info(f"Склад успішно повернуто для замовлення #{order.id}")
 
 async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
-    """Генерує HTML чек/бігунок"""
+    """Генерує HTML чек/бігунок для повара"""
     order = await session.get(Order, order_id)
     query = select(OrderItem).where(OrderItem.order_id == order_id)
     items = (await session.execute(query)).scalars().all()
@@ -289,6 +288,7 @@ async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
     """
     
     for item in items:
+        # Для бігунка корисно знати технологію приготування
         tc = await session.scalar(select(TechCard).where(TechCard.product_id == item.product_id))
         
         mods_html = ""

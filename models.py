@@ -35,7 +35,7 @@ waiter_table_association = sa.Table(
     sa.Column('table_id', sa.ForeignKey('tables.id'), primary_key=True)
 )
 
-# --- НОВЕ: Асоціативна таблиця Продукти <-> Модифікатори ---
+# Асоціативна таблиця Продукти <-> Модифікатори
 product_modifier_association = sa.Table(
     'product_modifier_association',
     Base.metadata,
@@ -52,7 +52,6 @@ class MenuItem(Base):
     sort_order: Mapped[int] = mapped_column(sa.Integer, default=100)
     show_on_website: Mapped[bool] = mapped_column(sa.Boolean, default=True)
     show_in_telegram: Mapped[bool] = mapped_column(sa.Boolean, default=True)
-    # --- НОВЕ ПОЛЕ ---
     show_in_qr: Mapped[bool] = mapped_column(sa.Boolean, default=False)
 
 
@@ -83,6 +82,10 @@ class Employee(Base):
 
     role_id: Mapped[int] = mapped_column(sa.ForeignKey('roles.id'), nullable=False)
     role: Mapped["Role"] = relationship("Role", back_populates="employees", lazy='selectin')
+    
+    # --- НОВЕ: Прив'язка до складу/цеху ---
+    # Дозволяє закріпити повара за конкретним цехом (Кухня, Бар, Піца-цех)
+    assigned_warehouse_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
     is_on_shift: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
@@ -131,15 +134,17 @@ class Product(Base):
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, server_default=text("true"))
     category_id: Mapped[int] = mapped_column(sa.ForeignKey('categories.id'))
     
-    # Цех приготування: 'kitchen' або 'bar'
+    # Цех приготування (застаріле, використовується для сумісності)
     preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"))
+    
+    # --- НОВЕ: Прив'язка до цеху ---
+    # Вказує ID складу/цеху, з якого списувати інгредієнти та куди відправляти замовлення
+    production_warehouse_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
     category: Mapped["Category"] = relationship("Category", back_populates="products")
     cart_items: Mapped[list["CartItem"]] = relationship("CartItem", back_populates="product")
 
-    # --- НОВЕ: Зв'язок з модифікаторами ---
-    # Використовуємо рядок "Modifier", оскільки клас Modifier знаходиться в іншому файлі (inventory_models.py),
-    # але він спадкується від того ж Base, тому SQLAlchemy знайде його по імені класу.
+    # Зв'язок з модифікаторами
     modifiers: Mapped[List["Modifier"]] = relationship(
         "Modifier", 
         secondary=product_modifier_association,

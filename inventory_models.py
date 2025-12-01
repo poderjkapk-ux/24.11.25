@@ -19,6 +19,11 @@ class Warehouse(Base):
     __tablename__ = 'warehouses'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
+    
+    # Флаг: является ли склад производственным цехом (Кухня/Бар)
+    # Используется для привязки поваров и настройки списания блюд
+    is_production: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    
     stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="warehouse")
 
 class Supplier(Base):
@@ -100,7 +105,7 @@ class InventoryDoc(Base):
     """Документ движения (Накладная)"""
     __tablename__ = 'inventory_docs'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # Типы: supply (приход), transfer (перемещение), writeoff (списание), deduction (авто-списание по чеку)
+    # Типы: supply (приход), transfer (перемещение), writeoff (списание), deduction (авто-списание по чеку), return (возврат)
     doc_type: Mapped[str] = mapped_column(sa.String(20)) 
     
     created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=datetime.now)

@@ -76,6 +76,7 @@ INVENTORY_STYLES = """
 def get_nav(active_tab):
     tabs = {
         "dashboard": {"icon": "fa-chart-pie", "label": "Дашборд"},
+        "warehouses": {"icon": "fa-warehouse", "label": "Склади та Цеха"},
         "suppliers": {"icon": "fa-truck-field", "label": "Постачальники"},
         "ingredients": {"icon": "fa-carrot", "label": "Інгредієнти"},
         "modifiers": {"icon": "fa-layer-group", "label": "Модифікатори"},
@@ -102,7 +103,6 @@ def get_active_classes():
 async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
     
-    # Використовуємо select_from(Stock) для ясності
     total_cost_res = await session.execute(
         select(func.sum(Stock.quantity * Ingredient.current_cost))
         .select_from(Stock)
@@ -110,7 +110,6 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
     )
     total_cost = total_cost_res.scalar() or 0
     
-    # FIX: Додано joinedload для Warehouse та Unit, щоб уникнути помилки 500 в циклі
     low_stock = (await session.execute(
         select(Stock)
         .options(
@@ -124,7 +123,6 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
     
     docs_today = await session.scalar(select(func.count(InventoryDoc.id)).where(func.date(InventoryDoc.created_at) == datetime.now().date()))
     
-    # Тепер s.warehouse і s.ingredient.unit доступні
     ls_rows = "".join([f"<tr><td>{s.ingredient.name}</td><td>{s.warehouse.name}</td><td style='color:#e11d48; font-weight:bold;'>{s.quantity:.2f} {s.ingredient.unit.name}</td></tr>" for s in low_stock])
     
     body = f"""
@@ -171,6 +169,79 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
     </div>
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Огляд", body=body, site_title=settings.site_title, **get_active_classes()))
+
+# --- WAREHOUSES (Склади та Цеха) ---
+@router.get("/warehouses", response_class=HTMLResponse)
+async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+    settings = await session.get(Settings, 1) or Settings()
+    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
+    
+    rows = ""
+    for w in warehouses:
+        type_badge = "<span class='inv-badge badge-orange'>🍳 Цех (Виробництво)</span>" if w.is_production else "<span class='inv-badge badge-blue'>📦 Склад зберігання</span>"
+        
+        # Подсчет остатков (опционально)
+        count_res = await session.execute(select(func.count(Stock.id)).where(Stock.warehouse_id == w.id, Stock.quantity != 0))
+        items_count = count_res.scalar() or 0
+
+        rows += f"""
+        <tr>
+            <td><b>{html.escape(w.name)}</b></td>
+            <td>{type_badge}</td>
+            <td>{items_count} позицій</td>
+            <td style="text-align:right;">
+                <a href="/admin/inventory/warehouses/delete/{w.id}" class="button-sm danger" onclick="return confirm('Видалити склад? Всі залишки будуть втрачені!')"><i class="fa-solid fa-trash"></i></a>
+            </td>
+        </tr>
+        """
+    
+    body = f"""
+    {get_nav('warehouses')}
+    <div class="card">
+        <div class="inv-toolbar">
+            <h3><i class="fa-solid fa-warehouse"></i> Склади та Цеха</h3>
+        </div>
+        
+        <div style="background:#f0f9ff; padding:15px; border-radius:8px; border:1px solid #bae6fd; margin-bottom:20px; font-size:0.9rem;">
+            <i class="fa-solid fa-info-circle"></i> 
+            <b>Склад зберігання:</b> Використовується для прийому товару (напр. "Основний склад").<br>
+            <b>Цех (Виробництво):</b> Використовується для приготування страв. Сюди прикріплюються повари та страви.
+        </div>
+        
+        <form action="/admin/inventory/warehouses/add" method="post" class="inline-add-form">
+            <strong style="white-space:nowrap;">➕ Новий:</strong>
+            <input type="text" name="name" placeholder="Назва (напр. Бар, Кухня, Піца-цех)" required style="flex:2;">
+            <div class="checkbox-group" style="margin:0; background:white; padding:5px 10px; border-radius:5px; border:1px solid #ddd;">
+                <input type="checkbox" id="is_prod" name="is_production" value="true">
+                <label for="is_prod" style="font-weight:normal; font-size:0.9em;">Це виробничий цех</label>
+            </div>
+            <button type="submit" class="button">Додати</button>
+        </form>
+        
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead><tr><th>Назва</th><th>Тип</th><th>Завантаженість</th><th></th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='4' style='text-align:center; padding:20px;'>Складів ще немає</td></tr>"}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склади", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.post("/warehouses/add")
+async def add_warehouse(name: str = Form(...), is_production: bool = Form(False), session: AsyncSession = Depends(get_db_session)):
+    session.add(Warehouse(name=name, is_production=is_production))
+    await session.commit()
+    return RedirectResponse("/admin/inventory/warehouses", 303)
+
+@router.get("/warehouses/delete/{w_id}")
+async def delete_warehouse(w_id: int, session: AsyncSession = Depends(get_db_session)):
+    w = await session.get(Warehouse, w_id)
+    if w:
+        # Проверка на использование в документах/продуктах нужна в реальном проекте
+        await session.delete(w)
+        await session.commit()
+    return RedirectResponse("/admin/inventory/warehouses", 303)
 
 # --- SUPPLIERS ---
 @router.get("/suppliers", response_class=HTMLResponse)
@@ -398,6 +469,7 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
         desc_txt = ""
         if d.doc_type == 'supply': desc_txt = f"{d.supplier.name if d.supplier else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
         elif d.doc_type == 'writeoff': desc_txt = f"Зі складу: {d.source_warehouse.name if d.source_warehouse else '?'}"
+        elif d.doc_type == 'transfer': desc_txt = f"{d.source_warehouse.name if d.source_warehouse else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
         
         paid_info = ""
         if d.doc_type == 'supply' and d.paid_amount > 0:
@@ -477,12 +549,12 @@ async def create_doc_page(session: AsyncSession = Depends(get_db_session), user=
             </div>
             
             <div id="source_wh_div" style="display:none;">
-                <label>Склад ЗВІДКИ (Списання):</label>
+                <label>Склад ЗВІДКИ (Списання/Переміщення):</label>
                 <select name="source_warehouse_id"><option value="">Оберіть...</option>{wh_opts}</select>
             </div>
             
             <div id="target_wh_div">
-                <label>Склад КУДИ (Зарахування):</label>
+                <label>Склад КУДИ (Зарахування/Переміщення):</label>
                 <select name="target_warehouse_id"><option value="">Оберіть...</option>{wh_opts}</select>
             </div>
             
@@ -579,6 +651,9 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         header_info += f"<div class='doc-info-row'><span>На склад:</span> <b>{doc.target_warehouse.name if doc.target_warehouse else '-'}</b></div>"
     elif doc.doc_type == 'writeoff':
         header_info = f"<div class='doc-info-row'><span>Зі складу:</span> <b>{doc.source_warehouse.name if doc.source_warehouse else '-'}</b></div>"
+    elif doc.doc_type == 'transfer':
+        header_info = f"<div class='doc-info-row'><span>Зі складу:</span> <b>{doc.source_warehouse.name if doc.source_warehouse else '-'}</b></div>"
+        header_info += f"<div class='doc-info-row'><span>На склад:</span> <b>{doc.target_warehouse.name if doc.target_warehouse else '-'}</b></div>"
     
     status_ui = ""
     add_form = ""

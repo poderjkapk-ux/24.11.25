@@ -15,7 +15,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import joinedload, selectinload
 
 from models import Product, Category, Settings, product_modifier_association
-from inventory_models import Modifier
+from inventory_models import Modifier, Warehouse # Added Warehouse
 from templates import ADMIN_HTML_TEMPLATE
 from dependencies import get_db_session, check_credentials
 
@@ -53,12 +53,35 @@ async def admin_products(
 
     pages = (total // per_page) + (1 if total % per_page > 0 else 0)
 
+    # --- NEW: Load warehouses for mapping and options ---
+    warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
+    warehouses = warehouses_res.scalars().all()
+    wh_map = {w.id: w.name for w in warehouses}
+    
+    # Options for Add Modal
+    wh_options = "<option value=''>-- Оберіть цех --</option>" + "".join([f'<option value="{w.id}">{html.escape(w.name)}</option>' for w in warehouses])
+    # ----------------------------------------
+
     # Генерація таблиці
     product_rows = ""
     for p in products:
         # Логіка бейджів
         active_badge = f"<span class='badge badge-active'>Активний</span>" if p.is_active else f"<span class='badge badge-inactive'>Прихований</span>"
-        area_badge = f"<span class='badge badge-kitchen'><i class='fa-solid fa-fire-burner'></i> Кухня</span>" if p.preparation_area == 'kitchen' else f"<span class='badge badge-bar'><i class='fa-solid fa-martini-glass'></i> Бар</span>"
+        
+        # --- MODIFIED: Badge for Warehouse ---
+        if p.production_warehouse_id and p.production_warehouse_id in wh_map:
+            wh_name = html.escape(wh_map[p.production_warehouse_id])
+            # Використовуємо іконку складу для позначення цеху
+            area_badge = f"<span class='badge badge-kitchen'><i class='fa-solid fa-warehouse'></i> {wh_name}</span>"
+        else:
+            # Fallback для старих записів або якщо цех видалено
+            if p.preparation_area == 'bar':
+                 area_badge = f"<span class='badge badge-bar'><i class='fa-solid fa-martini-glass'></i> Бар</span>"
+            elif p.preparation_area == 'kitchen':
+                 area_badge = f"<span class='badge badge-kitchen'><i class='fa-solid fa-fire-burner'></i> Кухня</span>"
+            else:
+                 area_badge = f"<span class='badge' style='background:#eee; color:#666;'>Не призначено</span>"
+        # -------------------------------------
         
         # Картинка
         img_html = f'<img src="/{p.image_url}" class="product-img-preview" alt="img">' if p.image_url else '<div class="no-img"><i class="fa-regular fa-image"></i></div>'
@@ -186,7 +209,7 @@ async def admin_products(
                         <th>Назва</th>
                         <th>Ціна</th>
                         <th>Категорія</th>
-                        <th>Цех</th>
+                        <th>Цех (Склад)</th>
                         <th>Статус</th>
                         <th style="text-align:right;">Дії</th>
                     </tr>
@@ -223,17 +246,12 @@ async def admin_products(
                         {category_options}
                     </select>
                     
-                    <label for="preparation_area">Цех приготування (для чеків) *</label>
-                    <div class="radio-group" style="display: flex; gap: 20px; margin-bottom: 15px;">
-                        <label style="font-weight: normal; cursor: pointer;">
-                            <input type="radio" name="preparation_area" value="kitchen" checked> 🍳 Кухня
-                        </label>
-                        <label style="font-weight: normal; cursor: pointer;">
-                            <input type="radio" name="preparation_area" value="bar"> 🍹 Бар
-                        </label>
-                    </div>
+                    <label for="production_warehouse_id">Цех приготування (для списання та чеків) *</label>
+                    <select id="production_warehouse_id" name="production_warehouse_id" required>
+                        {wh_options}
+                    </select>
 
-                    <label>Доступні модифікатори:</label>
+                    <label style="margin-top:10px;">Доступні модифікатори:</label>
                     {modifiers_html}
 
                     <label for="description">Опис (склад)</label>
@@ -249,7 +267,6 @@ async def admin_products(
     </div>
     """
 
-    # --- ИСПРАВЛЕНИЕ ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["products_active"] = "active"
 
@@ -266,8 +283,8 @@ async def add_product(
     price: Decimal = Form(...), 
     description: str = Form(""), 
     category_id: int = Form(...), 
-    preparation_area: str = Form("kitchen"),
-    modifier_ids: List[int] = Form([]), # Отримуємо список ID модифікаторів
+    production_warehouse_id: int = Form(None), # Новий параметр
+    modifier_ids: List[int] = Form([]), 
     image: UploadFile = File(None), 
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
@@ -296,7 +313,7 @@ async def add_product(
         description=description, 
         image_url=image_url, 
         category_id=category_id, 
-        preparation_area=preparation_area
+        production_warehouse_id=production_warehouse_id # Збереження цеху
     )
 
     # Додаємо модифікатори, якщо обрані
@@ -323,9 +340,15 @@ async def get_edit_product_form(
     categories_res = await session.execute(select(Category))
     category_options = "".join([f'<option value="{c.id}" {"selected" if c.id == product.category_id else ""}>{html.escape(c.name)}</option>' for c in categories_res.scalars().all()])
     
-    # Радіо кнопки замість селекта для цеху
-    is_kitchen = "checked" if product.preparation_area == 'kitchen' else ""
-    is_bar = "checked" if product.preparation_area == 'bar' else ""
+    # --- NEW: Warehouse options for edit ---
+    warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
+    warehouses = warehouses_res.scalars().all()
+    
+    wh_options = "<option value=''>-- Оберіть цех --</option>"
+    for w in warehouses:
+        selected = "selected" if product.production_warehouse_id == w.id else ""
+        wh_options += f'<option value="{w.id}" {selected}>{html.escape(w.name)}</option>'
+    # ---------------------------------------
 
     # --- ЛОГІКА МОДИФІКАТОРІВ ---
     all_modifiers = (await session.execute(select(Modifier).order_by(Modifier.name))).scalars().all()
@@ -367,17 +390,12 @@ async def get_edit_product_form(
                 {category_options}
             </select>
             
-            <label>Цех приготування</label>
-            <div class="radio-group" style="display: flex; gap: 20px; margin-bottom: 15px; padding: 10px; border: 1px solid #eee; border-radius: 5px;">
-                <label style="font-weight: normal; cursor: pointer;">
-                    <input type="radio" name="preparation_area" value="kitchen" {is_kitchen}> 🍳 Кухня
-                </label>
-                <label style="font-weight: normal; cursor: pointer;">
-                    <input type="radio" name="preparation_area" value="bar" {is_bar}> 🍹 Бар
-                </label>
-            </div>
+            <label for="production_warehouse_id">Цех приготування (для списання та чеків)</label>
+            <select id="production_warehouse_id" name="production_warehouse_id" required>
+                {wh_options}
+            </select>
 
-            <label>Доступні модифікатори:</label>
+            <label style="margin-top:10px;">Доступні модифікатори:</label>
             {modifiers_html}
             <br>
 
@@ -394,7 +412,6 @@ async def get_edit_product_form(
         </form>
     </div>"""
     
-    # --- ИСПРАВЛЕНИЕ ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["products_active"] = "active"
     
@@ -412,13 +429,12 @@ async def edit_product(
     price: Decimal = Form(...), 
     description: str = Form(""), 
     category_id: int = Form(...), 
-    preparation_area: str = Form(...),
-    modifier_ids: List[int] = Form([]), # Отримуємо список ID обраних модифікаторів
+    production_warehouse_id: int = Form(None), # Новий параметр
+    modifier_ids: List[int] = Form([]),
     image: UploadFile = File(None), 
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
 ):
-    # Завантажуємо з modifiers, щоб оновити список
     product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
     if not product: 
         raise HTTPException(status_code=404, detail="Товар не знайдено")
@@ -427,14 +443,14 @@ async def edit_product(
     product.price = price
     product.description = description
     product.category_id = category_id
-    product.preparation_area = preparation_area 
+    product.production_warehouse_id = production_warehouse_id # Оновлення цеху
 
     # Оновлюємо список модифікаторів
     if modifier_ids:
         modifiers = (await session.execute(select(Modifier).where(Modifier.id.in_(modifier_ids)))).scalars().all()
         product.modifiers = modifiers
     else:
-        product.modifiers = [] # Очищаємо, якщо нічого не обрано
+        product.modifiers = [] 
 
     if image and image.filename:
         if product.image_url and os.path.exists(product.image_url):
@@ -501,11 +517,10 @@ async def api_get_products(
         .where(Product.is_active == True)
         .order_by(Category.sort_order, Product.name)
     )
-    # Додаємо preparation_area у відповідь
     products = [{
         "id": row.id, 
         "name": row.name, 
-        "price": float(row.price), # Decimal в float для JSON
+        "price": float(row.price),
         "category": row.category or "Без категорії",
         "preparation_area": row.preparation_area
     } for row in res.mappings().all()]

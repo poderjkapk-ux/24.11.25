@@ -13,6 +13,8 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
 from models import Employee, Role, Order, Settings, CashShift, OrderStatus
+# Импортируем Warehouse для выбора цеха
+from inventory_models import Warehouse
 from templates import ADMIN_HTML_TEMPLATE
 from dependencies import get_db_session, check_credentials
 from auth_utils import get_password_hash
@@ -40,14 +42,28 @@ async def admin_employees(
     elif error == "has_debt":
         error_msg = "<div class='card' style='background:#fee2e2; color:#991b1b; margin-bottom:20px; border:1px solid #fecaca;'>⚠️ Неможливо видалити: у співробітника є борг (готівка на руках). Спочатку прийміть кошти в розділі Каса.</div>"
 
-    # Завантажуємо співробітників з ролями
-    employees_res = await session.execute(select(Employee).options(joinedload(Employee.role)).order_by(Employee.id.desc()))
+    # Завантажуємо співробітників з ролями та (опціонально) прикріпленим складом
+    # Примітка: relationship до warehouse має бути налаштований в моделі Employee, або ми отримаємо його через ID
+    # Тут ми просто відобразимо інформацію, якщо вона є
+    employees_res = await session.execute(
+        select(Employee)
+        .options(joinedload(Employee.role))
+        .order_by(Employee.id.desc())
+    )
     employees = employees_res.scalars().all()
     
     # Завантажуємо ролі для форми додавання
     roles_res = await session.execute(select(Role).order_by(Role.id))
     roles = roles_res.scalars().all()
     role_options = "".join([f'<option value="{r.id}">{html.escape(r.name)}</option>' for r in roles])
+
+    # Завантажуємо виробничі цехи (склади) для привязки поварів
+    warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
+    warehouses = warehouses_res.scalars().all()
+    wh_options = "<option value=''>-- Не прикріплювати --</option>" + "".join([f'<option value="{w.id}">{html.escape(w.name)}</option>' for w in warehouses])
+    
+    # Створюємо мапу імен складів для відображення в таблиці (щоб не робити зайвих запитів)
+    wh_map = {w.id: w.name for w in warehouses}
 
     rows = ""
     for e in employees:
@@ -56,6 +72,11 @@ async def admin_employees(
         
         # Роль (бейдж)
         role_badge = f"<span class='role-tag'>{html.escape(e.role.name if e.role else 'N/A')}</span>"
+        
+        # Цех (якщо є)
+        wh_info = ""
+        if e.assigned_warehouse_id and e.assigned_warehouse_id in wh_map:
+            wh_info = f"<br><span style='font-size:0.8em; color:#6b7280;'><i class='fa-solid fa-warehouse'></i> {html.escape(wh_map[e.assigned_warehouse_id])}</span>"
         
         # Індикатор боргу (якщо є)
         debt_info = ""
@@ -70,7 +91,7 @@ async def admin_employees(
                 {debt_info}
             </td>
             <td>{html.escape(e.phone_number or '-')}</td>
-            <td>{role_badge}</td>
+            <td>{role_badge}{wh_info}</td>
             <td>{status_badge}</td>
             <td style="font-family:monospace; font-size:0.9em;">{e.telegram_user_id or '–'}</td>
             <td class="actions">
@@ -118,7 +139,7 @@ async def admin_employees(
                         <th width="50">ID</th>
                         <th>Ім'я</th>
                         <th>Телефон</th>
-                        <th>Роль</th>
+                        <th>Роль / Цех</th>
                         <th>Статус</th>
                         <th>Telegram ID</th>
                         <th width="100" style="text-align:right;">Дії</th>
@@ -155,6 +176,12 @@ async def admin_employees(
                         </div>
                     </div>
 
+                    <label for="assigned_warehouse_id">Цех (для Поварів/Барменів):</label>
+                    <select id="assigned_warehouse_id" name="assigned_warehouse_id">
+                        {wh_options}
+                    </select>
+                    <small style="color:#666; display:block; margin-bottom:10px;">Вкажіть, якщо співробітник працює на конкретній точці приготування.</small>
+
                     <label for="password">Пароль (для входу в Staff App)</label>
                     <input type="text" id="password" name="password" placeholder="Залиште пустим, якщо не потрібен">
                     
@@ -180,6 +207,7 @@ async def add_employee(
     full_name: str = Form(...), 
     phone_number: str = Form(None), 
     role_id: int = Form(...), 
+    assigned_warehouse_id: str = Form(None), # Приймаємо як строку, щоб обробити порожнє значення
     password: str = Form(None), 
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
@@ -192,10 +220,13 @@ async def add_employee(
     if password and password.strip():
         pw_hash = get_password_hash(password)
 
+    wh_id = int(assigned_warehouse_id) if assigned_warehouse_id else None
+
     session.add(Employee(
         full_name=full_name, 
         phone_number=cleaned_phone, 
         role_id=role_id, 
+        assigned_warehouse_id=wh_id,
         password_hash=pw_hash
     ))
     
@@ -222,6 +253,15 @@ async def get_edit_employee_form(
     roles = roles_res.scalars().all()
     role_options = "".join([f'<option value="{r.id}" {"selected" if r.id == employee.role_id else ""}>{html.escape(r.name)}</option>' for r in roles])
     
+    # Завантажуємо склади для редагування
+    warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
+    warehouses = warehouses_res.scalars().all()
+    
+    wh_options = "<option value=''>-- Не прикріплювати --</option>"
+    for w in warehouses:
+        selected = "selected" if employee.assigned_warehouse_id == w.id else ""
+        wh_options += f'<option value="{w.id}" {selected}>{html.escape(w.name)}</option>'
+
     body = f"""
     <div class="card" style="max-width: 500px; margin: 0 auto;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
@@ -239,6 +279,11 @@ async def get_edit_employee_form(
             <label>Роль:</label>
             <select name="role_id" required>{role_options}</select>
             
+            <label>Цех (для Поварів/Барменів):</label>
+            <select name="assigned_warehouse_id">
+                {wh_options}
+            </select>
+
             <label>Новий пароль (залиште пустим, якщо не змінюєте):</label>
             <input type="text" name="password" placeholder="******">
             
@@ -265,6 +310,7 @@ async def edit_employee(
     full_name: str = Form(...), 
     phone_number: str = Form(None), 
     role_id: int = Form(...), 
+    assigned_warehouse_id: str = Form(None),
     password: str = Form(None),
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
@@ -278,6 +324,7 @@ async def edit_employee(
         employee.full_name = full_name
         employee.phone_number = cleaned
         employee.role_id = role_id
+        employee.assigned_warehouse_id = int(assigned_warehouse_id) if assigned_warehouse_id else None
         
         if password and password.strip():
             employee.password_hash = get_password_hash(password)
