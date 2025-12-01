@@ -85,7 +85,7 @@ async def check_and_update_order_readiness(session: AsyncSession, order_id: int,
     Если все блюда Кухни готовы -> kitchen_done = True
     Если все блюда Бара готовы -> bar_done = True
     """
-    order = await session.get(Order, order_id, options=[selectinload(Order.items)])
+    order = await session.get(Order, order_id, options=[selectinload(Order.items).joinedload(OrderItem.product)])
     if not order: return
 
     kitchen_items = [i for i in order.items if i.preparation_area != 'bar']
@@ -611,12 +611,10 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
         
         if orders:
             for o in orders:
-                my_items_html = ""
-                count = 0
-                
-                # ФИЛЬТРАЦИЯ БЛЮД:
-                # 1. Повар видит только свои блюда (по assigned_workshop_ids или роли)
-                # 2. Показываем только НЕ ГОТОВЫЕ (is_ready=False)
+                active_items_html = ""
+                done_items_html = ""
+                count_active = 0
+                count_total = 0
                 
                 for item in o.items:
                     # Проверяем, относится ли товар к цехам сотрудника
@@ -625,44 +623,64 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                     
                     # Также проверяем роль (Кухня vs Бар) для совместимости
                     is_bar_item = item.preparation_area == 'bar'
-                    
-                    # Если сотрудник - бармен, но не повар -> не показываем кухню
                     if is_bar_item and not employee.role.can_receive_bar_orders: is_my_item = False
-                    # Если сотрудник - повар, но не бармен -> не показываем бар
                     if not is_bar_item and not employee.role.can_receive_kitchen_orders: is_my_item = False
 
                     if is_my_item:
-                        # Если позиция уже готова - не показываем её повару (она ушла с экрана)
-                        if item.is_ready: continue
-                        
-                        count += 1
+                        count_total += 1
                         mods = f"<br><small>{', '.join([m['name'] for m in item.modifiers])}</small>" if item.modifiers else ""
                         
-                        # При клике вызываем toggle_item
-                        my_items_html += f"""
-                        <div onclick="event.stopPropagation(); performAction('toggle_item', {o.id}, {item.id})" 
-                             style="padding:15px; border-bottom:1px solid #eee; cursor:pointer; font-size:1.1rem; display:flex; align-items:center; background:white;">
-                            <i class="fa-regular fa-square" style="margin-right:15px; color:#ccc; font-size:1.3rem;"></i> 
-                            <div style="flex-grow:1;"><b>{html.escape(item.product_name)}</b> x{item.quantity}{mods}</div>
-                        </div>
-                        """
+                        # --- ВІДОБРАЖЕННЯ СТРАВИ ---
+                        if item.is_ready:
+                            # Вже готова страва (сіра, закреслена)
+                            # При кліку запитуємо "Повернути?"
+                            done_items_html += f"""
+                            <div onclick="if(confirm('Повернути цю страву в роботу?')) performAction('toggle_item', {o.id}, {item.id})" 
+                                 style="padding:12px 15px; border-bottom:1px solid #eee; cursor:pointer; font-size:1rem; display:flex; align-items:center; background:#f9f9f9; color:#999; text-decoration:line-through;">
+                                <i class="fa-solid fa-check-circle" style="margin-right:15px; color:#aaa;"></i> 
+                                <div style="flex-grow:1;">{html.escape(item.product_name)} x{item.quantity}{mods}</div>
+                            </div>
+                            """
+                        else:
+                            # Активна страва (біла, велика)
+                            # При кліку запитуємо "Готово?"
+                            count_active += 1
+                            active_items_html += f"""
+                            <div onclick="if(confirm('Страва готова?')) performAction('toggle_item', {o.id}, {item.id})" 
+                                 style="padding:18px 15px; border-bottom:1px solid #eee; cursor:pointer; font-size:1.15rem; display:flex; align-items:center; background:white; font-weight:500;">
+                                <i class="fa-regular fa-square" style="margin-right:15px; color:#ccc; font-size:1.4rem;"></i> 
+                                <div style="flex-grow:1;">{html.escape(item.product_name)} x{item.quantity}{mods}</div>
+                            </div>
+                            """
                 
-                if count > 0:
+                # Показуємо замовлення тільки якщо є хоча б одна страва цього цеху
+                if count_total > 0:
+                    # Якщо немає активних страв (все готово), картка не повинна відображатися для цього цеху,
+                    # так як _get_production_orders фільтрує по kitchen_done/bar_done.
+                    # Але якщо ми тут, значить Order.kitchen_done ще False, але всі айтеми можуть бути ready.
+                    # Логіка check_and_update повинна це обробити, але на всяк випадок приховаємо пусту активну частину.
+                    
+                    if count_active == 0: continue
+
                     table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                     
-                    # Кнопка для массового закрытия (опционально)
-                    btns = f"""
-                    <div style="text-align:center; padding-top:10px; color:#777; font-size:0.9rem;">
-                        Натисніть на страву, щоб позначити готовність
+                    # Збираємо все разом
+                    full_content = f"""
+                    <div class='info-row'><i class='fa-solid fa-utensils'></i> <b>{table_info}</b> <span style="color:#777; margin-left:10px;">#{o.id}</span></div>
+                    <div style='border-radius:8px; overflow:hidden; border:1px solid #ddd; margin-top:5px;'>
+                        {active_items_html}
+                        {done_items_html}
                     </div>
                     """
+                    
+                    btns = "" # Кнопок не треба, все на кліках
                     
                     orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
                         id=o.id, 
                         time=o.created_at.strftime('%H:%M'), 
                         badge_class="warning", 
                         status="В роботі", 
-                        content=f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><div style='background:#f9f9f9; border-radius:8px; overflow:hidden; border:1px solid #eee;'>{my_items_html}</div>",
+                        content=full_content,
                         buttons=btns, 
                         color="#f39c12"
                     )})
@@ -1040,6 +1058,7 @@ async def handle_action_api(
             item_id = int(data.get("extra"))
             item = await session.get(OrderItem, item_id)
             if item:
+                # Toggle ready state
                 item.is_ready = not item.is_ready
                 await session.commit()
                 
