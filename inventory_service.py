@@ -8,7 +8,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from inventory_models import (
     Stock, InventoryDoc, InventoryDocItem, TechCard, 
-    TechCardItem, Ingredient, Warehouse, Modifier
+    TechCardItem, Ingredient, Warehouse, Modifier, AutoDeductionRule
 )
 from models import Order, OrderItem, Product
 
@@ -137,7 +137,7 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
 
 async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
-    Автоматичне списання продуктів (і модифікаторів) з відповідних складів/цехів.
+    Автоматичне списання продуктів (і модифікаторів, і упаковки) з відповідних складів/цехів.
     """
     if order.is_inventory_deducted:
         logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
@@ -161,40 +161,69 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         if wh_id not in deduction_items_by_wh: deduction_items_by_wh[wh_id] = []
         deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
 
+    # --- 1. СПИСАННЯ СТРАВ ТА МОДИФІКАТОРІВ ---
     for order_item in order.items:
-        # 1. Визначаємо склад списання (Цех)
-        # Завантажуємо продукт, щоб дізнатися його production_warehouse_id
+        # 1.1 Визначаємо склад списання (Цех) для основної страви
         product = await session.get(Product, order_item.product_id)
         
-        # Якщо у страви вказано цех - використовуємо його, інакше fallback
-        wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
+        # Склад страви
+        prod_wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
         
-        # 2. Шукаємо техкарту
+        # 1.2 Шукаємо техкарту
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
             .options(joinedload(TechCard.components).joinedload(TechCardItem.ingredient))
         )
         
-        # 3. Списуємо інгредієнти страви
+        # 1.3 Списуємо інгредієнти страви
         if tech_card:
             for component in tech_card.components:
                 gross = Decimal(str(component.gross_amount))
                 qty_item = Decimal(str(order_item.quantity))
                 total_qty = gross * qty_item
-                add_deduction(wh_id, component.ingredient_id, total_qty)
+                add_deduction(prod_wh_id, component.ingredient_id, total_qty)
         else:
             logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта.")
         
-        # 4. Списуємо інгредієнти модифікаторів (з того ж складу, що і основна страва)
+        # 1.4 Списуємо інгредієнти модифікаторів
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
-                ing_id = mod_data.get('ingredient_id')
-                ing_qty_val = mod_data.get('ingredient_qty')
-                
-                if ing_id and ing_qty_val:
-                    total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                    add_deduction(wh_id, ing_id, total_mod_qty)
+                # Отримуємо дані модифікатора з БД, щоб знати його склад (warehouse_id)
+                mod_id = mod_data.get('id')
+                if mod_id:
+                    modifier_db = await session.get(Modifier, mod_id)
+                    
+                    if modifier_db and modifier_db.ingredient_id:
+                        ing_qty_val = modifier_db.ingredient_qty
+                        
+                        # Визначаємо склад для модифікатора
+                        # Якщо у модифікатора є свій склад -> беремо його.
+                        # Якщо ні -> беремо склад основної страви.
+                        mod_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
+                        
+                        if ing_qty_val:
+                            total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
+                            add_deduction(mod_wh_id, modifier_db.ingredient_id, total_mod_qty)
 
+    # --- 2. СПИСАННЯ УПАКОВКИ (Auto Rules) ---
+    # Визначаємо тригер: delivery, pickup або in_house
+    trigger = 'in_house'
+    if order.is_delivery: trigger = 'delivery'
+    elif order.order_type == 'pickup': trigger = 'pickup'
+    
+    # Шукаємо правила для цього типу + загальні правила ('all')
+    rules_res = await session.execute(
+        select(AutoDeductionRule).where(
+            AutoDeductionRule.trigger_type.in_([trigger, 'all'])
+        )
+    )
+    rules = rules_res.scalars().all()
+    
+    for rule in rules:
+        # Логіка: 1 правило = 1 списання на замовлення (наприклад, пакет)
+        add_deduction(rule.warehouse_id, rule.ingredient_id, Decimal(str(rule.quantity)))
+
+    # --- 3. ПРОВЕДЕННЯ ---
     order.is_inventory_deducted = True
     session.add(order)
 
@@ -208,7 +237,7 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
             await process_movement(
                 session, 'deduction', items, 
                 source_wh_id=wh_id, 
-                comment=f"Замовлення #{order.id} (Авто-списання)", 
+                comment=f"Замовлення #{order.id} (Авто-списання: {trigger})", 
                 order_id=order.id
             )
     
@@ -238,10 +267,10 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         if wh_id not in return_items_by_wh: return_items_by_wh[wh_id] = []
         return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': 0})
 
+    # --- 1. ПОВЕРНЕННЯ СТРАВ ТА МОДИФІКАТОРІВ ---
     for order_item in order.items:
-        # Визначаємо склад повернення
         product = await session.get(Product, order_item.product_id)
-        wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
+        prod_wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
         
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
@@ -251,16 +280,39 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         if tech_card:
             for component in tech_card.components:
                 total_qty = Decimal(str(component.gross_amount)) * Decimal(str(order_item.quantity))
-                add_return(wh_id, component.ingredient_id, total_qty)
+                add_return(prod_wh_id, component.ingredient_id, total_qty)
         
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
-                ing_id = mod_data.get('ingredient_id')
-                ing_qty_val = mod_data.get('ingredient_qty')
-                if ing_id and ing_qty_val:
-                    total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                    add_return(wh_id, ing_id, total_mod_qty)
+                mod_id = mod_data.get('id')
+                if mod_id:
+                    modifier_db = await session.get(Modifier, mod_id)
+                    if modifier_db and modifier_db.ingredient_id:
+                        ing_qty_val = modifier_db.ingredient_qty
+                        
+                        # Визначаємо той самий склад
+                        mod_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
+                        
+                        if ing_qty_val:
+                            total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
+                            add_return(mod_wh_id, modifier_db.ingredient_id, total_mod_qty)
 
+    # --- 2. ПОВЕРНЕННЯ УПАКОВКИ ---
+    trigger = 'in_house'
+    if order.is_delivery: trigger = 'delivery'
+    elif order.order_type == 'pickup': trigger = 'pickup'
+    
+    rules_res = await session.execute(
+        select(AutoDeductionRule).where(
+            AutoDeductionRule.trigger_type.in_([trigger, 'all'])
+        )
+    )
+    rules = rules_res.scalars().all()
+    
+    for rule in rules:
+        add_return(rule.warehouse_id, rule.ingredient_id, Decimal(str(rule.quantity)))
+
+    # --- 3. ПРОВЕДЕННЯ ---
     for wh_id, items in return_items_by_wh.items():
         if items:
             await process_movement(

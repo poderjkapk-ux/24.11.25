@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from sqlalchemy.orm import joinedload, selectinload
 
+# Import models
 from inventory_models import (
     Ingredient, Unit, Warehouse, TechCard, TechCardItem, Stock, Supplier, 
-    InventoryDoc, InventoryDocItem, Modifier
+    InventoryDoc, InventoryDocItem, Modifier, AutoDeductionRule
 )
 from models import Product, Settings
 from dependencies import get_db_session, check_credentials
@@ -87,6 +88,9 @@ def get_nav(active_tab):
         "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"},
         "reports/suppliers": {"icon": "fa-file-invoice-dollar", "label": "Звіт по накладних"} 
     }
+    # Подсветка родительской вкладки для под-страниц
+    if active_tab == 'rules': active_tab = 'modifiers'
+    
     html = f"{INVENTORY_STYLES}<div class='inv-nav'>"
     for k, v in tabs.items():
         cls = "active" if k == active_tab else ""
@@ -180,7 +184,6 @@ async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=
     for w in warehouses:
         type_badge = "<span class='inv-badge badge-orange'>🍳 Цех (Виробництво)</span>" if w.is_production else "<span class='inv-badge badge-blue'>📦 Склад зберігання</span>"
         
-        # Подсчет остатков (опционально)
         count_res = await session.execute(select(func.count(Stock.id)).where(Stock.warehouse_id == w.id, Stock.quantity != 0))
         items_count = count_res.scalar() or 0
 
@@ -238,7 +241,6 @@ async def add_warehouse(name: str = Form(...), is_production: bool = Form(False)
 async def delete_warehouse(w_id: int, session: AsyncSession = Depends(get_db_session)):
     w = await session.get(Warehouse, w_id)
     if w:
-        # Проверка на использование в документах/продуктах нужна в реальном проекте
         await session.delete(w)
         await session.commit()
     return RedirectResponse("/admin/inventory/warehouses", 303)
@@ -299,19 +301,28 @@ async def add_supplier(name: str = Form(...), contact_person: str = Form(None), 
 async def modifiers_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
     
-    mods = (await session.execute(select(Modifier).options(joinedload(Modifier.ingredient).joinedload(Ingredient.unit)))).scalars().all()
+    mods = (await session.execute(
+        select(Modifier)
+        .options(joinedload(Modifier.ingredient).joinedload(Ingredient.unit), joinedload(Modifier.warehouse))
+    )).scalars().all()
+    
     ingredients = (await session.execute(select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))).scalars().all()
+    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
     
     ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in ingredients])
+    wh_opts = "<option value=''>-- Як страва --</option>" + "".join([f"<option value='{w.id}'>{w.name}</option>" for w in warehouses])
     
     rows = ""
     for m in mods:
+        wh_name = f"<span class='inv-badge badge-gray'>{m.warehouse.name}</span>" if m.warehouse else "<span class='inv-badge'>Як страва</span>"
         link_info = f"{m.ingredient_qty} {m.ingredient.unit.name} <b>{m.ingredient.name}</b>" if m.ingredient else "<span style='color:#ccc'>Без списання</span>"
+        
         rows += f"""
         <tr>
             <td><b>{html.escape(m.name)}</b></td>
             <td>{m.price:.2f} грн</td>
             <td>{link_info}</td>
+            <td>{wh_name}</td>
             <td style="text-align:right;"><a href="/admin/inventory/modifiers/delete/{m.id}" class="button-sm danger" onclick="return confirm('Видалити?')"><i class="fa-solid fa-trash"></i></a></td>
         </tr>
         """
@@ -327,13 +338,19 @@ async def modifiers_list(session: AsyncSession = Depends(get_db_session), user=D
             <i class="fa-solid fa-info-circle"></i> Модифікатори додаються до замовлення. Якщо вказано інгредієнт, він автоматично списується зі складу при продажу.
         </div>
         
-        <form action="/admin/inventory/modifiers/add" method="post" class="inline-add-form">
-            <strong style="white-space:nowrap;">➕ Створити:</strong>
-            <input type="text" name="name" placeholder="Назва (напр. Подвійний сир)" required style="flex:2;">
+        <form action="/admin/inventory/modifiers/add" method="post" class="inline-add-form" style="flex-wrap:wrap;">
+            <strong style="width:100%; margin-bottom:10px;">➕ Додати модифікатор:</strong>
+            <input type="text" name="name" placeholder="Назва (напр. Подвійний сир)" required style="flex:2; min-width:200px;">
             <input type="number" name="price" step="0.01" placeholder="Ціна (грн)" required style="width:100px;">
-            <div style="border-left:1px solid #ddd; padding-left:10px; display:flex; align-items:center; gap:5px;">
-                <small>Списання:</small>
-                <select name="ingredient_id" style="width:180px;"><option value="">- Не списувати -</option>{ing_opts}</select>
+            
+            <div style="display:flex; align-items:center; gap:5px; border-left:1px solid #ddd; padding-left:10px;">
+                <small>Склад:</small>
+                <select name="warehouse_id" style="width:140px;">{wh_opts}</select>
+            </div>
+
+            <div style="display:flex; align-items:center; gap:5px; border-left:1px solid #ddd; padding-left:10px;">
+                <small>Сировина:</small>
+                <select name="ingredient_id" style="width:150px;"><option value="">- Не списувати -</option>{ing_opts}</select>
                 <input type="number" name="ingredient_qty" step="0.001" placeholder="К-сть" style="width:80px;">
             </div>
             <button type="submit" class="button">OK</button>
@@ -341,17 +358,35 @@ async def modifiers_list(session: AsyncSession = Depends(get_db_session), user=D
         
         <div class="inv-table-wrapper">
             <table class="inv-table">
-                <thead><tr><th>Назва добавки</th><th>Ціна продажу</th><th>Списання (Інгредієнт)</th><th></th></tr></thead>
-                <tbody>{rows or "<tr><td colspan='4' style='text-align:center; padding:20px;'>Немає модифікаторів</td></tr>"}</tbody>
+                <thead><tr><th>Назва добавки</th><th>Ціна продажу</th><th>Списання (Інгредієнт)</th><th>Склад списання</th><th></th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='5' style='text-align:center; padding:20px;'>Немає модифікаторів</td></tr>"}</tbody>
             </table>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top:30px; border-top: 4px solid #f59e0b;">
+        <h3 style="margin-bottom:10px;"><i class="fa-solid fa-box-open"></i> Авто-списання упаковки</h3>
+        <p style="color:#666; font-size:0.9rem; margin-bottom:15px;">Налаштуйте, що списувати автоматично при кожному замовленні (пакети, серветки).</p>
+        
+        <div id="packaging-rules-container">
+            <a href="/admin/inventory/rules" class="button secondary">Налаштувати правила упаковки</a>
         </div>
     </div>
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Модифікатори", body=body, site_title=settings.site_title, **get_active_classes()))
 
 @router.post("/modifiers/add")
-async def add_modifier(name: str = Form(...), price: float = Form(...), ingredient_id: int = Form(None), ingredient_qty: float = Form(0), session: AsyncSession = Depends(get_db_session)):
-    session.add(Modifier(name=name, price=price, ingredient_id=ingredient_id, ingredient_qty=ingredient_qty))
+async def add_modifier(
+    name: str = Form(...), price: float = Form(...), 
+    ingredient_id: int = Form(None), ingredient_qty: float = Form(0),
+    warehouse_id: int = Form(None),
+    session: AsyncSession = Depends(get_db_session)
+):
+    session.add(Modifier(
+        name=name, price=price, 
+        ingredient_id=ingredient_id, ingredient_qty=ingredient_qty,
+        warehouse_id=warehouse_id
+    ))
     await session.commit()
     return RedirectResponse("/admin/inventory/modifiers", 303)
 
@@ -362,6 +397,107 @@ async def delete_modifier(mod_id: int, session: AsyncSession = Depends(get_db_se
         await session.delete(mod)
         await session.commit()
     return RedirectResponse("/admin/inventory/modifiers", 303)
+
+# --- PACKAGING RULES (RULES) ---
+@router.get("/rules", response_class=HTMLResponse)
+async def rules_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    rules = (await session.execute(
+        select(AutoDeductionRule)
+        .options(joinedload(AutoDeductionRule.ingredient).joinedload(Ingredient.unit), joinedload(AutoDeductionRule.warehouse))
+    )).scalars().all()
+    
+    ingredients = (await session.execute(select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))).scalars().all()
+    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
+    
+    ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in ingredients])
+    wh_opts = "".join([f"<option value='{w.id}'>{w.name}</option>" for w in warehouses])
+    
+    rows = ""
+    for r in rules:
+        trigger_badges = {
+            'delivery': '<span class="inv-badge badge-blue"><i class="fa-solid fa-truck"></i> Доставка</span>',
+            'pickup': '<span class="inv-badge badge-orange"><i class="fa-solid fa-person-walking"></i> Самовивіз</span>',
+            'in_house': '<span class="inv-badge badge-green"><i class="fa-solid fa-utensils"></i> В закладі</span>',
+            'all': '<span class="inv-badge badge-gray">Всі типи</span>',
+        }
+        badge = trigger_badges.get(r.trigger_type, r.trigger_type)
+        
+        rows += f"""
+        <tr>
+            <td>{badge}</td>
+            <td>{r.ingredient.name}</td>
+            <td>{r.quantity} {r.ingredient.unit.name}</td>
+            <td>{r.warehouse.name}</td>
+            <td style="text-align:right;"><a href="/admin/inventory/rules/delete/{r.id}" class="button-sm danger"><i class="fa-solid fa-trash"></i></a></td>
+        </tr>
+        """
+        
+    body = f"""
+    {get_nav('rules')} 
+    
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h3><i class="fa-solid fa-box-open"></i> Правила списання упаковки</h3>
+            <a href="/admin/inventory/modifiers" class="button secondary">Назад</a>
+        </div>
+        
+        <form action="/admin/inventory/rules/add" method="post" class="inline-add-form" style="align-items:flex-end;">
+            <div style="flex:1;">
+                <label style="font-size:0.8rem; font-weight:bold;">Коли списувати:</label>
+                <select name="trigger_type" style="width:100%;">
+                    <option value="delivery">Тільки Доставка</option>
+                    <option value="pickup">Тільки Самовивіз</option>
+                    <option value="in_house">Тільки В закладі</option>
+                    <option value="all">Завжди (Будь-яке замовлення)</option>
+                </select>
+            </div>
+            <div style="flex:2;">
+                <label style="font-size:0.8rem; font-weight:bold;">Що списувати (Матеріал):</label>
+                <select name="ingredient_id" style="width:100%;">{ing_opts}</select>
+            </div>
+            <div style="width:100px;">
+                <label style="font-size:0.8rem; font-weight:bold;">К-сть:</label>
+                <input type="number" name="quantity" step="0.001" value="1" style="width:100%;">
+            </div>
+            <div style="flex:1;">
+                <label style="font-size:0.8rem; font-weight:bold;">Зі складу:</label>
+                <select name="warehouse_id" style="width:100%;">{wh_opts}</select>
+            </div>
+            <button type="submit" class="button" style="margin-bottom:0; height:42px;">Додати</button>
+        </form>
+        
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead><tr><th>Умова</th><th>Матеріал</th><th>Кількість на замовлення</th><th>Склад</th><th></th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='5' style='text-align:center; padding:20px;'>Правил немає</td></tr>"}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Упаковка", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.post("/rules/add")
+async def add_rule(
+    trigger_type: str = Form(...), ingredient_id: int = Form(...), 
+    quantity: float = Form(...), warehouse_id: int = Form(...), 
+    session: AsyncSession = Depends(get_db_session)
+):
+    session.add(AutoDeductionRule(
+        trigger_type=trigger_type, ingredient_id=ingredient_id,
+        quantity=quantity, warehouse_id=warehouse_id
+    ))
+    await session.commit()
+    return RedirectResponse("/admin/inventory/rules", 303)
+
+@router.get("/rules/delete/{r_id}")
+async def delete_rule(r_id: int, session: AsyncSession = Depends(get_db_session)):
+    r = await session.get(AutoDeductionRule, r_id)
+    if r:
+        await session.delete(r)
+        await session.commit()
+    return RedirectResponse("/admin/inventory/rules", 303)
 
 # --- INGREDIENTS ---
 @router.get("/ingredients", response_class=HTMLResponse)

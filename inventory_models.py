@@ -59,7 +59,13 @@ class Modifier(Base):
     ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'), nullable=True)
     ingredient_qty: Mapped[float] = mapped_column(sa.Numeric(10, 3), default=0.000) # Сколько списывать
     
+    # --- НОВЕ: Склад списання для модифікатора ---
+    # Если NULL, списывается с того же склада, что и основное блюдо (из product.production_warehouse_id)
+    # Если указан (например, Бар), то списывается именно с Бара, даже если блюдо с Кухни.
+    warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
+    
     ingredient: Mapped["Ingredient"] = relationship("Ingredient")
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
 
 # --- ТЕХНОЛОГИЧЕСКИЕ КАРТЫ ---
 
@@ -87,6 +93,33 @@ class TechCardItem(Base):
     
     tech_card: Mapped["TechCard"] = relationship("TechCard", back_populates="components")
     ingredient: Mapped["Ingredient"] = relationship("Ingredient")
+
+# --- ПРАВИЛА АВТО-СПИСАНИЯ (УПАКОВКА) ---
+
+class AutoDeductionRule(Base):
+    """
+    Правила для автоматического списания расходников (упаковка, пакеты, приборы)
+    в зависимости от типа заказа (Доставка, Самовывоз, В зале).
+    """
+    __tablename__ = 'auto_deduction_rules'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    
+    # Тип заказа, при котором срабатывает правило:
+    # 'delivery' - Доставка
+    # 'pickup' - Самовывоз
+    # 'in_house' - В заведении
+    # 'all' - Любой тип
+    trigger_type: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    
+    # Что списывать
+    ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'), nullable=False)
+    quantity: Mapped[float] = mapped_column(sa.Numeric(10, 3), default=1.000)
+    
+    # Откуда списывать (обычно склад упаковки или бар/кухня)
+    warehouse_id: Mapped[int] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=False)
+    
+    ingredient: Mapped["Ingredient"] = relationship("Ingredient")
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
 
 # --- СКЛАДСКОЙ УЧЕТ ---
 
