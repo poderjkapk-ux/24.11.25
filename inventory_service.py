@@ -81,6 +81,12 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
     if not doc: raise ValueError("Документ не знайдено")
     if doc.is_processed: raise ValueError("Документ вже проведено")
 
+    # --- ИСПРАВЛЕНИЕ: Проверка на наличие товаров ---
+    # Запрещаем проведение, если список товаров пуст
+    if not doc.items:
+        raise ValueError("Неможливо провести порожній документ. Додайте товари або видаліть чернетку.")
+    # ------------------------------------------------
+
     # Тепер doc.items гарантовано завантажено
     for item in doc.items:
         qty = Decimal(str(item.quantity))

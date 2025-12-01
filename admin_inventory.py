@@ -733,6 +733,16 @@ async def create_doc_action(
     src_id = int(source_warehouse_id) if source_warehouse_id and source_warehouse_id.strip().isdigit() else None
     tgt_id = int(target_warehouse_id) if target_warehouse_id and target_warehouse_id.strip().isdigit() else None
 
+    # ВАЛИДАЦИЯ: Проверка обязательных полей
+    if doc_type == 'supply':
+        if not s_id: raise HTTPException(400, "Для типа 'Приход' обязателен Поставщик.")
+        if not tgt_id: raise HTTPException(400, "Для типа 'Приход' обязателен Склад (Куда).")
+    elif doc_type == 'transfer':
+        if not src_id or not tgt_id: raise HTTPException(400, "Для перемещения нужны оба склада (Откуда и Куда).")
+        if src_id == tgt_id: raise HTTPException(400, "Склады 'Откуда' и 'Куда' должны отличаться.")
+    elif doc_type == 'writeoff':
+        if not src_id: raise HTTPException(400, "Для списания обязателен Склад (Откуда).")
+
     doc = InventoryDoc(
         doc_type=doc_type,
         supplier_id=s_id,
@@ -744,6 +754,20 @@ async def create_doc_action(
     session.add(doc)
     await session.commit()
     return RedirectResponse(f"/admin/inventory/docs/{doc.id}", status_code=303)
+
+# --- НОВЫЙ РОУТ: УДАЛЕНИЕ ЧЕРНОВИКА ---
+@router.get("/docs/delete/{doc_id}")
+async def delete_document(doc_id: int, session: AsyncSession = Depends(get_db_session)):
+    doc = await session.get(InventoryDoc, doc_id)
+    if not doc:
+        raise HTTPException(404, "Документ не найден")
+    
+    if doc.is_processed:
+        raise HTTPException(400, "Нельзя удалить уже проведенный документ! Используйте сторно или обратную операцию.")
+        
+    await session.delete(doc)
+    await session.commit()
+    return RedirectResponse("/admin/inventory/docs", status_code=303)
 
 @router.get("/docs/{doc_id}", response_class=HTMLResponse)
 async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
@@ -796,11 +820,18 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
     
     if not doc.is_processed:
         status_ui = f"""
-        <div style="margin-top:20px; padding:15px; background:#fff7ed; border:1px solid #ffedd5; border-radius:8px; display:flex; justify-content:space-between; align-items:center;">
-            <span style="color:#c2410c; font-weight:bold;">⚠️ Чернетка (Не проведено)</span>
+        <div style="margin-top:20px; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+            <a href="/admin/inventory/docs/delete/{doc.id}" onclick="return confirm('Видалити цей чернетку повністю?');" class="button danger">
+                <i class="fa-solid fa-trash"></i> Видалити
+            </a>
             <form action="/admin/inventory/docs/{doc.id}/approve" method="post" style="margin:0;">
-                <button type="submit" class="button success" onclick="return confirm('Провести документ? Залишки оновляться.')">✅ ПРОВЕСТИ</button>
+                <button type="submit" class="button success" onclick="return confirm('Провести документ? Залишки оновляться.')">
+                    <i class="fa-solid fa-check"></i> ПРОВЕСТИ
+                </button>
             </form>
+        </div>
+        <div style="text-align:right; margin-top:5px; color:#c2410c; font-weight:bold; font-size:0.9rem;">
+            ⚠️ Чернетка (Не проведено)
         </div>
         """
         
@@ -869,7 +900,7 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
                 {header_info}
                 <div class="doc-info-row"><span>Коментар:</span> <i>{doc.comment or '-'}</i></div>
             </div>
-            <div style="display:flex; flex-direction:column; justify-content:center;">
+            <div style="display:flex; flex-direction:column; justify-content:center; width: 300px;">
                 {status_ui}
             </div>
         </div>
@@ -922,6 +953,11 @@ async def del_doc_item(doc_id: int, item_id: int, session: AsyncSession = Depend
 
 @router.post("/docs/{doc_id}/approve")
 async def approve_doc(doc_id: int, session: AsyncSession = Depends(get_db_session)):
+    # Предварительная проверка наличия товаров
+    count_res = await session.execute(select(func.count(InventoryDocItem.id)).where(InventoryDocItem.doc_id == doc_id))
+    if count_res.scalar() == 0:
+        raise HTTPException(400, "Нельзя провести пустой документ! Добавьте товары или удалите черновик.")
+
     try:
         await apply_doc_stock_changes(session, doc_id)
     except ValueError as e:
@@ -953,7 +989,15 @@ async def tc_list(session: AsyncSession = Depends(get_db_session), user=Depends(
     settings = await session.get(Settings, 1) or Settings()
     tcs = (await session.execute(select(TechCard).options(joinedload(TechCard.product)))).scalars().all()
     
-    rows = "".join([f"<tr><td>{tc.id}</td><td><b>{tc.product.name}</b></td><td><a href='/admin/inventory/tech_cards/{tc.id}' class='button-sm'>Редагувати</a></td></tr>" for tc in tcs])
+    rows = "".join([f"""
+    <tr>
+        <td>{tc.id}</td>
+        <td><b>{tc.product.name}</b></td>
+        <td class='actions'>
+            <a href='/admin/inventory/tech_cards/{tc.id}' class='button-sm'>Редагувати</a>
+            <a href='/admin/inventory/tech_cards/delete/{tc.id}' onclick="return confirm('Видалити техкарту?');" class='button-sm danger'><i class="fa-solid fa-trash"></i></a>
+        </td>
+    </tr>""" for tc in tcs])
     
     prods = (await session.execute(select(Product).outerjoin(TechCard).where(TechCard.id == None, Product.is_active == True))).scalars().all()
     prod_opts = "".join([f"<option value='{p.id}'>{p.name}</option>" for p in prods])
@@ -979,6 +1023,14 @@ async def create_tc(product_id: int = Form(...), session: AsyncSession = Depends
     await session.commit()
     await session.refresh(tc)
     return RedirectResponse(f"/admin/inventory/tech_cards/{tc.id}", 303)
+
+@router.get("/tech_cards/delete/{tc_id}")
+async def delete_tech_card(tc_id: int, session: AsyncSession = Depends(get_db_session)):
+    tc = await session.get(TechCard, tc_id)
+    if tc:
+        await session.delete(tc)
+        await session.commit()
+    return RedirectResponse("/admin/inventory/tech_cards", status_code=303)
 
 @router.get("/tech_cards/{tc_id}", response_class=HTMLResponse)
 async def edit_tc(tc_id: int, session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
