@@ -141,7 +141,7 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
 
 async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncSession):
     """
-    Распределяет товары заказа между Кухней и Баром.
+    Распределяет товары заказа между Кухней и Баром для уведомлений.
     """
     query = select(Order).where(Order.id == order.id).options(
         selectinload(Order.items).joinedload(OrderItem.product)
@@ -238,38 +238,116 @@ async def send_group_notification(bot: Bot, order: Order, items: list, role_filt
                 logger.error(f"Не вдалося відправити в TG працівнику {emp.id}: {e}")
 
 
-async def notify_station_completion(bot: Bot, order: Order, area: str, session: AsyncSession):
+async def notify_station_completion(bot: Bot, order: Order, area: str, session: AsyncSession, employee_id: int = None):
     """
-    Сповіщає офіціанта/кур'єра про готовність страви на Кухні або Барі.
+    Сповіщає офіціанта/кур'єра про готовність страв.
+    Якщо вказано employee_id, визначаємо страви, які готуються в цехах, прив'язаних до цього співробітника.
     """
-    await session.refresh(order, ['table', 'accepted_by_waiter', 'courier'])
+    # 1. Завантажуємо замовлення з усіма необхідними зв'язками для формування повідомлення
+    # Використовуємо select для повного завантаження, щоб уникнути MissingGreenlet
+    query = select(Order).where(Order.id == order.id).options(
+        joinedload(Order.table),
+        joinedload(Order.accepted_by_waiter),
+        joinedload(Order.courier),
+        # Важливо: завантажуємо items разом з product, щоб мати доступ до production_warehouse_id
+        selectinload(Order.items).joinedload(OrderItem.product)
+    )
+    result = await session.execute(query)
+    order = result.scalar_one()
     
-    source_label = "🍳 КУХНЯ" if area == 'kitchen' else "🍹 БАР"
-    table_info = f" (Стіл: {html.quote(order.table.name)})" if order.table else ""
-    order_info = f"<b>Замовлення #{order.id}</b>{table_info}"
+    # 2. Визначаємо список готових страв
+    ready_items_names = []
     
-    message_text = f"✅ <b>{source_label} ГОТОВА!</b>\n{order_info}\n<i>Можна забирати.</i>"
-    pwa_msg = f"✅ {source_label} готов: Заказ #{order.id}"
+    if employee_id:
+        # Якщо ми знаємо, хто натиснув кнопку, беремо його налаштування
+        employee = await session.get(Employee, employee_id)
+        
+        # Перевіряємо, чи є у співробітника прив'язка до конкретних цехів (assigned_workshop_ids)
+        if employee and employee.assigned_workshop_ids:
+            workshop_ids = employee.assigned_workshop_ids
+            
+            # Фільтруємо страви замовлення: залишаємо тільки ті, що належать до цехів співробітника
+            for item in order.items:
+                if item.product and item.product.production_warehouse_id in workshop_ids:
+                    # Додаємо назву + модифікатори
+                    name = item.product_name
+                    if item.modifiers:
+                        mod_names = [m.get('name') for m in item.modifiers]
+                        if mod_names:
+                            name += f" ({', '.join(mod_names)})"
+                    ready_items_names.append(f"{name} x{item.quantity}")
+    
+    # 3. Fallback: Якщо список порожній (немає прив'язки або employee_id не передано), використовуємо стару логіку по 'area'
+    if not ready_items_names:
+        if area == 'kitchen':
+            # Всі страви НЕ з бару
+            ready_items_names = [
+                f"{i.product_name} x{i.quantity}" 
+                for i in order.items if i.preparation_area != 'bar'
+            ]
+        elif area == 'bar':
+            # Всі страви з бару
+            ready_items_names = [
+                f"{i.product_name} x{i.quantity}" 
+                for i in order.items if i.preparation_area == 'bar'
+            ]
+        else:
+            # Якщо area незрозуміла, беремо все
+            ready_items_names = [f"{i.product_name} x{i.quantity}" for i in order.items]
 
-    # PWA
+    # 4. Формуємо текст повідомлення
+    if not ready_items_names:
+        # Захист від порожнього повідомлення (наприклад, якщо в замовленні немає страв для цього цеху)
+        return
+
+    items_list_str = "\n".join([f"- {name}" for name in ready_items_names])
+    
+    source_label = "✅ ГОТОВО"
+    # Якщо визначили за employee_id, заголовок загальний, інакше по area
+    if not employee_id:
+        if area == 'kitchen': source_label = "🍳 КУХНЯ ГОТОВА"
+        elif area == 'bar': source_label = "🍹 БАР ГОТОВИЙ"
+    
+    table_info = f" (Стіл: {html.quote(order.table.name)})" if order.table else ""
+    
+    message_text = (
+        f"<b>{source_label}!</b>\n"
+        f"Замовлення #{order.id}{table_info}\n\n"
+        f"<b>Готові страви:</b>\n{items_list_str}\n\n"
+        f"<i>Можна забирати.</i>"
+    )
+    
+    # Коротке повідомлення для PWA (Toast)
+    short_items = ", ".join(ready_items_names[:2])
+    if len(ready_items_names) > 2: short_items += "..."
+    pwa_msg = f"✅ Готово #{order.id}: {short_items}"
+
+    # 5. Відправка повідомлень (PWA)
+    # Офіціанту
     if order.accepted_by_waiter_id:
         await create_staff_notification(session, order.accepted_by_waiter_id, pwa_msg)
+    # Кур'єру
     if order.courier_id:
         await create_staff_notification(session, order.courier_id, pwa_msg)
 
-    # Telegram
+    # 6. Відправка повідомлень (Telegram)
     target_chat_ids = set()
+    
+    # Офіціант
     if order.order_type == 'in_house' and order.accepted_by_waiter and order.accepted_by_waiter.telegram_user_id:
         target_chat_ids.add(order.accepted_by_waiter.telegram_user_id)
+        
+    # Кур'єр
     if order.is_delivery and order.courier and order.courier.telegram_user_id:
         target_chat_ids.add(order.courier.telegram_user_id)
 
+    # Якщо нікого немає (самовивіз без призначеного кур'єра або вільний стіл), шлемо в адмін-чат
     if not target_chat_ids:
         admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
         if admin_chat_id_str:
-             message_text = f"⚠️ {message_text}\n(Виконавець не призначений)"
              try: target_chat_ids.add(int(admin_chat_id_str))
              except ValueError: pass
+             message_text += "\n(Виконавець не призначений)"
 
     for chat_id in target_chat_ids:
         try: await bot.send_message(chat_id, message_text)

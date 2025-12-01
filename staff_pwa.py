@@ -509,6 +509,10 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
 async def _get_production_orders(session: AsyncSession, employee: Employee):
     orders_data = []
     
+    # Получаем ID цехов, назначенных сотруднику
+    my_workshop_ids = employee.assigned_workshop_ids or []
+    
+    # Функция форматирования строки товара
     def format_prod_item(item):
         mods_html = ""
         if item.modifiers:
@@ -516,89 +520,71 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
             mods_html = f"<div style='font-size:0.85em; color:#555; padding-left:10px;'>+ {', '.join(names)}</div>"
         return f"<li><b>{html.escape(item.product_name)}</b> x{item.quantity}{mods_html}</li>"
 
-    # --- КУХНЯ ---
-    if employee.role.can_receive_kitchen_orders:
-        status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))).scalars().all()
-        if status_ids:
-            q = select(Order).options(
-                joinedload(Order.table), 
-                selectinload(Order.items), 
-                joinedload(Order.status)
-            ).where(
-                Order.status_id.in_(status_ids), 
-                Order.kitchen_done == False,
-                Order.status.has(requires_kitchen_notify=True)
-            ).order_by(Order.id.asc())
+    # Загружаем заказы "В работе"
+    # Фильтруем статусы, видимые повару или бармену
+    status_query = select(OrderStatus.id).where(
+        or_(OrderStatus.visible_to_chef == True, OrderStatus.visible_to_bartender == True)
+    )
+    status_ids = (await session.execute(status_query)).scalars().all()
+    
+    if status_ids:
+        q = select(Order).options(
+            joinedload(Order.table), 
+            selectinload(Order.items).joinedload(OrderItem.product), # Важно загрузить product для проверки цеха
+            joinedload(Order.status)
+        ).where(
+            Order.status_id.in_(status_ids), 
+            Order.status.has(requires_kitchen_notify=True),
+            # Показываем заказ, если он еще не помечен как полностью готовый (логику можно усложнить)
+            or_(Order.kitchen_done == False, Order.bar_done == False)
+        ).order_by(Order.id.asc())
+        
+        orders = (await session.execute(q)).scalars().all()
+        
+        if orders:
+            has_my_orders = False
             
-            orders = (await session.execute(q)).scalars().all()
+            for o in orders:
+                # ФИЛЬТРАЦИЯ ТОВАРОВ:
+                # Оставляем только те товары, чей production_warehouse_id есть в списке сотрудника
+                # Если список пуст, показываем всё (или ничего, зависит от политики, тут показываем всё для совместимости)
+                
+                my_items = []
+                for item in o.items:
+                    # ID цеха товара
+                    prod_wh_id = item.product.production_warehouse_id
+                    
+                    # Проверка: показывать если цех совпадает ИЛИ если у сотрудника нет ограничений (пустой список)
+                    if not my_workshop_ids or (prod_wh_id in my_workshop_ids):
+                        my_items.append(item)
+                
+                if my_items:
+                    has_my_orders = True
+                    items_html = "".join([format_prod_item(i) for i in my_items])
+                    
+                    table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
+                    content = f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
+                    
+                    # Кнопка "Готово" отправляет сигнал
+                    btns = f"""
+                    <div style="display:flex; gap:5px;">
+                        <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'workshop')\" style="flex-grow:1;">✅ Готово</button>
+                    </div>
+                    """
+                    
+                    orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
+                        id=o.id, 
+                        time=o.created_at.strftime('%H:%M'), 
+                        badge_class="warning", 
+                        status="В роботі", 
+                        content=content, 
+                        buttons=btns, 
+                        color="#f39c12"
+                    )})
             
-            if orders:
-                orders_data.append({"html": "<div class='table-group-header'>🍳 КУХНЯ</div>"})
-                for o in orders:
-                    items = [i for i in o.items if i.preparation_area != 'bar'] 
-                    if items:
-                        items_html = "".join([format_prod_item(i) for i in items])
-                        table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
-                        content = f"<div class='info-row'><i class='fa-solid fa-utensils'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
-                        
-                        btns = f"""
-                        <div style="display:flex; gap:5px;">
-                            <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'kitchen')\" style="flex-grow:1;">✅ Готово</button>
-                            <a href='/staff/print_recipe/{o.id}' target='_blank' class='action-btn secondary' style='width:auto;' title='Друк чека'><i class="fa-solid fa-print"></i></a>
-                        </div>
-                        """
-                        
-                        orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
-                            id=o.id, 
-                            time=o.created_at.strftime('%H:%M'), 
-                            badge_class="warning", 
-                            status="В роботі", 
-                            content=content, 
-                            buttons=btns, 
-                            color="#f39c12"
-                        )})
+            if not has_my_orders:
+                 return [] # Пустой список, если нет блюд для этого цеха
 
-    # --- БАР ---
-    if employee.role.can_receive_bar_orders:
-        status_ids = (await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_bartender == True))).scalars().all()
-        if status_ids:
-            q = select(Order).options(
-                joinedload(Order.table), 
-                selectinload(Order.items), 
-                joinedload(Order.status)
-            ).where(
-                Order.status_id.in_(status_ids), 
-                Order.bar_done == False,
-                Order.status.has(requires_kitchen_notify=True)
-            ).order_by(Order.id.asc())
-            
-            orders = (await session.execute(q)).scalars().all()
-            
-            if orders:
-                orders_data.append({"html": "<div class='table-group-header'>🍹 БАР</div>"})
-                for o in orders:
-                    items = [i for i in o.items if i.preparation_area == 'bar'] 
-                    if items:
-                        items_html = "".join([format_prod_item(i) for i in items])
-                        table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
-                        content = f"<div class='info-row'><i class='fa-solid fa-martini-glass'></i> {table_info}</div><ul style='padding-left:20px; margin:5px 0;'>{items_html}</ul>"
-                        
-                        btns = f"""
-                        <div style="display:flex; gap:5px;">
-                            <button class='action-btn' onclick=\"performAction('chef_ready', {o.id}, 'bar')\" style="flex-grow:1;">✅ Готово</button>
-                            <a href='/staff/print_recipe/{o.id}' target='_blank' class='action-btn secondary' style='width:auto;'><i class="fa-solid fa-print"></i></a>
-                        </div>
-                        """
-                        
-                        orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
-                            id=o.id, 
-                            time=o.created_at.strftime('%H:%M'), 
-                            badge_class="info", 
-                            status="В роботі", 
-                            content=content, 
-                            buttons=btns, 
-                            color="#3498db"
-                        )})
     return orders_data
 
 async def _get_my_courier_orders(session: AsyncSession, employee: Employee):
@@ -953,12 +939,33 @@ async def handle_action_api(
         if not order: return JSONResponse({"error": "Не знайдено"}, status_code=404)
 
         if action == "chef_ready":
-            if extra == 'kitchen' and not employee.role.can_receive_kitchen_orders: return JSONResponse({"error": "Forbidden"}, 403)
-            if extra == 'bar' and not employee.role.can_receive_bar_orders: return JSONResponse({"error": "Forbidden"}, 403)
+            # Перевірка прав
+            if extra == 'kitchen' and not employee.role.can_receive_kitchen_orders: 
+                return JSONResponse({"error": "Forbidden"}, 403)
+            if extra == 'bar' and not employee.role.can_receive_bar_orders: 
+                return JSONResponse({"error": "Forbidden"}, 403)
+            
+            # Якщо дія "workshop", перевіряємо, чи є у співробітника права на кухню або бар
+            # Або якщо у співробітника assigned_workshop_ids, то він має право
+            if extra == 'workshop' and not (employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders):
+                 return JSONResponse({"error": "Forbidden"}, 403)
 
+            # Оновлення статусів
             if extra == 'kitchen': order.kitchen_done = True
             elif extra == 'bar': order.bar_done = True
-            await notify_station_completion(request.app.state.admin_bot, order, extra, session)
+            # Якщо workshop, ми не оновлюємо глобальні прапори kitchen_done/bar_done автоматично, 
+            # або оновлюємо обидва, якщо цех покриває все? 
+            # Для спрощення, як і просили, просто шлемо повідомлення.
+            
+            # Відправка сповіщення з передачею employee_id для фільтрації страв
+            await notify_station_completion(
+                request.app.state.admin_bot, 
+                order, 
+                extra, 
+                session, 
+                employee_id=employee.id
+            )
+            
             await session.commit()
             return JSONResponse({"success": True})
 

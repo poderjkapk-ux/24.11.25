@@ -87,6 +87,9 @@ class Employee(Base):
     # Дозволяє закріпити повара за конкретним цехом (Кухня, Бар, Піца-цех)
     assigned_warehouse_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
+    # НОВОЕ ПОЛЕ: Список ID цехов, за которые отвечает сотрудник (JSON)
+    assigned_workshop_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    
     is_on_shift: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
     # Баланс готівки "на руках" (борг перед касою)

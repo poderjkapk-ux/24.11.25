@@ -5,7 +5,7 @@ import re
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
@@ -42,9 +42,7 @@ async def admin_employees(
     elif error == "has_debt":
         error_msg = "<div class='card' style='background:#fee2e2; color:#991b1b; margin-bottom:20px; border:1px solid #fecaca;'>⚠️ Неможливо видалити: у співробітника є борг (готівка на руках). Спочатку прийміть кошти в розділі Каса.</div>"
 
-    # Завантажуємо співробітників з ролями та (опціонально) прикріпленим складом
-    # Примітка: relationship до warehouse має бути налаштований в моделі Employee, або ми отримаємо його через ID
-    # Тут ми просто відобразимо інформацію, якщо вона є
+    # Завантажуємо співробітників з ролями
     employees_res = await session.execute(
         select(Employee)
         .options(joinedload(Employee.role))
@@ -60,10 +58,21 @@ async def admin_employees(
     # Завантажуємо виробничі цехи (склади) для привязки поварів
     warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
     warehouses = warehouses_res.scalars().all()
-    wh_options = "<option value=''>-- Не прикріплювати --</option>" + "".join([f'<option value="{w.id}">{html.escape(w.name)}</option>' for w in warehouses])
     
-    # Створюємо мапу імен складів для відображення в таблиці (щоб не робити зайвих запитів)
+    # Створюємо мапу імен складів для відображення в таблиці
     wh_map = {w.id: w.name for w in warehouses}
+
+    # Генеруємо чекбокси для модального вікна додавання
+    wh_checkboxes = ""
+    for w in warehouses:
+        wh_checkboxes += f"""
+        <div class="checkbox-group" style="margin-bottom:5px;">
+            <input type="checkbox" id="new_wh_{w.id}" name="workshop_ids" value="{w.id}">
+            <label for="new_wh_{w.id}" style="margin-bottom:0; font-weight:normal;">{html.escape(w.name)}</label>
+        </div>
+        """
+    if not wh_checkboxes:
+        wh_checkboxes = "<div style='color:#777; font-size:0.9em;'>Немає виробничих цехів</div>"
 
     rows = ""
     for e in employees:
@@ -73,10 +82,22 @@ async def admin_employees(
         # Роль (бейдж)
         role_badge = f"<span class='role-tag'>{html.escape(e.role.name if e.role else 'N/A')}</span>"
         
-        # Цех (якщо є)
+        # Цехи (якщо є)
         wh_info = ""
-        if e.assigned_warehouse_id and e.assigned_warehouse_id in wh_map:
-            wh_info = f"<br><span style='font-size:0.8em; color:#6b7280;'><i class='fa-solid fa-warehouse'></i> {html.escape(wh_map[e.assigned_warehouse_id])}</span>"
+        # Підтримка нового поля (список)
+        if e.assigned_workshop_ids:
+            # assigned_workshop_ids - це список int
+            names = []
+            for wid in e.assigned_workshop_ids:
+                if wid in wh_map:
+                    names.append(html.escape(wh_map[wid]))
+            
+            if names:
+                wh_info = f"<br><span style='font-size:0.8em; color:#6b7280;'><i class='fa-solid fa-fire-burner'></i> {', '.join(names)}</span>"
+        
+        # Підтримка старого поля (для сумісності, якщо міграція не була повною)
+        elif e.assigned_warehouse_id and e.assigned_warehouse_id in wh_map:
+            wh_info = f"<br><span style='font-size:0.8em; color:#6b7280;'><i class='fa-solid fa-fire-burner'></i> {html.escape(wh_map[e.assigned_warehouse_id])}</span>"
         
         # Індикатор боргу (якщо є)
         debt_info = ""
@@ -176,11 +197,11 @@ async def admin_employees(
                         </div>
                     </div>
 
-                    <label for="assigned_warehouse_id">Цех (для Поварів/Барменів):</label>
-                    <select id="assigned_warehouse_id" name="assigned_warehouse_id">
-                        {wh_options}
-                    </select>
-                    <small style="color:#666; display:block; margin-bottom:10px;">Вкажіть, якщо співробітник працює на конкретній точці приготування.</small>
+                    <label>Цехи (для Поварів/Барменів):</label>
+                    <div style="max-height:150px; overflow-y:auto; border:1px solid #ddd; padding:10px; border-radius:5px; background:#f9f9f9; margin-bottom:15px;">
+                        {wh_checkboxes}
+                    </div>
+                    <small style="color:#666; display:block; margin-bottom:10px; margin-top:-10px;">Відмітьте цехи, замовлення з яких повинен бачити цей працівник.</small>
 
                     <label for="password">Пароль (для входу в Staff App)</label>
                     <input type="text" id="password" name="password" placeholder="Залиште пустим, якщо не потрібен">
@@ -204,14 +225,18 @@ async def admin_employees(
 
 @router.post("/admin/add_employee")
 async def add_employee(
+    request: Request,
     full_name: str = Form(...), 
     phone_number: str = Form(None), 
     role_id: int = Form(...), 
-    assigned_warehouse_id: str = Form(None), # Приймаємо як строку, щоб обробити порожнє значення
     password: str = Form(None), 
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
 ):
+    form = await request.form()
+    # Отримуємо список вибраних цехів
+    workshop_ids = [int(x) for x in form.getlist("workshop_ids")]
+
     cleaned_phone = re.sub(r'\D', '', phone_number) if phone_number else None
     if cleaned_phone and not (10 <= len(cleaned_phone) <= 15): 
         raise HTTPException(status_code=400, detail="Невірний формат телефону")
@@ -220,13 +245,13 @@ async def add_employee(
     if password and password.strip():
         pw_hash = get_password_hash(password)
 
-    wh_id = int(assigned_warehouse_id) if assigned_warehouse_id else None
-
     session.add(Employee(
         full_name=full_name, 
         phone_number=cleaned_phone, 
         role_id=role_id, 
-        assigned_warehouse_id=wh_id,
+        assigned_workshop_ids=workshop_ids, # Зберігаємо список ID
+        # assigned_warehouse_id залишаємо пустим або беремо перший, якщо потрібно для сумісності
+        assigned_warehouse_id=workshop_ids[0] if workshop_ids else None, 
         password_hash=pw_hash
     ))
     
@@ -253,14 +278,27 @@ async def get_edit_employee_form(
     roles = roles_res.scalars().all()
     role_options = "".join([f'<option value="{r.id}" {"selected" if r.id == employee.role_id else ""}>{html.escape(r.name)}</option>' for r in roles])
     
-    # Завантажуємо склади для редагування
+    # Завантажуємо цехи для редагування
     warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
     warehouses = warehouses_res.scalars().all()
     
-    wh_options = "<option value=''>-- Не прикріплювати --</option>"
+    # Отримуємо поточні прив'язані цехи
+    current_wh_ids = employee.assigned_workshop_ids or []
+    # Підтримка старого поля, якщо нове пусте
+    if not current_wh_ids and employee.assigned_warehouse_id:
+        current_wh_ids = [employee.assigned_warehouse_id]
+
+    wh_checkboxes = ""
     for w in warehouses:
-        selected = "selected" if employee.assigned_warehouse_id == w.id else ""
-        wh_options += f'<option value="{w.id}" {selected}>{html.escape(w.name)}</option>'
+        checked = "checked" if w.id in current_wh_ids else ""
+        wh_checkboxes += f"""
+        <div class="checkbox-group" style="margin-bottom:5px;">
+            <input type="checkbox" id="edit_wh_{w.id}" name="workshop_ids" value="{w.id}" {checked}>
+            <label for="edit_wh_{w.id}" style="margin-bottom:0; font-weight:normal;">{html.escape(w.name)}</label>
+        </div>
+        """
+    if not wh_checkboxes:
+        wh_checkboxes = "<div style='color:#777; font-size:0.9em;'>Немає виробничих цехів</div>"
 
     body = f"""
     <div class="card" style="max-width: 500px; margin: 0 auto;">
@@ -279,10 +317,10 @@ async def get_edit_employee_form(
             <label>Роль:</label>
             <select name="role_id" required>{role_options}</select>
             
-            <label>Цех (для Поварів/Барменів):</label>
-            <select name="assigned_warehouse_id">
-                {wh_options}
-            </select>
+            <label>Прив'язка до цехів (фільтр замовлень):</label>
+            <div style="max-height:150px; overflow-y:auto; border:1px solid #ddd; padding:10px; border-radius:5px; background:#f9f9f9; margin-bottom:15px;">
+                {wh_checkboxes}
+            </div>
 
             <label>Новий пароль (залиште пустим, якщо не змінюєте):</label>
             <input type="text" name="password" placeholder="******">
@@ -306,15 +344,18 @@ async def get_edit_employee_form(
 
 @router.post("/admin/edit_employee/{employee_id}")
 async def edit_employee(
+    request: Request,
     employee_id: int, 
     full_name: str = Form(...), 
     phone_number: str = Form(None), 
     role_id: int = Form(...), 
-    assigned_warehouse_id: str = Form(None),
     password: str = Form(None),
     session: AsyncSession = Depends(get_db_session), 
     username: str = Depends(check_credentials)
 ):
+    form = await request.form()
+    workshop_ids = [int(x) for x in form.getlist("workshop_ids")]
+
     employee = await session.get(Employee, employee_id)
     if employee:
         cleaned = re.sub(r'\D', '', phone_number) if phone_number else None
@@ -324,7 +365,11 @@ async def edit_employee(
         employee.full_name = full_name
         employee.phone_number = cleaned
         employee.role_id = role_id
-        employee.assigned_warehouse_id = int(assigned_warehouse_id) if assigned_warehouse_id else None
+        
+        # Оновлюємо список цехів
+        employee.assigned_workshop_ids = workshop_ids
+        # Оновлюємо старе поле для сумісності (беремо перший або None)
+        employee.assigned_warehouse_id = workshop_ids[0] if workshop_ids else None
         
         if password and password.strip():
             employee.password_hash = get_password_hash(password)
