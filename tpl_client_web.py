@@ -500,6 +500,12 @@ WEB_ORDER_HTML = """
             </div>
             <div id="cart-items-container" class="cart-items"></div>
             <div class="cart-footer">
+                
+                <div class="cart-total-row" style="font-size: 0.9rem; color: #666; margin-bottom: 5px;">
+                    <span>Доставка:</span>
+                    <span id="cart-delivery-cost">0.00 грн</span>
+                </div>
+                
                 <div class="cart-total-row">
                     <span>Разом:</span>
                     <span id="cart-total-price">0.00 грн</span>
@@ -583,6 +589,21 @@ WEB_ORDER_HTML = """
                     </div>
                 </div>
 
+                <div style="background: #f8fafc; padding: 15px; border-radius: 12px; margin-top: 20px;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                        <span>Сума замовлення:</span>
+                        <span id="checkout-subtotal">0.00 грн</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px; color:#64748b;">
+                        <span>Доставка:</span>
+                        <span id="checkout-delivery">0.00 грн</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-weight:800; font-size:1.2rem; margin-top:10px; border-top:1px dashed #cbd5e1; padding-top:10px;">
+                        <span>Разом до сплати:</span>
+                        <span id="checkout-total">0.00 грн</span>
+                    </div>
+                </div>
+
                 <button type="submit" id="place-order-submit" class="main-btn" style="margin-top:20px;">
                     Підтвердити замовлення
                 </button>
@@ -625,6 +646,10 @@ WEB_ORDER_HTML = """
     </footer>
 
     <script>
+        // NEW: Global Settings from Server
+        const DELIVERY_COST = {delivery_cost_val};
+        const FREE_DELIVERY_FROM = {free_delivery_from_val}; // null or number
+
         document.addEventListener('DOMContentLoaded', () => {{
             let cart = JSON.parse(localStorage.getItem('webCart') || '{{}}');
             let menuData = null;
@@ -861,7 +886,23 @@ WEB_ORDER_HTML = """
                     cartItemsContainer.appendChild(div);
                 }});
                 
-                cartTotalEl.textContent = total.toFixed(2) + ' грн';
+                // --- NEW: Calculate Delivery Cost Logic for Sidebar ---
+                const deliveryCostEl = document.getElementById('cart-delivery-cost');
+                let finalDelivery = 0;
+                
+                // В сайдбаре показываем доставку по умолчанию (или 0, если самовывоз не выбран, но тут нет переключателя)
+                // Для простоты в сайдбаре считаем "как доставку"
+                if (FREE_DELIVERY_FROM !== null && total >= FREE_DELIVERY_FROM) {{
+                    finalDelivery = 0;
+                    if(deliveryCostEl) deliveryCostEl.innerHTML = '<span style="color:#22c55e">Безкоштовно</span>';
+                }} else {{
+                    finalDelivery = DELIVERY_COST;
+                    if(deliveryCostEl) deliveryCostEl.innerText = finalDelivery.toFixed(2) + ' грн';
+                }}
+                
+                if (count === 0) finalDelivery = 0; // Пустая корзина
+                
+                cartTotalEl.textContent = (total + finalDelivery).toFixed(2) + ' грн';
                 cartCountEl.textContent = count;
                 cartCountEl.style.display = count > 0 ? 'flex' : 'none';
                 checkoutBtn.disabled = count === 0;
@@ -886,13 +927,45 @@ WEB_ORDER_HTML = """
             checkoutBtn.onclick = () => {{
                 cartSidebar.classList.remove('open');
                 checkoutModal.classList.add('visible');
+                updateCheckoutTotal(); // Recalculate initially
             }};
+            
+            // --- NEW: Checkout Calculation Logic ---
+            function updateCheckoutTotal() {{
+                const items = Object.values(cart);
+                let subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+                
+                const dType = document.querySelector('input[name="delivery_type"]:checked').value;
+                let deliveryPrice = 0;
+                
+                if (dType === 'delivery') {{
+                    if (FREE_DELIVERY_FROM !== null && subtotal >= FREE_DELIVERY_FROM) {{
+                        deliveryPrice = 0;
+                    }} else {{
+                        deliveryPrice = DELIVERY_COST;
+                    }}
+                }} else {{
+                    deliveryPrice = 0; // Pickup
+                }}
+                
+                document.getElementById('checkout-subtotal').innerText = subtotal.toFixed(2) + ' грн';
+                
+                const delEl = document.getElementById('checkout-delivery');
+                if (deliveryPrice === 0) {{
+                    delEl.innerHTML = '<span style="color:#22c55e">Безкоштовно</span>';
+                }} else {{
+                    delEl.innerText = deliveryPrice.toFixed(2) + ' грн';
+                }}
+                
+                document.getElementById('checkout-total').innerText = (subtotal + deliveryPrice).toFixed(2) + ' грн';
+            }}
             
             document.querySelectorAll('input[name="delivery_type"]').forEach(el => {{
                 el.onchange = (e) => {{
                     const isDelivery = e.target.value === 'delivery';
                     addressGroup.style.display = isDelivery ? 'block' : 'none';
                     document.getElementById('address').required = isDelivery;
+                    updateCheckoutTotal(); // Recalculate on change
                 }};
             }});
             

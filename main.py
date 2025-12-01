@@ -1139,6 +1139,11 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
     social_links_html = "".join(social_links)
     # ---------------------------
 
+    # --- NEW CODE START ---
+    # Подготовка значений для шаблона
+    free_delivery = settings.free_delivery_from if settings.free_delivery_from is not None else "null"
+    # --- NEW CODE END ---
+
     template_params = {
         "logo_html": logo_html,
         "menu_links_html": menu_links_html,
@@ -1163,7 +1168,11 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         "category_nav_text_color": settings.category_nav_text_color or "#333333",
         "header_image_url": settings.header_image_url or "",
         "wifi_ssid": html.escape(settings.wifi_ssid or ""),
-        "wifi_password": html.escape(settings.wifi_password or "")
+        "wifi_password": html.escape(settings.wifi_password or ""),
+        # --- NEW PARAMS ---
+        "delivery_cost_val": float(settings.delivery_cost),
+        "free_delivery_from_val": float(free_delivery) if free_delivery != "null" else "null",
+        # ------------------
     }
 
     return HTMLResponse(content=WEB_ORDER_HTML.format(**template_params))
@@ -1305,7 +1314,25 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                 modifiers=final_modifiers_data # Зберігаємо актуальні дані з БД
             ))
 
+    # --- NEW CODE START ---
+    # --- ДОБАВЛЕНИЕ СТОИМОСТИ ДОСТАВКИ ---
+    settings = await session.get(Settings, 1) or Settings()
+    delivery_cost = Decimal(0)
+
     is_delivery = order_data.get('is_delivery', True)
+
+    if is_delivery:
+        # Проверяем порог бесплатной доставки
+        if settings.free_delivery_from is not None and total_price >= settings.free_delivery_from:
+            delivery_cost = Decimal(0)
+        else:
+            delivery_cost = settings.delivery_cost
+
+    # Обновляем общую сумму
+    total_price += delivery_cost
+    # -------------------------------------
+    # --- NEW CODE END ---
+
     address = order_data.get('address') if is_delivery else None
     order_type = 'delivery' if is_delivery else 'pickup'
     payment_method = order_data.get('payment_method', 'cash')

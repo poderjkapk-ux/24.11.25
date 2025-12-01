@@ -5,6 +5,9 @@ import os
 import secrets
 import aiofiles
 import logging
+from decimal import Decimal
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Form, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,6 +61,9 @@ async def get_design_settings_page(
     # Cache buster для фавіконок, щоб браузер оновлював їх
     cache_buster = secrets.token_hex(4)
 
+    # Підготовка значень доставки для відображення (None -> "")
+    free_delivery_val = settings.free_delivery_from if settings.free_delivery_from is not None else ""
+
     body = ADMIN_DESIGN_SETTINGS_BODY.format(
         site_title=html.escape(settings.site_title or "Назва"),
         seo_description=html.escape(settings.seo_description or ""),
@@ -92,6 +98,11 @@ async def get_design_settings_page(
         wifi_ssid=html.escape(settings.wifi_ssid or ""),
         wifi_password=html.escape(settings.wifi_password or ""),
         # ----------------------------------
+
+        # --- Доставка (НОВЕ) ---
+        delivery_cost=settings.delivery_cost,
+        free_delivery_from=free_delivery_val,
+        # -----------------------
 
         telegram_welcome_message=html.escape(settings.telegram_welcome_message or "Шановний {user_name}, ласкаво просимо! 👋\n\nМи раді вас бачити. Оберіть опцію:"),
     )
@@ -135,7 +146,7 @@ async def save_design_settings(
     favicon_ico: UploadFile = File(None),
     site_webmanifest: UploadFile = File(None),
     
-    # --- PWA Android Icons (НОВІ ПОЛЯ) ---
+    # --- PWA Android Icons ---
     icon_192: UploadFile = File(None),
     icon_512: UploadFile = File(None),
     
@@ -148,6 +159,11 @@ async def save_design_settings(
     wifi_ssid: str = Form(""),
     wifi_password: str = Form(""),
     # --------------------------
+
+    # --- Доставка (НОВЕ) ---
+    delivery_cost: Decimal = Form(0.00),
+    free_delivery_from: Optional[str] = Form(None),
+    # -----------------------
 
     font_family_sans: str = Form(...),
     font_family_serif: str = Form(...),
@@ -221,8 +237,8 @@ async def save_design_settings(
         "favicon-16x16.png": favicon_16x16,
         "favicon.ico": favicon_ico,
         "site.webmanifest": site_webmanifest,
-        "icon-192.png": icon_192, # <--- PWA Android
-        "icon-512.png": icon_512  # <--- PWA Android
+        "icon-192.png": icon_192,
+        "icon-512.png": icon_512
     }
 
     for name, file_obj in icons_to_save.items():
@@ -242,6 +258,18 @@ async def save_design_settings(
     settings.wifi_ssid = wifi_ssid
     settings.wifi_password = wifi_password
     # -------------------------------------
+
+    # --- Збереження Доставки (НОВЕ) ---
+    settings.delivery_cost = delivery_cost
+    
+    if free_delivery_from and free_delivery_from.strip():
+        try:
+            settings.free_delivery_from = Decimal(free_delivery_from)
+        except:
+            settings.free_delivery_from = None
+    else:
+        settings.free_delivery_from = None
+    # ----------------------------------
 
     settings.font_family_sans = font_family_sans
     settings.font_family_serif = font_family_serif

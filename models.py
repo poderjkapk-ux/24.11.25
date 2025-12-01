@@ -382,6 +382,10 @@ class Settings(Base):
     wifi_ssid: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
     wifi_password: Mapped[Optional[str]] = mapped_column(sa.String(100), nullable=True)
 
+    # --- ДОСТАВКА ---
+    delivery_cost: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), default=0.00, server_default=text("0.00"))
+    free_delivery_from: Mapped[Optional[Decimal]] = mapped_column(sa.Numeric(10, 2), nullable=True)
+
 
 async def create_db_tables():
     async with engine.begin() as conn:
