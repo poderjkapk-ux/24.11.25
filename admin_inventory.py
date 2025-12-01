@@ -178,11 +178,23 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
 @router.get("/warehouses", response_class=HTMLResponse)
 async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
-    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
+    
+    # Завантажуємо склади для відображення
+    warehouses = (await session.execute(
+        select(Warehouse).options(joinedload(Warehouse.linked_warehouse)).order_by(Warehouse.name)
+    )).scalars().all()
+    
+    # Завантажуємо склади для вибору "прив'язаного складу" (тільки не виробничі)
+    all_storage_warehouses = (await session.execute(select(Warehouse).where(Warehouse.is_production == False))).scalars().all()
+    storage_opts = "<option value=''>-- Без прив'язки --</option>" + "".join([f"<option value='{w.id}'>{w.name}</option>" for w in all_storage_warehouses])
     
     rows = ""
     for w in warehouses:
         type_badge = "<span class='inv-badge badge-orange'>🍳 Цех (Виробництво)</span>" if w.is_production else "<span class='inv-badge badge-blue'>📦 Склад зберігання</span>"
+        
+        linked_info = ""
+        if w.is_production and w.linked_warehouse:
+            linked_info = f"<br><small style='color:#666;'><i class='fa-solid fa-link'></i> Списує з: <b>{w.linked_warehouse.name}</b></small>"
         
         count_res = await session.execute(select(func.count(Stock.id)).where(Stock.warehouse_id == w.id, Stock.quantity != 0))
         items_count = count_res.scalar() or 0
@@ -190,7 +202,7 @@ async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=
         rows += f"""
         <tr>
             <td><b>{html.escape(w.name)}</b></td>
-            <td>{type_badge}</td>
+            <td>{type_badge}{linked_info}</td>
             <td>{items_count} позицій</td>
             <td style="text-align:right;">
                 <a href="/admin/inventory/warehouses/delete/{w.id}" class="button-sm danger" onclick="return confirm('Видалити склад? Всі залишки будуть втрачені!')"><i class="fa-solid fa-trash"></i></a>
@@ -207,23 +219,38 @@ async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=
         
         <div style="background:#f0f9ff; padding:15px; border-radius:8px; border:1px solid #bae6fd; margin-bottom:20px; font-size:0.9rem;">
             <i class="fa-solid fa-info-circle"></i> 
-            <b>Склад зберігання:</b> Використовується для прийому товару (напр. "Основний склад").<br>
-            <b>Цех (Виробництво):</b> Використовується для приготування страв. Сюди прикріплюються повари та страви.
+            <b>Склад зберігання:</b> Використовується для прийому та зберігання товару.<br>
+            <b>Цех (Виробництво):</b> Використовується для приготування. Можна прив'язати до "Складу зберігання", щоб продукти списувалися звідти автоматично.
         </div>
         
-        <form action="/admin/inventory/warehouses/add" method="post" class="inline-add-form">
+        <form action="/admin/inventory/warehouses/add" method="post" class="inline-add-form" style="flex-wrap:wrap;">
             <strong style="white-space:nowrap;">➕ Новий:</strong>
-            <input type="text" name="name" placeholder="Назва (напр. Бар, Кухня, Піца-цех)" required style="flex:2;">
-            <div class="checkbox-group" style="margin:0; background:white; padding:5px 10px; border-radius:5px; border:1px solid #ddd;">
-                <input type="checkbox" id="is_prod" name="is_production" value="true">
-                <label for="is_prod" style="font-weight:normal; font-size:0.9em;">Це виробничий цех</label>
+            <input type="text" name="name" placeholder="Назва (напр. Гарячий цех, Основний склад)" required style="flex:2;">
+            
+            <div style="display:flex; align-items:center; gap:10px; border:1px solid #ddd; padding:5px; border-radius:5px; background:white;">
+                <div class="checkbox-group" style="margin:0;">
+                    <input type="checkbox" id="is_prod" name="is_production" value="true" onchange="toggleStorageSelect(this)">
+                    <label for="is_prod" style="font-weight:normal; font-size:0.9em; margin-bottom:0;">Це виробничий цех</label>
+                </div>
+                
+                <div id="storage_select_div" style="display:none; border-left:1px solid #ccc; padding-left:10px;">
+                    <small style="display:block; font-size:0.75rem; color:#666;">Списувати з:</small>
+                    <select name="linked_warehouse_id" style="width:150px; margin-bottom:0;">{storage_opts}</select>
+                </div>
             </div>
+            
             <button type="submit" class="button">Додати</button>
         </form>
         
+        <script>
+        function toggleStorageSelect(cb) {{
+            document.getElementById('storage_select_div').style.display = cb.checked ? 'block' : 'none';
+        }}
+        </script>
+        
         <div class="inv-table-wrapper">
             <table class="inv-table">
-                <thead><tr><th>Назва</th><th>Тип</th><th>Завантаженість</th><th></th></tr></thead>
+                <thead><tr><th>Назва</th><th>Тип / Прив'язка</th><th>Завантаженість</th><th></th></tr></thead>
                 <tbody>{rows or "<tr><td colspan='4' style='text-align:center; padding:20px;'>Складів ще немає</td></tr>"}</tbody>
             </table>
         </div>
@@ -232,8 +259,20 @@ async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склади", body=body, site_title=settings.site_title, **get_active_classes()))
 
 @router.post("/warehouses/add")
-async def add_warehouse(name: str = Form(...), is_production: bool = Form(False), session: AsyncSession = Depends(get_db_session)):
-    session.add(Warehouse(name=name, is_production=is_production))
+async def add_warehouse(
+    name: str = Form(...), 
+    is_production: bool = Form(False), 
+    linked_warehouse_id: int = Form(None),
+    session: AsyncSession = Depends(get_db_session)
+):
+    # Якщо склад не виробничий, linked_warehouse_id має бути None
+    linked_id = linked_warehouse_id if is_production else None
+    
+    session.add(Warehouse(
+        name=name, 
+        is_production=is_production,
+        linked_warehouse_id=linked_id
+    ))
     await session.commit()
     return RedirectResponse("/admin/inventory/warehouses", 303)
 
@@ -755,7 +794,6 @@ async def create_doc_action(
     await session.commit()
     return RedirectResponse(f"/admin/inventory/docs/{doc.id}", status_code=303)
 
-# --- НОВЫЙ РОУТ: УДАЛЕНИЕ ЧЕРНОВИКА ---
 @router.get("/docs/delete/{doc_id}")
 async def delete_document(doc_id: int, session: AsyncSession = Depends(get_db_session)):
     doc = await session.get(InventoryDoc, doc_id)

@@ -15,16 +15,23 @@ class Unit(Base):
     is_weighable: Mapped[bool] = mapped_column(sa.Boolean, default=True) # Можно ли делить (кг - да, банка - нет)
 
 class Warehouse(Base):
-    """Склады (Кухня, Бар, Основной склад)"""
+    """Склады и Производственные цеха"""
     __tablename__ = 'warehouses'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
     
-    # Флаг: является ли склад производственным цехом (Кухня/Бар)
-    # Используется для привязки поваров и настройки списания блюд
+    # Флаг: является ли склад производственным цехом (Кухня/Бар), где готовят, но не хранят продукты
     is_production: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
-    stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="warehouse")
+    # --- НОВЕ ПОЛЕ: Склад списання ---
+    # Если это цех (is_production=True), тут указываем ID реального склада, откуда списывать ингредиенты
+    linked_warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
+    
+    # Связь для удобного доступа к родительскому складу
+    linked_warehouse: Mapped["Warehouse"] = relationship("Warehouse", remote_side=[id], foreign_keys=[linked_warehouse_id])
+    
+    # Явно указываем foreign_keys для stocks, чтобы избежать конфликтов
+    stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="warehouse", foreign_keys="Stock.warehouse_id")
 
 class Supplier(Base):
     """Контрагенты (Поставщики)"""
@@ -59,11 +66,11 @@ class Modifier(Base):
     ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'), nullable=True)
     ingredient_qty: Mapped[float] = mapped_column(sa.Numeric(10, 3), default=0.000) # Сколько списывать
     
-    # Склад списання для модифікатора
+    # Склад списания для модификатора
     warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
     ingredient: Mapped["Ingredient"] = relationship("Ingredient")
-    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse", foreign_keys=[warehouse_id])
 
 # --- ТЕХНОЛОГИЧЕСКИЕ КАРТЫ ---
 
@@ -118,7 +125,7 @@ class AutoDeductionRule(Base):
     warehouse_id: Mapped[int] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=False)
     
     ingredient: Mapped["Ingredient"] = relationship("Ingredient")
-    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse", foreign_keys=[warehouse_id])
 
 # --- СКЛАДСКОЙ УЧЕТ ---
 
@@ -130,7 +137,7 @@ class Stock(Base):
     ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'))
     quantity: Mapped[float] = mapped_column(sa.Numeric(10, 3), default=0.000)
     
-    warehouse: Mapped["Warehouse"] = relationship("Warehouse", back_populates="stocks")
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse", back_populates="stocks", foreign_keys=[warehouse_id])
     ingredient: Mapped["Ingredient"] = relationship("Ingredient", back_populates="stocks")
 
 class InventoryDoc(Base):

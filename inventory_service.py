@@ -81,11 +81,9 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
     if not doc: raise ValueError("Документ не знайдено")
     if doc.is_processed: raise ValueError("Документ вже проведено")
 
-    # --- ИСПРАВЛЕНИЕ: Проверка на наличие товаров ---
-    # Запрещаем проведение, если список товаров пуст
+    # Перевірка на наявність товарів
     if not doc.items:
         raise ValueError("Неможливо провести порожній документ. Додайте товари або видаліть чернетку.")
-    # ------------------------------------------------
 
     # Тепер doc.items гарантовано завантажено
     for item in doc.items:
@@ -145,6 +143,8 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
     Автоматичне списання продуктів (і модифікаторів, і упаковки) з відповідних складів/цехів.
     Враховує, чи є інгредієнт "тільки на винос" (is_takeaway).
+    
+    ОНОВЛЕНО: Враховує прив'язку цеху до складу зберігання (linked_warehouse_id).
     """
     if order.is_inventory_deducted:
         logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
@@ -168,16 +168,27 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         if wh_id not in deduction_items_by_wh: deduction_items_by_wh[wh_id] = []
         deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
 
+    # Допоміжна функція для визначення реального складу списання
+    async def get_real_storage_id(wh_id: int) -> int:
+        if not wh_id: return fallback_wh_id
+        warehouse = await session.get(Warehouse, wh_id)
+        if warehouse and warehouse.linked_warehouse_id:
+            return warehouse.linked_warehouse_id
+        return wh_id
+
     # --- ВИЗНАЧАЄМО, ЧИ ЗАМОВЛЕННЯ "НА ВИНОС" ---
     is_takeaway_order = order.is_delivery or order.order_type == 'pickup'
 
     # --- 1. СПИСАННЯ СТРАВ ТА МОДИФІКАТОРІВ ---
     for order_item in order.items:
-        # 1.1 Визначаємо склад списання (Цех) для основної страви
+        # 1.1 Визначаємо цех приготування для основної страви
         product = await session.get(Product, order_item.product_id)
         
-        # Склад страви
+        # Цех страви (вказаний в адмінці)
         prod_wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
+        
+        # Визначаємо реальний склад списання (якщо цех прив'язаний до складу)
+        real_prod_storage_id = await get_real_storage_id(prod_wh_id)
         
         # 1.2 Шукаємо техкарту
         tech_card = await session.scalar(
@@ -197,14 +208,14 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                 gross = Decimal(str(component.gross_amount))
                 qty_item = Decimal(str(order_item.quantity))
                 total_qty = gross * qty_item
-                add_deduction(prod_wh_id, component.ingredient_id, total_qty)
+                add_deduction(real_prod_storage_id, component.ingredient_id, total_qty)
         else:
             logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта.")
         
         # 1.4 Списуємо інгредієнти модифікаторів
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
-                # Отримуємо дані модифікатора з БД, щоб знати його склад (warehouse_id)
+                # Отримуємо дані модифікатора з БД
                 mod_id = mod_data.get('id')
                 if mod_id:
                     modifier_db = await session.get(Modifier, mod_id)
@@ -212,14 +223,15 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                     if modifier_db and modifier_db.ingredient_id:
                         ing_qty_val = modifier_db.ingredient_qty
                         
-                        # Визначаємо склад для модифікатора
-                        # Якщо у модифікатора є свій склад -> беремо його.
-                        # Якщо ні -> беремо склад основної страви.
-                        mod_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
+                        # Визначаємо цех для модифікатора (якщо не вказано, беремо цех страви)
+                        mod_target_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
+                        
+                        # Визначаємо реальний склад для цього цеху
+                        real_mod_storage_id = await get_real_storage_id(mod_target_wh_id)
                         
                         if ing_qty_val:
                             total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                            add_deduction(mod_wh_id, modifier_db.ingredient_id, total_mod_qty)
+                            add_deduction(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty)
 
     # --- 2. СПИСАННЯ УПАКОВКИ (Auto Rules - Загальні правила) ---
     # Визначаємо тригер: delivery, pickup або in_house
@@ -236,8 +248,9 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     rules = rules_res.scalars().all()
     
     for rule in rules:
-        # Логіка: 1 правило = 1 списання на замовлення (наприклад, пакет)
-        add_deduction(rule.warehouse_id, rule.ingredient_id, Decimal(str(rule.quantity)))
+        # Для правил також перевіряємо прив'язку складу (на випадок, якщо правило створено для Цеху)
+        real_rule_storage_id = await get_real_storage_id(rule.warehouse_id)
+        add_deduction(real_rule_storage_id, rule.ingredient_id, Decimal(str(rule.quantity)))
 
     # --- 3. ПРОВЕДЕННЯ ---
     order.is_inventory_deducted = True
@@ -263,6 +276,7 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     """
     Повернення продуктів на склад (при скасуванні замовлення).
     Дзеркальна логіка до deduct_products_by_tech_card.
+    Враховує linked_warehouse_id для повернення на правильний склад.
     """
     if not order.is_inventory_deducted:
         return
@@ -283,6 +297,14 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         if wh_id not in return_items_by_wh: return_items_by_wh[wh_id] = []
         return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': 0})
 
+    # Допоміжна функція для визначення реального складу (копія з функції списання)
+    async def get_real_storage_id(wh_id: int) -> int:
+        if not wh_id: return fallback_wh_id
+        warehouse = await session.get(Warehouse, wh_id)
+        if warehouse and warehouse.linked_warehouse_id:
+            return warehouse.linked_warehouse_id
+        return wh_id
+
     # --- ВИЗНАЧАЄМО, ЧИ ЗАМОВЛЕННЯ БУЛО "НА ВИНОС" ---
     is_takeaway_order = order.is_delivery or order.order_type == 'pickup'
 
@@ -290,6 +312,9 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     for order_item in order.items:
         product = await session.get(Product, order_item.product_id)
         prod_wh_id = product.production_warehouse_id if (product and product.production_warehouse_id) else fallback_wh_id
+        
+        # Знаходимо реальний склад для повернення
+        real_prod_storage_id = await get_real_storage_id(prod_wh_id)
         
         tech_card = await session.scalar(
             select(TechCard).where(TechCard.product_id == order_item.product_id)
@@ -305,7 +330,7 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                 # -------------------------------
 
                 total_qty = Decimal(str(component.gross_amount)) * Decimal(str(order_item.quantity))
-                add_return(prod_wh_id, component.ingredient_id, total_qty)
+                add_return(real_prod_storage_id, component.ingredient_id, total_qty)
         
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
@@ -315,12 +340,13 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                     if modifier_db and modifier_db.ingredient_id:
                         ing_qty_val = modifier_db.ingredient_qty
                         
-                        # Визначаємо той самий склад
-                        mod_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
+                        # Визначаємо цех та реальний склад
+                        mod_target_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
+                        real_mod_storage_id = await get_real_storage_id(mod_target_wh_id)
                         
                         if ing_qty_val:
                             total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                            add_return(mod_wh_id, modifier_db.ingredient_id, total_mod_qty)
+                            add_return(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty)
 
     # --- 2. ПОВЕРНЕННЯ УПАКОВКИ (Auto Rules) ---
     trigger = 'in_house'
@@ -335,7 +361,8 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     rules = rules_res.scalars().all()
     
     for rule in rules:
-        add_return(rule.warehouse_id, rule.ingredient_id, Decimal(str(rule.quantity)))
+        real_rule_storage_id = await get_real_storage_id(rule.warehouse_id)
+        add_return(real_rule_storage_id, rule.ingredient_id, Decimal(str(rule.quantity)))
 
     # --- 3. ПРОВЕДЕННЯ ---
     for wh_id, items in return_items_by_wh.items():
