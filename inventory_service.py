@@ -138,6 +138,7 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
 async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
     Автоматичне списання продуктів (і модифікаторів, і упаковки) з відповідних складів/цехів.
+    Враховує, чи є інгредієнт "тільки на винос" (is_takeaway).
     """
     if order.is_inventory_deducted:
         logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
@@ -161,6 +162,9 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         if wh_id not in deduction_items_by_wh: deduction_items_by_wh[wh_id] = []
         deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
 
+    # --- ВИЗНАЧАЄМО, ЧИ ЗАМОВЛЕННЯ "НА ВИНОС" ---
+    is_takeaway_order = order.is_delivery or order.order_type == 'pickup'
+
     # --- 1. СПИСАННЯ СТРАВ ТА МОДИФІКАТОРІВ ---
     for order_item in order.items:
         # 1.1 Визначаємо склад списання (Цех) для основної страви
@@ -178,6 +182,12 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         # 1.3 Списуємо інгредієнти страви
         if tech_card:
             for component in tech_card.components:
+                # --- ЛОГІКА ТІЛЬКИ НА ВИНОС ---
+                # Якщо компонент (упаковка) тільки на винос, а замовлення В ЗАЛІ -> пропускаємо
+                if component.is_takeaway and not is_takeaway_order:
+                    continue
+                # -------------------------------
+
                 gross = Decimal(str(component.gross_amount))
                 qty_item = Decimal(str(order_item.quantity))
                 total_qty = gross * qty_item
@@ -205,7 +215,7 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                             total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
                             add_deduction(mod_wh_id, modifier_db.ingredient_id, total_mod_qty)
 
-    # --- 2. СПИСАННЯ УПАКОВКИ (Auto Rules) ---
+    # --- 2. СПИСАННЯ УПАКОВКИ (Auto Rules - Загальні правила) ---
     # Визначаємо тригер: delivery, pickup або in_house
     trigger = 'in_house'
     if order.is_delivery: trigger = 'delivery'
@@ -267,6 +277,9 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         if wh_id not in return_items_by_wh: return_items_by_wh[wh_id] = []
         return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': 0})
 
+    # --- ВИЗНАЧАЄМО, ЧИ ЗАМОВЛЕННЯ БУЛО "НА ВИНОС" ---
+    is_takeaway_order = order.is_delivery or order.order_type == 'pickup'
+
     # --- 1. ПОВЕРНЕННЯ СТРАВ ТА МОДИФІКАТОРІВ ---
     for order_item in order.items:
         product = await session.get(Product, order_item.product_id)
@@ -279,6 +292,12 @@ async def reverse_deduction(session: AsyncSession, order: Order):
         
         if tech_card:
             for component in tech_card.components:
+                # --- ЛОГІКА ТІЛЬКИ НА ВИНОС ---
+                # Якщо компонент тільки на винос, а замовлення не було таким -> не повертаємо (бо не списували)
+                if component.is_takeaway and not is_takeaway_order:
+                    continue
+                # -------------------------------
+
                 total_qty = Decimal(str(component.gross_amount)) * Decimal(str(order_item.quantity))
                 add_return(prod_wh_id, component.ingredient_id, total_qty)
         
@@ -297,7 +316,7 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                             total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
                             add_return(mod_wh_id, modifier_db.ingredient_id, total_mod_qty)
 
-    # --- 2. ПОВЕРНЕННЯ УПАКОВКИ ---
+    # --- 2. ПОВЕРНЕННЯ УПАКОВКИ (Auto Rules) ---
     trigger = 'in_house'
     if order.is_delivery: trigger = 'delivery'
     elif order.order_type == 'pickup': trigger = 'pickup'

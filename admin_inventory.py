@@ -993,7 +993,10 @@ async def edit_tc(tc_id: int, session: AsyncSession = Depends(get_db_session), u
         for c in tc.components:
             sub = float(c.gross_amount) * float(c.ingredient.current_cost)
             cost += sub
-            comp_rows += f"<tr><td>{c.ingredient.name}</td><td>{c.gross_amount}</td><td>{c.net_amount}</td><td>{sub:.2f}</td><td><a href='/admin/inventory/tc/del/{c.id}' style='color:red'>X</a></td></tr>"
+            # Додаємо іконку, якщо це тільки на винос
+            takeaway_icon = "<span class='inv-badge badge-blue'><i class='fa-solid fa-box'></i> Тільки винос</span>" if c.is_takeaway else ""
+            
+            comp_rows += f"<tr><td>{c.ingredient.name}</td><td>{c.gross_amount}</td><td>{c.net_amount}</td><td>{takeaway_icon}</td><td>{sub:.2f}</td><td><a href='/admin/inventory/tc/del/{c.id}' style='color:red'>X</a></td></tr>"
 
     body = f"""
     {get_nav('tech_cards')}
@@ -1002,7 +1005,7 @@ async def edit_tc(tc_id: int, session: AsyncSession = Depends(get_db_session), u
         <div style="margin-bottom:20px; font-weight:bold; color:#15803d;">Собівартість: {cost:.2f} грн</div>
         <div class="inv-table-wrapper">
             <table class="inv-table">
-                <thead><tr><th>Інгредієнт</th><th>Брутто</th><th>Нетто</th><th>Вартість</th><th></th></tr></thead>
+                <thead><tr><th>Інгредієнт</th><th>Брутто</th><th>Нетто</th><th>Умови</th><th>Вартість</th><th></th></tr></thead>
                 <tbody>
                     {comp_rows}
                     <tr style="background:#f8f9fa;">
@@ -1010,6 +1013,12 @@ async def edit_tc(tc_id: int, session: AsyncSession = Depends(get_db_session), u
                             <td style="padding:5px;"><select name="ingredient_id" style="width:100%;">{ing_opts}</select></td>
                             <td style="padding:5px;"><input type="number" step="0.001" name="gross" placeholder="Брутто" required style="width:80px;"></td>
                             <td style="padding:5px;"><input type="number" step="0.001" name="net" placeholder="Нетто" required style="width:80px;"></td>
+                            <td style="padding:5px;">
+                                <div style="display:flex; align-items:center; gap:5px;">
+                                    <input type="checkbox" id="takeaway_only" name="is_takeaway" value="true">
+                                    <label for="takeaway_only" style="font-size:0.8rem; margin:0; cursor:pointer;">Тільки винос</label>
+                                </div>
+                            </td>
                             <td>-</td>
                             <td style="padding:5px;"><button type="submit" class="button-sm">+</button></td>
                         </form>
@@ -1017,13 +1026,29 @@ async def edit_tc(tc_id: int, session: AsyncSession = Depends(get_db_session), u
                 </tbody>
             </table>
         </div>
+        <div style="margin-top:10px; font-size:0.85rem; color:#666;">
+            <i class="fa-solid fa-circle-info"></i> Позначте "Тільки винос", якщо цей інгредієнт (наприклад, коробка) має списуватись тільки при Доставці або Самовивозі.
+        </div>
     </div>
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"ТК {tc.product.name}", body=body, site_title=settings.site_title, **get_active_classes()))
 
 @router.post("/tc/{tc_id}/add")
-async def add_tc_comp(tc_id: int, ingredient_id: int = Form(...), gross: float = Form(...), net: float = Form(...), session: AsyncSession = Depends(get_db_session)):
-    session.add(TechCardItem(tech_card_id=tc_id, ingredient_id=ingredient_id, gross_amount=gross, net_amount=net))
+async def add_tc_comp(
+    tc_id: int, 
+    ingredient_id: int = Form(...), 
+    gross: float = Form(...), 
+    net: float = Form(...), 
+    is_takeaway: bool = Form(False),
+    session: AsyncSession = Depends(get_db_session)
+):
+    session.add(TechCardItem(
+        tech_card_id=tc_id, 
+        ingredient_id=ingredient_id, 
+        gross_amount=gross, 
+        net_amount=net,
+        is_takeaway=is_takeaway
+    ))
     await session.commit()
     return RedirectResponse(f"/admin/inventory/tech_cards/{tc_id}", 303)
 
