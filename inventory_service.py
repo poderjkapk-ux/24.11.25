@@ -58,6 +58,7 @@ async def process_movement(session: AsyncSession, doc_type: str, items: list,
         ing_id = int(item['ingredient_id'])
         # Безпечне перетворення в Decimal
         qty = Decimal(str(item['qty']))
+        # ВАЖЛИВО: Отримуємо ціну, якщо вона передана, інакше 0
         price = Decimal(str(item.get('price', 0)))
 
         # Створюємо item і додаємо до списку doc.items
@@ -145,7 +146,7 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     Автоматичне списання продуктів (і модифікаторів, і упаковки) з відповідних складів/цехів.
     Враховує, чи є інгредієнт "тільки на винос" (is_takeaway).
     
-    ОНОВЛЕНО: Враховує прив'язку цеху до складу зберігання (linked_warehouse_id).
+    ОНОВЛЕНО: Враховує прив'язку цеху до складу зберігання (linked_warehouse_id) та ціну списання.
     """
     if order.is_inventory_deducted:
         logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
@@ -164,10 +165,14 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     # Групуємо інгредієнти для списання по складах: {warehouse_id: [items]}
     deduction_items_by_wh = {} 
 
-    def add_deduction(wh_id, ing_id, qty):
+    def add_deduction(wh_id, ing_id, qty, price):
         if not wh_id: wh_id = fallback_wh_id
         if wh_id not in deduction_items_by_wh: deduction_items_by_wh[wh_id] = []
-        deduction_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty})
+        deduction_items_by_wh[wh_id].append({
+            'ingredient_id': ing_id, 
+            'qty': qty, 
+            'price': price
+        })
 
     # Допоміжна функція для визначення реального складу списання
     async def get_real_storage_id(wh_id: int) -> int:
@@ -209,7 +214,10 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                 gross = Decimal(str(component.gross_amount))
                 qty_item = Decimal(str(order_item.quantity))
                 total_qty = gross * qty_item
-                add_deduction(real_prod_storage_id, component.ingredient_id, total_qty)
+                
+                # Ціна списання (собівартість)
+                cost = component.ingredient.current_cost if component.ingredient.current_cost else 0
+                add_deduction(real_prod_storage_id, component.ingredient_id, total_qty, cost)
         else:
             logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта.")
         
@@ -219,7 +227,7 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                 # Отримуємо дані модифікатора з БД
                 mod_id = mod_data.get('id')
                 if mod_id:
-                    modifier_db = await session.get(Modifier, mod_id)
+                    modifier_db = await session.get(Modifier, mod_id, options=[joinedload(Modifier.ingredient)])
                     
                     if modifier_db and modifier_db.ingredient_id:
                         ing_qty_val = modifier_db.ingredient_qty
@@ -232,7 +240,9 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
                         
                         if ing_qty_val:
                             total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                            add_deduction(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty)
+                            # Ціна списання (собівартість)
+                            mod_cost = modifier_db.ingredient.current_cost if (modifier_db.ingredient and modifier_db.ingredient.current_cost) else 0
+                            add_deduction(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty, mod_cost)
 
     # --- 2. СПИСАННЯ УПАКОВКИ (Auto Rules - Загальні правила) ---
     # Визначаємо тригер: delivery, pickup або in_house
@@ -244,14 +254,16 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     rules_res = await session.execute(
         select(AutoDeductionRule).where(
             AutoDeductionRule.trigger_type.in_([trigger, 'all'])
-        )
+        ).options(joinedload(AutoDeductionRule.ingredient))
     )
     rules = rules_res.scalars().all()
     
     for rule in rules:
         # Для правил також перевіряємо прив'язку складу (на випадок, якщо правило створено для Цеху)
         real_rule_storage_id = await get_real_storage_id(rule.warehouse_id)
-        add_deduction(real_rule_storage_id, rule.ingredient_id, Decimal(str(rule.quantity)))
+        # Ціна списання (собівартість)
+        rule_cost = rule.ingredient.current_cost if rule.ingredient.current_cost else 0
+        add_deduction(real_rule_storage_id, rule.ingredient_id, Decimal(str(rule.quantity)), rule_cost)
 
     # --- 3. ПРОВЕДЕННЯ ---
     order.is_inventory_deducted = True
@@ -293,10 +305,10 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     
     return_items_by_wh = {} 
 
-    def add_return(wh_id, ing_id, qty):
+    def add_return(wh_id, ing_id, qty, price):
         if not wh_id: wh_id = fallback_wh_id
         if wh_id not in return_items_by_wh: return_items_by_wh[wh_id] = []
-        return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': 0})
+        return_items_by_wh[wh_id].append({'ingredient_id': ing_id, 'qty': qty, 'price': price})
 
     # Допоміжна функція для визначення реального складу (копія з функції списання)
     async def get_real_storage_id(wh_id: int) -> int:
@@ -331,13 +343,14 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                 # -------------------------------
 
                 total_qty = Decimal(str(component.gross_amount)) * Decimal(str(order_item.quantity))
-                add_return(real_prod_storage_id, component.ingredient_id, total_qty)
+                cost = component.ingredient.current_cost if component.ingredient.current_cost else 0
+                add_return(real_prod_storage_id, component.ingredient_id, total_qty, cost)
         
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
                 mod_id = mod_data.get('id')
                 if mod_id:
-                    modifier_db = await session.get(Modifier, mod_id)
+                    modifier_db = await session.get(Modifier, mod_id, options=[joinedload(Modifier.ingredient)])
                     if modifier_db and modifier_db.ingredient_id:
                         ing_qty_val = modifier_db.ingredient_qty
                         
@@ -347,7 +360,8 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                         
                         if ing_qty_val:
                             total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                            add_return(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty)
+                            mod_cost = modifier_db.ingredient.current_cost if (modifier_db.ingredient and modifier_db.ingredient.current_cost) else 0
+                            add_return(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty, mod_cost)
 
     # --- 2. ПОВЕРНЕННЯ УПАКОВКИ (Auto Rules) ---
     trigger = 'in_house'
@@ -357,13 +371,14 @@ async def reverse_deduction(session: AsyncSession, order: Order):
     rules_res = await session.execute(
         select(AutoDeductionRule).where(
             AutoDeductionRule.trigger_type.in_([trigger, 'all'])
-        )
+        ).options(joinedload(AutoDeductionRule.ingredient))
     )
     rules = rules_res.scalars().all()
     
     for rule in rules:
         real_rule_storage_id = await get_real_storage_id(rule.warehouse_id)
-        add_return(real_rule_storage_id, rule.ingredient_id, Decimal(str(rule.quantity)))
+        rule_cost = rule.ingredient.current_cost if rule.ingredient.current_cost else 0
+        add_return(real_rule_storage_id, rule.ingredient_id, Decimal(str(rule.quantity)), rule_cost)
 
     # --- 3. ПРОВЕДЕННЯ ---
     for wh_id, items in return_items_by_wh.items():
