@@ -2,6 +2,8 @@
 import html
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Form, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -179,7 +181,11 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
 
 # --- WAREHOUSES (Склади та Цеха) ---
 @router.get("/warehouses", response_class=HTMLResponse)
-async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+async def warehouses_list(
+    error: Optional[str] = None,
+    session: AsyncSession = Depends(get_db_session),
+    user=Depends(check_credentials)
+):
     settings = await session.get(Settings, 1) or Settings()
     
     # Завантажуємо склади для відображення
@@ -191,6 +197,15 @@ async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=
     all_storage_warehouses = (await session.execute(select(Warehouse).where(Warehouse.is_production == False))).scalars().all()
     storage_opts = "<option value=''>-- Без прив'язки --</option>" + "".join([f"<option value='{w.id}'>{w.name}</option>" for w in all_storage_warehouses])
     
+    # Обработка ошибки
+    error_html = ""
+    if error == "has_stock":
+        error_html = """
+        <div class='card' style='background:#fee2e2; color:#991b1b; border:1px solid #fecaca; margin-bottom:20px;'>
+            ⚠️ <b>Помилка!</b> Неможливо видалити цей склад, оскільки на ньому є залишки товарів. Спочатку спишіть або перемістіть товари.
+        </div>
+        """
+
     rows = ""
     for w in warehouses:
         type_badge = "<span class='inv-badge badge-orange'>🍳 Цех (Виробництво)</span>" if w.is_production else "<span class='inv-badge badge-blue'>📦 Склад зберігання</span>"
@@ -215,6 +230,7 @@ async def warehouses_list(session: AsyncSession = Depends(get_db_session), user=
     
     body = f"""
     {get_nav('warehouses')}
+    {error_html}
     <div class="card">
         <div class="inv-toolbar">
             <h3><i class="fa-solid fa-warehouse"></i> Склади та Цеха</h3>
@@ -283,6 +299,11 @@ async def add_warehouse(
 async def delete_warehouse(w_id: int, session: AsyncSession = Depends(get_db_session)):
     w = await session.get(Warehouse, w_id)
     if w:
+        # Проверка на наличие остатков
+        stock_count = await session.scalar(select(func.count(Stock.id)).where(Stock.warehouse_id == w_id, Stock.quantity != 0))
+        if stock_count > 0:
+            return RedirectResponse("/admin/inventory/warehouses?error=has_stock", 303)
+            
         await session.delete(w)
         await session.commit()
     return RedirectResponse("/admin/inventory/warehouses", 303)
@@ -1007,7 +1028,7 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
             'supply': ('📥 Прихід', 'badge-green'),
             'writeoff': ('🗑️ Списання', 'badge-red'),
             'transfer': ('🔄 Переміщення', 'badge-blue'),
-            'deduction': ('🤖 Авто', 'badge-gray'),
+            'deduction': ('🤖 Авто-списання', 'badge-gray'),
             'inventory': ('📝 Інвентаризація', 'badge-orange')
         }
         lbl, cls = badges.get(d.doc_type, (d.doc_type, ''))
