@@ -1,9 +1,10 @@
 # inventory_service.py
 
 import logging
+from datetime import datetime
+from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
-from decimal import Decimal
 from sqlalchemy.orm import joinedload, selectinload
 
 from inventory_models import (
@@ -411,3 +412,69 @@ async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
     html += "<hr style='border-top: 1px dashed #000;'><div style='text-align:center; font-size:0.8em;'>Гарної роботи!</div></div>"
     html += "<script>window.print();</script>"
     return html
+
+async def process_inventory_check(session: AsyncSession, doc_id: int):
+    """
+    Проводит документ инвентаризации:
+    1. Сравнивает фактическое кол-во (из документа) с системным (Stock).
+    2. Создает документ списания (writeoff) на недостачу.
+    3. Создает документ прихода (supply) на излишки.
+    4. Обновляет остатки.
+    """
+    # Загружаем документ инвентаризации с позициями
+    stmt = select(InventoryDoc).where(InventoryDoc.id == doc_id).options(selectinload(InventoryDoc.items))
+    result = await session.execute(stmt)
+    inv_doc = result.scalars().first()
+
+    if not inv_doc: raise ValueError("Документ не найден")
+    if inv_doc.is_processed: raise ValueError("Инвентаризация уже проведена")
+    if not inv_doc.source_warehouse_id: raise ValueError("Не указан склад инвентаризации")
+
+    warehouse_id = inv_doc.source_warehouse_id
+    
+    # Списки для корректировок
+    surplus_items = [] # Излишки (нужно оприходовать)
+    shortage_items = [] # Недостача (нужно списать)
+
+    for item in inv_doc.items:
+        actual_qty = Decimal(str(item.quantity)) # То, что насчитали по факту
+        ingredient_id = item.ingredient_id
+        
+        # Получаем текущий системный остаток
+        stock = await get_stock(session, warehouse_id, ingredient_id)
+        system_qty = Decimal(str(stock.quantity))
+        
+        diff = actual_qty - system_qty
+        
+        if diff > 0:
+            # Факта больше, чем в системе -> Оприходовать разницу
+            # Цену берем из текущей себестоимости ингредиента для баланса
+            ing = await session.get(Ingredient, ingredient_id)
+            price = ing.current_cost if ing else 0
+            surplus_items.append({'ingredient_id': ingredient_id, 'qty': diff, 'price': price})
+            
+        elif diff < 0:
+            # Факта меньше, чем в системе -> Списать разницу (diff отрицательный, берем abs)
+            shortage_items.append({'ingredient_id': ingredient_id, 'qty': abs(diff), 'price': 0})
+
+    # Создаем корректирующие документы
+    date_str = datetime.now().strftime('%d.%m %H:%M')
+    
+    if surplus_items:
+        await process_movement(
+            session, 'supply', surplus_items, 
+            target_wh_id=warehouse_id, 
+            # Используем фиктивного поставщика или оставляем пустым, указывая в комменте суть
+            comment=f"Лишки інвентаризації #{inv_doc.id} от {date_str}"
+        )
+        
+    if shortage_items:
+        await process_movement(
+            session, 'writeoff', shortage_items, 
+            source_wh_id=warehouse_id, 
+            comment=f"Нестача інвентаризації #{inv_doc.id} от {date_str}"
+        )
+
+    # Помечаем документ инвентаризации как проведенный
+    inv_doc.is_processed = True
+    await session.commit()

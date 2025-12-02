@@ -16,7 +16,8 @@ from inventory_models import (
 from models import Product, Settings
 from dependencies import get_db_session, check_credentials
 from templates import ADMIN_HTML_TEMPLATE
-from inventory_service import apply_doc_stock_changes
+# Импортируем функции сервиса (добавлена process_inventory_check)
+from inventory_service import apply_doc_stock_changes, process_inventory_check
 from cash_service import add_shift_transaction, get_any_open_shift
 
 router = APIRouter(prefix="/admin/inventory", tags=["inventory"])
@@ -83,6 +84,7 @@ def get_nav(active_tab):
         "modifiers": {"icon": "fa-layer-group", "label": "Модифікатори"},
         "stock": {"icon": "fa-boxes-stacked", "label": "Залишки"},
         "docs": {"icon": "fa-file-invoice", "label": "Накладні"},
+        "checks": {"icon": "fa-clipboard-list", "label": "Інвентаризація"},
         "tech_cards": {"icon": "fa-book-open", "label": "Техкарти"},
         "reports/usage": {"icon": "fa-chart-line", "label": "Рух (Звіт)"},
         "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"},
@@ -166,6 +168,7 @@ async def inv_dashboard(session: AsyncSession = Depends(get_db_session), user=De
             <h3 style="margin-bottom:15px;">⚡️ Швидкі дії</h3>
             <div style="display:flex; flex-direction:column; gap:10px;">
                 <a href="/admin/inventory/docs/create?type=supply" class="button" style="text-align:center; justify-content:center; padding:15px;"><i class="fa-solid fa-truck-ramp-box"></i> Створити Прихід</a>
+                <a href="/admin/inventory/checks" class="button success" style="text-align:center; justify-content:center; padding:15px;"><i class="fa-solid fa-clipboard-check"></i> Інвентаризація</a>
                 <a href="/admin/inventory/docs/create?type=writeoff" class="button danger" style="text-align:center; justify-content:center; padding:15px;"><i class="fa-solid fa-trash"></i> Створити Списання</a>
                 <a href="/admin/inventory/reports/profitability" class="button secondary" style="text-align:center; justify-content:center;"><i class="fa-solid fa-money-bill-trend-up"></i> Перевірити ціни</a>
             </div>
@@ -621,6 +624,256 @@ async def stock_page(warehouse_id: int = Query(None), session: AsyncSession = De
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Залишки", body=body, site_title=settings.site_title, **get_active_classes()))
 
+# --- INVENTORY CHECKS (ИНВЕНТАРИЗАЦИЯ) ---
+
+@router.get("/checks", response_class=HTMLResponse)
+async def inventory_checks_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    query = select(InventoryDoc).options(joinedload(InventoryDoc.source_warehouse))\
+        .where(InventoryDoc.doc_type == 'inventory')\
+        .order_by(desc(InventoryDoc.created_at))
+    
+    docs = (await session.execute(query)).scalars().all()
+    
+    rows = ""
+    for d in docs:
+        status = "<span class='inv-badge badge-green'>Проведено</span>" if d.is_processed else "<span class='inv-badge badge-orange'>В роботі</span>"
+        wh_name = d.source_warehouse.name if d.source_warehouse else '-'
+        
+        rows += f"""
+        <tr onclick="window.location='/admin/inventory/checks/{d.id}'" style="cursor:pointer;">
+            <td><b>#{d.id}</b></td>
+            <td>{d.created_at.strftime('%d.%m.%Y %H:%M')}</td>
+            <td>{html.escape(wh_name)}</td>
+            <td>{html.escape(d.comment or '-')}</td>
+            <td>{status}</td>
+            <td style="text-align:right; color:#94a3b8;"><i class="fa-solid fa-chevron-right"></i></td>
+        </tr>
+        """
+    
+    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
+    wh_opts = "".join([f"<option value='{w.id}'>{w.name}</option>" for w in warehouses])
+
+    body = f"""
+    {get_nav('checks')}
+    
+    <div class="card">
+        <div class="inv-toolbar">
+            <h3><i class="fa-solid fa-clipboard-list"></i> Акти інвентаризації</h3>
+            <button onclick="document.getElementById('new-inv-modal').classList.add('active')" class="button"><i class="fa-solid fa-plus"></i> Почати інвентаризацію</button>
+        </div>
+        
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead><tr><th>ID</th><th>Дата</th><th>Склад</th><th>Коментар</th><th>Статус</th><th></th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='6' style='text-align:center; padding:30px; color:#999;'>Актів ще немає</td></tr>"}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="new-inv-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h4>Нова інвентаризація</h4>
+                <button type="button" class="close-button" onclick="document.getElementById('new-inv-modal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form action="/admin/inventory/checks/create" method="post">
+                    <label>Оберіть склад для перевірки:</label>
+                    <select name="warehouse_id" required style="width:100%; padding:10px; margin-bottom:15px;">
+                        {wh_opts}
+                    </select>
+                    
+                    <label>Коментар:</label>
+                    <input type="text" name="comment" placeholder="Наприклад: Планова ревізія" style="width:100%; margin-bottom:15px;">
+                    
+                    <div style="background:#f0f9ff; padding:10px; border-radius:5px; margin-bottom:15px; font-size:0.9rem;">
+                        <i class="fa-solid fa-info-circle"></i> Буде створено список усіх інгредієнтів. Поточні залишки будуть зафіксовані в момент проведення акту.
+                    </div>
+                    
+                    <button type="submit" class="button" style="width:100%;">Створити бланк</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Інвентаризація", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.post("/checks/create")
+async def create_inventory_check(
+    warehouse_id: int = Form(...), 
+    comment: str = Form(None),
+    session: AsyncSession = Depends(get_db_session)
+):
+    doc = InventoryDoc(
+        doc_type='inventory',
+        source_warehouse_id=warehouse_id, 
+        comment=comment,
+        is_processed=False
+    )
+    session.add(doc)
+    await session.flush()
+    
+    all_ingredients = (await session.execute(select(Ingredient))).scalars().all()
+    
+    for ing in all_ingredients:
+        item = InventoryDocItem(
+            doc_id=doc.id,
+            ingredient_id=ing.id,
+            quantity=0, 
+            price=0
+        )
+        session.add(item)
+    
+    await session.commit()
+    return RedirectResponse(f"/admin/inventory/checks/{doc.id}", 303)
+
+@router.get("/checks/{doc_id}", response_class=HTMLResponse)
+async def view_inventory_check(
+    doc_id: int, 
+    session: AsyncSession = Depends(get_db_session), 
+    user=Depends(check_credentials)
+):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    doc = await session.get(InventoryDoc, doc_id, options=[
+        joinedload(InventoryDoc.items).joinedload(InventoryDocItem.ingredient).joinedload(Ingredient.unit),
+        joinedload(InventoryDoc.source_warehouse)
+    ])
+    if not doc: return HTMLResponse("Документ не знайдено")
+
+    doc.items.sort(key=lambda x: x.ingredient.name)
+
+    rows = ""
+    for item in doc.items:
+        system_qty_display = "-"
+        diff_display = "-"
+        
+        if not doc.is_processed:
+            current_stock = await session.scalar(
+                select(Stock.quantity).where(
+                    Stock.warehouse_id == doc.source_warehouse_id, 
+                    Stock.ingredient_id == item.ingredient_id
+                )
+            ) or 0
+            system_qty_display = f"{current_stock:.3f}"
+            
+            diff = float(item.quantity) - float(current_stock)
+            color = "green" if diff == 0 else ("red" if diff < 0 else "blue")
+            diff_display = f"<span style='color:{color}; font-weight:bold;'>{diff:+.3f}</span>"
+            
+            input_field = f"""
+            <input type="number" step="0.001" name="qty_{item.id}" value="{float(item.quantity)}" 
+                   style="width:100px; padding:5px; border:1px solid #ccc; border-radius:4px; text-align:center; font-weight:bold;">
+            """
+        else:
+            input_field = f"<b>{float(item.quantity)}</b>"
+            diff_display = "Зафіксовано"
+            system_qty_display = "Архів"
+
+        rows += f"""
+        <tr>
+            <td>{html.escape(item.ingredient.name)}</td>
+            <td>{item.ingredient.unit.name}</td>
+            <td style="background:#f9f9f9; color:#555;">{system_qty_display}</td>
+            <td>{input_field}</td>
+            <td>{diff_display}</td>
+        </tr>
+        """
+
+    controls = ""
+    if not doc.is_processed:
+        controls = f"""
+        <div style="background:#fff7ed; border:1px solid #ffedd5; padding:15px; border-radius:8px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <strong style="color:#c2410c;">⚠️ Режим редагування</strong>
+                <p style="margin:5px 0 0; font-size:0.9rem; color:#666;">Введіть <b>фактичну</b> кількість товару. <br>Після натискання "Зберегти" дані оновляться. "Провести" створить коригування.</p>
+            </div>
+            <div style="display:flex; gap:10px;">
+                <button type="submit" form="inv-form" name="action" value="save" class="button secondary"><i class="fa-solid fa-floppy-disk"></i> Зберегти чернетку</button>
+                <button type="submit" form="inv-form" name="action" value="approve" class="button success" onclick="return confirm('Завершити інвентаризацію? Створяться документи списання/оприходування.')"><i class="fa-solid fa-check-double"></i> ПРОВЕСТИ</button>
+            </div>
+        </div>
+        """
+    else:
+        controls = """
+        <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:15px; border-radius:8px; margin-bottom:20px; text-align:center; color:#15803d; font-weight:bold;">
+            <i class="fa-solid fa-lock"></i> Інвентаризацію завершено. Документи створено.
+        </div>
+        """
+
+    body = f"""
+    {get_nav('checks')}
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2><i class="fa-solid fa-list-ol"></i> Акт інвентаризації #{doc.id}</h2>
+            <a href="/admin/inventory/checks" class="button secondary">Назад</a>
+        </div>
+        
+        <div class="doc-meta">
+            <div class="meta-item"><label>Склад:</label> <div>{html.escape(doc.source_warehouse.name)}</div></div>
+            <div class="meta-item"><label>Дата створення:</label> <div>{doc.created_at.strftime('%d.%m.%Y %H:%M')}</div></div>
+            <div class="meta-item"><label>Коментар:</label> <div>{html.escape(doc.comment or '-')}</div></div>
+        </div>
+        
+        {controls}
+        
+        <form id="inv-form" action="/admin/inventory/checks/{doc.id}/update" method="post">
+            <div class="inv-table-wrapper">
+                <table class="inv-table">
+                    <thead>
+                        <tr>
+                            <th>Товар</th>
+                            <th>Од. вим.</th>
+                            <th title="Залишок у програмі на даний момент">Системний</th>
+                            <th title="Скільки реально на полиці" style="width:150px;">ФАКТ (Ввести)</th>
+                            <th>Різниця</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows}</tbody>
+                </table>
+            </div>
+        </form>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"Ревізія #{doc.id}", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.post("/checks/{doc_id}/update")
+async def update_inventory_check(
+    doc_id: int, 
+    request: Request,
+    session: AsyncSession = Depends(get_db_session)
+):
+    form_data = await request.form()
+    action = form_data.get("action")
+    
+    doc = await session.get(InventoryDoc, doc_id, options=[selectinload(InventoryDoc.items)])
+    if not doc or doc.is_processed:
+        raise HTTPException(400, "Документ не найден или уже закрыт")
+
+    for key, value in form_data.items():
+        if key.startswith("qty_"):
+            try:
+                item_id = int(key.split("_")[1])
+                qty = float(value)
+                for item in doc.items:
+                    if item.id == item_id:
+                        item.quantity = qty
+                        break
+            except ValueError:
+                continue
+    
+    await session.commit()
+    
+    if action == "approve":
+        try:
+            await process_inventory_check(session, doc.id)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+            
+    return RedirectResponse(f"/admin/inventory/checks/{doc.id}", 303)
+
 # --- DOCS ---
 @router.get("/docs", response_class=HTMLResponse)
 async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
@@ -636,7 +889,8 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
             'supply': ('📥 Прихід', 'badge-green'),
             'writeoff': ('🗑️ Списання', 'badge-red'),
             'transfer': ('🔄 Переміщення', 'badge-blue'),
-            'deduction': ('🤖 Авто', 'badge-gray')
+            'deduction': ('🤖 Авто', 'badge-gray'),
+            'inventory': ('📝 Інвентаризація', 'badge-orange')
         }
         lbl, cls = badges.get(d.doc_type, (d.doc_type, ''))
         status = "<span class='inv-badge badge-green'>Проведено</span>" if d.is_processed else "<span class='inv-badge badge-orange'>Чернетка</span>"
@@ -645,13 +899,19 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
         if d.doc_type == 'supply': desc_txt = f"{d.supplier.name if d.supplier else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
         elif d.doc_type == 'writeoff': desc_txt = f"Зі складу: {d.source_warehouse.name if d.source_warehouse else '?'}"
         elif d.doc_type == 'transfer': desc_txt = f"{d.source_warehouse.name if d.source_warehouse else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
+        elif d.doc_type == 'inventory': desc_txt = f"Склад: {d.source_warehouse.name if d.source_warehouse else '?'}"
         
         paid_info = ""
         if d.doc_type == 'supply' and d.paid_amount > 0:
             paid_info = f"<br><span style='font-size:0.75rem; color:#15803d;'>💸 Сплачено: {d.paid_amount}</span>"
         
+        # Link logic
+        link = f"/admin/inventory/docs/{d.id}"
+        if d.doc_type == 'inventory':
+            link = f"/admin/inventory/checks/{d.id}"
+
         rows += f"""
-        <tr onclick="window.location='/admin/inventory/docs/{d.id}'" style="cursor:pointer;">
+        <tr onclick="window.location='{link}'" style="cursor:pointer;">
             <td><b>#{d.id}</b></td>
             <td>{d.created_at.strftime('%d.%m %H:%M')}</td>
             <td><span class='inv-badge {cls}'>{lbl}</span></td>
@@ -1197,7 +1457,8 @@ async def inventory_usage_report(
                 'writeoff': ('🗑️ Списання', 'red'),
                 'deduction': ('🤖 Авто-списання', 'gray'),
                 'transfer': ('🔄 Переміщення', 'blue'),
-                'return': ('♻️ Повернення', 'orange')
+                'return': ('♻️ Повернення', 'orange'),
+                'inventory': ('📝 Інвентаризація', 'orange')
             }
             type_label, color = type_map.get(doc.doc_type, (doc.doc_type, 'black'))
             
@@ -1205,12 +1466,30 @@ async def inventory_usage_report(
             details = html.escape(doc.comment or '-')
             if doc.linked_order_id:
                 details = f"<a href='/admin/order/manage/{doc.linked_order_id}'>Замовлення #{doc.linked_order_id}</a>"
-                
+            
+            # Форматирование и определение знака
             qty_formatted = f"{item.quantity:.3f}"
-            # Візуально показуємо мінус для видаткових операцій
-            if doc.doc_type in ['writeoff', 'deduction', 'transfer']:
-                 if doc.doc_type == 'transfer' and not doc.source_warehouse_id: pass
-                 else: qty_formatted = f"-{qty_formatted}"
+            
+            # Для инвентаризации: если было списание, то минус, если приход - плюс.
+            # Но в InventoryDocItem хранится просто кол-во.
+            # В process_inventory_check мы создаем отдельные доки writeoff/supply.
+            # Поэтому сам док 'inventory' обычно не содержит движений (items в нем справочные),
+            # а движения идут через связанные доки. Но здесь мы смотрим InventoryDocItem.
+            # Если это док типа 'inventory', то item.quantity там - это ФАКТ. Это не движение.
+            # Движение создается отдельными доками writeoff/supply.
+            
+            if doc.doc_type == 'inventory':
+                # Для инвентаризации это просто фиксация факта, не движение само по себе (движения идут отдельными документами)
+                # Поэтому можно пометить как "Факт: X"
+                qty_formatted = f"Факт: {qty_formatted}"
+                color = "black"
+            elif doc.doc_type in ['writeoff', 'deduction', 'transfer']:
+                 if doc.doc_type == 'transfer' and not doc.source_warehouse_id: 
+                     # Это входящий трансфер? Нет, трансфер всегда имеет source и target.
+                     pass
+                 else: 
+                     # Это расход
+                     qty_formatted = f"-{qty_formatted}"
             
             report_rows += f"""
             <tr>
