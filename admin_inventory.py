@@ -16,7 +16,7 @@ from inventory_models import (
 from models import Product, Settings
 from dependencies import get_db_session, check_credentials
 from templates import ADMIN_HTML_TEMPLATE
-# Импортируем функции сервиса (добавлена process_inventory_check)
+# Импортируем функции сервиса
 from inventory_service import apply_doc_stock_changes, process_inventory_check
 from cash_service import add_shift_transaction, get_any_open_shift
 
@@ -624,7 +624,9 @@ async def stock_page(warehouse_id: int = Query(None), session: AsyncSession = De
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Залишки", body=body, site_title=settings.site_title, **get_active_classes()))
 
-# --- INVENTORY CHECKS (ИНВЕНТАРИЗАЦИЯ) ---
+# --------------------------------------------------------------------------
+# --- ИНВЕНТАРИЗАЦИЯ (CHECKS) - ОБНОВЛЕННЫЙ БЛОК ---
+# --------------------------------------------------------------------------
 
 @router.get("/checks", response_class=HTMLResponse)
 async def inventory_checks_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
@@ -715,6 +717,7 @@ async def create_inventory_check(
     session.add(doc)
     await session.flush()
     
+    # Добавляем все ингредиенты с 0 кол-вом
     all_ingredients = (await session.execute(select(Ingredient))).scalars().all()
     
     for ing in all_ingredients:
@@ -746,35 +749,51 @@ async def view_inventory_check(
     doc.items.sort(key=lambda x: x.ingredient.name)
 
     rows = ""
+    # Для подсчета в режиме просмотра (если уже проведено)
+    total_diff_money_plus = 0
+    total_diff_money_minus = 0
+
     for item in doc.items:
         system_qty_display = "-"
         diff_display = "-"
+        current_stock_val = 0
         
+        # Получаем цену (себестоимость) для отображения и расчетов
+        cost = float(item.ingredient.current_cost or 0)
+
         if not doc.is_processed:
+            # Если черновик - подгружаем актуальный остаток
             current_stock = await session.scalar(
                 select(Stock.quantity).where(
                     Stock.warehouse_id == doc.source_warehouse_id, 
                     Stock.ingredient_id == item.ingredient_id
                 )
             ) or 0
-            system_qty_display = f"{current_stock:.3f}"
+            current_stock_val = float(current_stock)
+            system_qty_display = f"{current_stock_val:.3f}"
             
-            diff = float(item.quantity) - float(current_stock)
-            color = "green" if diff == 0 else ("red" if diff < 0 else "blue")
-            diff_display = f"<span style='color:{color}; font-weight:bold;'>{diff:+.3f}</span>"
-            
+            # Поле ввода с data-атрибутами для JS
             input_field = f"""
-            <input type="number" step="0.001" name="qty_{item.id}" value="{float(item.quantity)}" 
+            <input type="number" step="0.001" name="qty_{item.id}" 
+                   value="{float(item.quantity)}" 
+                   class="inv-qty-input"
+                   data-system="{current_stock_val}"
+                   data-cost="{cost}"
                    style="width:100px; padding:5px; border:1px solid #ccc; border-radius:4px; text-align:center; font-weight:bold;">
             """
+            
+            # Ячейка разницы (заполняется JS)
+            diff_display = f"<span class='diff-cell' data-id='{item.id}'>0</span>"
+            
         else:
+            # Если проведено - просто текст
             input_field = f"<b>{float(item.quantity)}</b>"
-            diff_display = "Зафіксовано"
+            diff_display = "-" 
             system_qty_display = "Архів"
 
         rows += f"""
-        <tr>
-            <td>{html.escape(item.ingredient.name)}</td>
+        <tr class="inv-row">
+            <td class="name-cell">{html.escape(item.ingredient.name)}</td>
             <td>{item.ingredient.unit.name}</td>
             <td style="background:#f9f9f9; color:#555;">{system_qty_display}</td>
             <td>{input_field}</td>
@@ -783,23 +802,120 @@ async def view_inventory_check(
         """
 
     controls = ""
+    js_script = ""
+    
     if not doc.is_processed:
         controls = f"""
-        <div style="background:#fff7ed; border:1px solid #ffedd5; padding:15px; border-radius:8px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center;">
-            <div>
-                <strong style="color:#c2410c;">⚠️ Режим редагування</strong>
-                <p style="margin:5px 0 0; font-size:0.9rem; color:#666;">Введіть <b>фактичну</b> кількість товару. <br>Після натискання "Зберегти" дані оновляться. "Провести" створить коригування.</p>
+        <div style="margin-bottom:20px;">
+            <div style="background:#fff7ed; border:1px solid #ffedd5; padding:15px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:15px;">
+                <div>
+                    <strong style="color:#c2410c;">⚠️ Режим редагування</strong>
+                    <p style="margin:5px 0 0; font-size:0.9rem; color:#666;">Введіть фактичну кількість.</p>
+                </div>
+                
+                <div style="display:flex; gap:20px; align-items:center;">
+                    <div style="text-align:right; font-size:0.9rem;">
+                        <div>Надлишок: <b style="color:green" id="total-plus">0.00</b> грн</div>
+                        <div>Нестача: <b style="color:red" id="total-minus">0.00</b> грн</div>
+                    </div>
+                    <div style="display:flex; gap:10px;">
+                        <button type="button" onclick="fillSystemValues()" class="button-sm secondary" title="Встановити Факт = Системний для всіх">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Авто-заповнення
+                        </button>
+                        <button type="submit" form="inv-form" name="action" value="save" class="button secondary">
+                            <i class="fa-solid fa-floppy-disk"></i> Зберегти
+                        </button>
+                        <button type="submit" form="inv-form" name="action" value="approve" class="button success" onclick="return confirm('Завершити інвентаризацію? Створяться документи списання/оприходування.')">
+                            <i class="fa-solid fa-check-double"></i> ПРОВЕСТИ
+                        </button>
+                    </div>
+                </div>
             </div>
-            <div style="display:flex; gap:10px;">
-                <button type="submit" form="inv-form" name="action" value="save" class="button secondary"><i class="fa-solid fa-floppy-disk"></i> Зберегти чернетку</button>
-                <button type="submit" form="inv-form" name="action" value="approve" class="button success" onclick="return confirm('Завершити інвентаризацію? Створяться документи списання/оприходування.')"><i class="fa-solid fa-check-double"></i> ПРОВЕСТИ</button>
+            
+            <div style="margin-top:10px; position:relative;">
+                <i class="fa-solid fa-search" style="position:absolute; left:12px; top:12px; color:#999;"></i>
+                <input type="text" id="inv-search" onkeyup="filterTable()" placeholder="Швидкий пошук інгредієнта..." 
+                       style="width:100%; padding:10px 10px 10px 35px; border:1px solid #ccc; border-radius:6px;">
             </div>
         </div>
+        """
+        
+        js_script = """
+        <script>
+            // Живой поиск
+            function filterTable() {
+                const input = document.getElementById('inv-search');
+                const filter = input.value.toLowerCase();
+                const rows = document.getElementsByClassName('inv-row');
+
+                for (let i = 0; i < rows.length; i++) {
+                    const nameCell = rows[i].getElementsByClassName('name-cell')[0];
+                    if (nameCell) {
+                        const txtValue = nameCell.textContent || nameCell.innerText;
+                        rows[i].style.display = txtValue.toLowerCase().indexOf(filter) > -1 ? "" : "none";
+                    }
+                }
+            }
+
+            // Авто-заполнение (Факт = Система)
+            function fillSystemValues() {
+                if(!confirm("Заповнити всі поля 'Факт' системними значеннями? Це зітре введені дані.")) return;
+                
+                const inputs = document.querySelectorAll('.inv-qty-input');
+                inputs.forEach(inp => {
+                    inp.value = inp.dataset.system;
+                });
+                recalcTotals();
+            }
+
+            // Пересчет разницы и итогов
+            function recalcTotals() {
+                let totalPlus = 0;
+                let totalMinus = 0;
+                
+                const inputs = document.querySelectorAll('.inv-qty-input');
+                inputs.forEach(inp => {
+                    const fact = parseFloat(inp.value) || 0;
+                    const sys = parseFloat(inp.dataset.system) || 0;
+                    const cost = parseFloat(inp.dataset.cost) || 0;
+                    const diff = fact - sys;
+                    
+                    // Находим ячейку разницы в той же строке
+                    const row = inp.closest('tr');
+                    const diffCell = row.querySelector('.diff-cell');
+                    
+                    if(diffCell) {
+                        let diffHtml = diff.toFixed(3);
+                        if(diff > 0) {
+                            diffCell.innerHTML = `<span style='color:green'>+${diffHtml}</span>`;
+                            totalPlus += diff * cost;
+                        } else if (diff < 0) {
+                            diffCell.innerHTML = `<span style='color:red'>${diffHtml}</span>`;
+                            totalMinus += Math.abs(diff) * cost;
+                        } else {
+                            diffCell.innerHTML = `<span style='color:#ccc'>0</span>`;
+                        }
+                    }
+                });
+                
+                document.getElementById('total-plus').innerText = totalPlus.toFixed(2);
+                document.getElementById('total-minus').innerText = totalMinus.toFixed(2);
+            }
+
+            // Слушаем изменения во всех инпутах
+            document.addEventListener('DOMContentLoaded', () => {
+                const inputs = document.querySelectorAll('.inv-qty-input');
+                inputs.forEach(inp => {
+                    inp.addEventListener('input', recalcTotals);
+                });
+                recalcTotals(); // Initial calc
+            });
+        </script>
         """
     else:
         controls = """
         <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:15px; border-radius:8px; margin-bottom:20px; text-align:center; color:#15803d; font-weight:bold;">
-            <i class="fa-solid fa-lock"></i> Інвентаризацію завершено. Документи створено.
+            <i class="fa-solid fa-lock"></i> Інвентаризацію завершено. Документи коригування створено.
         </div>
         """
 
@@ -836,6 +952,7 @@ async def view_inventory_check(
             </div>
         </form>
     </div>
+    {js_script}
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"Ревізія #{doc.id}", body=body, site_title=settings.site_title, **get_active_classes()))
 
@@ -852,6 +969,7 @@ async def update_inventory_check(
     if not doc or doc.is_processed:
         raise HTTPException(400, "Документ не найден или уже закрыт")
 
+    # Обновляем количества
     for key, value in form_data.items():
         if key.startswith("qty_"):
             try:
@@ -1331,7 +1449,11 @@ async def delete_tech_card(tc_id: int, session: AsyncSession = Depends(get_db_se
     return RedirectResponse("/admin/inventory/tech_cards", status_code=303)
 
 @router.get("/tech_cards/{tc_id}", response_class=HTMLResponse)
-async def edit_tc(tc_id: int, session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+async def edit_tc(
+    tc_id: int, 
+    session: AsyncSession = Depends(get_db_session), 
+    user=Depends(check_credentials)
+):
     settings = await session.get(Settings, 1) or Settings()
     tc = await session.get(TechCard, tc_id, options=[joinedload(TechCard.product), joinedload(TechCard.components).joinedload(TechCardItem.ingredient).joinedload(Ingredient.unit)])
     

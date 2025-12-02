@@ -415,14 +415,16 @@ async def generate_cook_ticket(session: AsyncSession, order_id: int) -> str:
 
 async def process_inventory_check(session: AsyncSession, doc_id: int):
     """
-    Проводит документ инвентаризации:
+    Проводит документ инвентаризации (Доработанная версия):
     1. Сравнивает фактическое кол-во (из документа) с системным (Stock).
-    2. Создает документ списания (writeoff) на недостачу.
-    3. Создает документ прихода (supply) на излишки.
+    2. Создает документ списания (writeoff) на недостачу по СЕБЕСТОИМОСТИ.
+    3. Создает документ прихода (supply) на излишки по СЕБЕСТОИМОСТИ.
     4. Обновляет остатки.
     """
-    # Загружаем документ инвентаризации с позициями
-    stmt = select(InventoryDoc).where(InventoryDoc.id == doc_id).options(selectinload(InventoryDoc.items))
+    # Загружаем документ инвентаризации с позициями и Ингредиентами (для цен)
+    stmt = select(InventoryDoc).where(InventoryDoc.id == doc_id).options(
+        selectinload(InventoryDoc.items).joinedload(InventoryDocItem.ingredient)
+    )
     result = await session.execute(stmt)
     inv_doc = result.scalars().first()
 
@@ -446,16 +448,25 @@ async def process_inventory_check(session: AsyncSession, doc_id: int):
         
         diff = actual_qty - system_qty
         
+        # Получаем текущую себестоимость для расчетов
+        current_cost = Decimal(str(item.ingredient.current_cost)) if item.ingredient.current_cost else Decimal(0)
+        
         if diff > 0:
-            # Факта больше, чем в системе -> Оприходовать разницу
-            # Цену берем из текущей себестоимости ингредиента для баланса
-            ing = await session.get(Ingredient, ingredient_id)
-            price = ing.current_cost if ing else 0
-            surplus_items.append({'ingredient_id': ingredient_id, 'qty': diff, 'price': price})
+            # Факта больше -> Оприходовать излишки по текущей себестоимости
+            surplus_items.append({
+                'ingredient_id': ingredient_id, 
+                'qty': diff, 
+                'price': current_cost
+            })
             
         elif diff < 0:
-            # Факта меньше, чем в системе -> Списать разницу (diff отрицательный, берем abs)
-            shortage_items.append({'ingredient_id': ingredient_id, 'qty': abs(diff), 'price': 0})
+            # Факта меньше -> Списать разницу
+            # ВАЖНО: Фиксируем цену списания равной себестоимости, чтобы видеть убыток в деньгах
+            shortage_items.append({
+                'ingredient_id': ingredient_id, 
+                'qty': abs(diff), 
+                'price': current_cost 
+            })
 
     # Создаем корректирующие документы
     date_str = datetime.now().strftime('%d.%m %H:%M')
@@ -464,7 +475,6 @@ async def process_inventory_check(session: AsyncSession, doc_id: int):
         await process_movement(
             session, 'supply', surplus_items, 
             target_wh_id=warehouse_id, 
-            # Используем фиктивного поставщика или оставляем пустым, указывая в комменте суть
             comment=f"Лишки інвентаризації #{inv_doc.id} от {date_str}"
         )
         
