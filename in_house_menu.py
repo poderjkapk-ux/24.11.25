@@ -20,6 +20,9 @@ from dependencies import get_db_session
 from templates import IN_HOUSE_MENU_HTML_TEMPLATE
 from notification_manager import distribute_order_to_production, create_staff_notification
 
+# ДОДАНО: Імпорт менеджера WebSocket
+from websocket_manager import manager
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -45,20 +48,17 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         .order_by(Category.sort_order, Category.name)
     )
     
-    # --- ЗМІНА: Завантажуємо продукти РАЗОМ з модифікаторами ---
     products_res = await session.execute(
         select(Product)
-        .options(selectinload(Product.modifiers)) # <-- Важливо: завантажуємо зв'язок
+        .options(selectinload(Product.modifiers))
         .join(Category)
         .where(Product.is_active == True, Category.show_in_restaurant == True)
     )
 
     categories = [{"id": c.id, "name": c.name} for c in categories_res.scalars().all()]
     
-    # Формуємо список продуктів з модифікаторами
     products = []
     for p in products_res.scalars().all():
-        # --- ВИПРАВЛЕННЯ: Безпечне перетворення ціни (обробка None) ---
         mods_list = []
         if p.modifiers:
             for m in p.modifiers:
@@ -76,7 +76,7 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
             "price": float(p.price), 
             "image_url": p.image_url, 
             "category_id": p.category_id,
-            "modifiers": mods_list # <-- Додаємо список модифікаторів
+            "modifiers": mods_list
         })
 
     # Отримуємо історію неоплачених замовлень для цього столика
@@ -100,7 +100,6 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         grand_total += o.total_price
         status_name = o.status.name if o.status else "Обробяється"
         
-        # Генеруємо рядок продуктів з items, включаючи модифікатори
         product_strings = []
         for item in o.items:
             mods_str = ""
@@ -125,7 +124,6 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
 
     site_title = settings.site_title or "Назва"
     
-    # --- Основні кольори ---
     primary_color_val = settings.primary_color or "#5a5a5a"
     secondary_color_val = settings.secondary_color or "#eeeeee"
     background_color_val = settings.background_color or "#f4f4f4"
@@ -133,16 +131,13 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     footer_bg_color_val = settings.footer_bg_color or "#333333"
     footer_text_color_val = settings.footer_text_color or "#ffffff"
 
-    # --- Нові налаштування дизайну ---
     category_nav_bg_color = settings.category_nav_bg_color or "#ffffff"
     category_nav_text_color = settings.category_nav_text_color or "#333333"
     header_image_url = settings.header_image_url or "" 
     
-    # --- Wi-Fi ---
     wifi_ssid = html_module.escape(settings.wifi_ssid or "Не налаштовано")
     wifi_password = html_module.escape(settings.wifi_password or "")
 
-    # --- Шрифти ---
     font_family_sans_val = settings.font_family_sans or "Golos Text"
     font_family_serif_val = settings.font_family_serif or "Playfair Display"
 
@@ -154,10 +149,9 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     
     social_links_html = "".join(social_links)
 
-    # --- FIX: Отримуємо сторінки меню для футера, фільтруємо по show_in_qr ---
     menu_items_res = await session.execute(
         select(MenuItem)
-        .where(MenuItem.show_in_qr == True) # <-- ЗМІНЕНО: Фільтр по QR
+        .where(MenuItem.show_in_qr == True)
         .order_by(MenuItem.sort_order)
     )
     menu_items = menu_items_res.scalars().all()
@@ -165,7 +159,6 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
     menu_links_html = "".join(
         [f'<a href="#" class="footer-link menu-popup-trigger" data-item-id="{item.id}"><i class="fa-solid fa-file-lines"></i> <span>{html_module.escape(item.title)}</span></a>' for item in menu_items]
     )
-    # -----------------------------------------------
 
     return HTMLResponse(content=IN_HOUSE_MENU_HTML_TEMPLATE.format(
         table_name=html_module.escape(table.name),
@@ -178,7 +171,6 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         seo_description=html_module.escape(settings.seo_description or ""),
         seo_keywords=html_module.escape(settings.seo_keywords or ""),
         
-        # Кольори
         primary_color_val=primary_color_val,
         secondary_color_val=secondary_color_val,
         background_color_val=background_color_val,
@@ -186,28 +178,24 @@ async def get_in_house_menu(access_token: str, request: Request, session: AsyncS
         footer_bg_color_val=footer_bg_color_val,
         footer_text_color_val=footer_text_color_val,
         
-        # Нові змінні для шаблону
         category_nav_bg_color=category_nav_bg_color,
         category_nav_text_color=category_nav_text_color,
         header_image_url=header_image_url,
         wifi_ssid=wifi_ssid,
         wifi_password=wifi_password,
         
-        # Шрифти
         font_family_sans_val=font_family_sans_val,
         font_family_serif_val=font_family_serif_val,
         font_family_sans_encoded=url_quote_plus(font_family_sans_val),
         font_family_serif_encoded=url_quote_plus(font_family_serif_val),
 
-        # Контакти
         footer_address=html_module.escape(settings.footer_address or "Адреса не вказана"),
         footer_phone=html_module.escape(settings.footer_phone or ""),
         working_hours=html_module.escape(settings.working_hours or ""),
         social_links_html=social_links_html,
-        menu_links_html=menu_links_html # <-- Passed to template
+        menu_links_html=menu_links_html
     ))
 
-# --- ЕНДПОІНТ ДЛЯ АВТООНОВЛЕННЯ (POLLING) ---
 @router.get("/api/menu/table/{table_id}/updates", response_class=JSONResponse)
 async def get_table_updates(table_id: int, session: AsyncSession = Depends(get_db_session)):
     """Повертає актуальний статус замовлень для оновлення фронтенду."""
@@ -232,7 +220,6 @@ async def get_table_updates(table_id: int, session: AsyncSession = Depends(get_d
         grand_total += o.total_price
         status_name = o.status.name if o.status else "Обробяється"
         
-        # Формуємо рядок продуктів з модифікаторами
         product_strings = []
         for item in o.items:
             mods_str = ""
@@ -269,13 +256,20 @@ async def call_waiter(
 
     waiters = table.assigned_waiters
     message_text = f"❗️ <b>Виклик зі столика: {html_module.escape(table.name)}</b>"
-    
-    # --- PWA NOTIFICATION ---
     pwa_msg = f"🔔 Вас викликають до столика: {table.name}"
+    
+    # 1. PWA Notification (DB)
     for w in waiters:
         if w.is_on_shift:
             await create_staff_notification(session, w.id, pwa_msg)
 
+    # 2. WebSocket Broadcast (Миттєве сповіщення)
+    await manager.broadcast_staff({
+        "type": "new_order", # Використовуємо 'new_order' для відображення Toast
+        "message": f"🔔 СТІЛ {table.name}: Виклик офіціанта!"
+    })
+
+    # 3. Telegram Bot
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     admin_bot = request.app.state.admin_bot
     
@@ -333,12 +327,20 @@ async def request_bill(
                     f"Столик: {html_module.escape(table.name)}\n"
                     f"Сума до сплати: <b>{total_bill} грн</b>")
 
-    # --- PWA NOTIFICATION ---
     pwa_msg = f"💰 Просять рахунок ({method_text}): Стіл {table.name}. Сума: {total_bill} грн"
+    
+    # 1. PWA Notification
     for w in waiters:
         if w.is_on_shift:
             await create_staff_notification(session, w.id, pwa_msg)
 
+    # 2. WebSocket Broadcast
+    await manager.broadcast_staff({
+        "type": "new_order", # Використовуємо 'new_order' для Toast
+        "message": f"💰 СТІЛ {table.name}: Рахунок ({method_text})"
+    })
+
+    # 3. Telegram Bot
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     admin_bot = request.app.state.admin_bot
     
@@ -399,7 +401,6 @@ async def place_in_house_order(
             
             # --- Обробка модифікаторів ---
             modifiers_data = item.get('modifiers', [])
-            # --- ВИПРАВЛЕННЯ: Обробка None ---
             mods_price = Decimal(0)
             if modifiers_data:
                 for m in modifiers_data:
@@ -410,7 +411,6 @@ async def place_in_house_order(
             item_price = product.price + mods_price
             total_price += item_price * qty
             
-            # Формуємо текст для сповіщення
             mod_names = [m.get('name') for m in modifiers_data]
             mod_str = f" (+ {', '.join(mod_names)})" if mod_names else ""
             
@@ -457,6 +457,13 @@ async def place_in_house_order(
     )
     session.add(history_entry)
     await session.commit()
+
+    # --- WEBSOCKET BROADCAST (Миттєве сповіщення персоналу) ---
+    await manager.broadcast_staff({
+        "type": "new_order",
+        "order_id": order.id,
+        "message": f"📝 Замовлення #{order.id} (Стіл: {table.name})"
+    })
 
     # --- Telegram сповіщення ---
     products_display = "\n- ".join(products_str_for_msg)

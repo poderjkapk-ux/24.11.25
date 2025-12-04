@@ -12,6 +12,9 @@ from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotificat
 # --- СКЛАД: Импорт функций списания и возврата ---
 from inventory_service import deduct_products_by_tech_card, reverse_deduction
 
+# ДОДАНО: Імпорт менеджера WebSocket для відправки подій
+from websocket_manager import manager
+
 logger = logging.getLogger(__name__)
 
 async def create_staff_notification(session: AsyncSession, employee_id: int, message: str):
@@ -30,6 +33,7 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
     Отправляет уведомление о НОВОМ заказе:
     1. PWA: Операторам.
     2. Telegram: В админ-чат и операторам в личные.
+    3. WebSocket: Мгновенное обновление интерфейса.
     """
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     
@@ -137,6 +141,22 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
         await distribute_order_to_production(admin_bot, order, session)
     else:
         logger.info(f"Замовлення #{order.id} створено, чекає обробки.")
+
+    # --- 4. WEBSOCKET BROADCAST ---
+    # Повідомляємо весь персонал (щоб оновити списки замовлень)
+    await manager.broadcast_staff({
+        "type": "new_order",
+        "order_id": order.id,
+        "message": f"Нове замовлення #{order.id}"
+    })
+    
+    # Повідомляємо клієнта за столиком (щоб статус змінився на екрані)
+    if order.table_id:
+        await manager.broadcast_table(order.table_id, {
+            "type": "order_update",
+            "order_id": order.id,
+            "status": "Новий"
+        })
 
 
 async def distribute_order_to_production(bot: Bot, order: Order, session: AsyncSession):
@@ -353,6 +373,14 @@ async def notify_station_completion(bot: Bot, order: Order, area: str, session: 
         try: await bot.send_message(chat_id, message_text)
         except Exception: pass
 
+    # --- 7. WEBSOCKET BROADCAST ---
+    # Сповіщаємо весь персонал про готовність (щоб у офіціанта/кур'єра з'явилися галочки)
+    await manager.broadcast_staff({
+        "type": "item_ready",
+        "order_id": order.id,
+        "area": area
+    })
+
 
 async def notify_all_parties_on_status_change(
     order: Order,
@@ -470,3 +498,20 @@ async def notify_all_parties_on_status_change(
         client_text = f"Статус вашого замовлення #{order.id} змінено на: <b>{new_status.name}</b>"
         try: await client_bot.send_message(order.user_id, client_text)
         except Exception: pass
+
+    # --- 8. WEBSOCKET BROADCAST ---
+    # Оновлення списків замовлень у персоналу
+    await manager.broadcast_staff({
+        "type": "order_updated",
+        "order_id": order.id,
+        "new_status": new_status.name
+    })
+
+    # Оновлення статусу у клієнта за столиком
+    if order.table_id:
+        await manager.broadcast_table(order.table_id, {
+            "type": "order_update",
+            "order_id": order.id,
+            "status": new_status.name,
+            "total_price": float(order.total_price)
+        })

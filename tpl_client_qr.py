@@ -450,6 +450,7 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
         let cart = {{}};
         
         let currentDetailProduct = null;
+        let ws = null; // WebSocket variable
 
         document.addEventListener('DOMContentLoaded', () => {{
             // Restore cart
@@ -467,8 +468,43 @@ IN_HOUSE_MENU_HTML_TEMPLATE = """
             updateCartView();
             initListeners();
             
-            setInterval(fetchUpdates, 5000);
+            // Initial fetch
+            fetchUpdates(); 
+            
+            // WebSocket connection for live updates
+            connectTableWebSocket();
         }});
+
+        function connectTableWebSocket() {{
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${{protocol}}//${{window.location.host}}/ws/table/${{TABLE_ID}}`;
+            
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {{ console.log("Table WS Connected"); }};
+
+            ws.onmessage = (event) => {{
+                try {{
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'order_update') {{
+                        // При обновлении заказа перезапрашиваем историю
+                        fetchUpdates();
+                    }}
+                }} catch (e) {{ console.error("WS Parse Error", e); }}
+            }};
+
+            ws.onclose = () => {{
+                console.log("WS Closed. Reconnecting...");
+                setTimeout(connectTableWebSocket, 3000);
+            }};
+            
+            ws.onerror = (err) => {{
+                console.error("WS Error:", err);
+                ws.close();
+            }};
+        }}
 
         function initListeners() {{
             // Sidebar

@@ -16,7 +16,8 @@ from typing import Dict, Any, Optional
 from urllib.parse import quote_plus as url_quote_plus
 
 # --- FastAPI & Uvicorn ---
-from fastapi import FastAPI, Form, Request, Depends, HTTPException, File, UploadFile, Body, Query
+# ДОДАНО: WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, Request, Depends, HTTPException, File, UploadFile, Body, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -54,6 +55,9 @@ from notification_manager import notify_new_order_to_staff
 from admin_clients import router as clients_router
 from dependencies import get_db_session, check_credentials
 from auth_utils import get_password_hash 
+
+# ДОДАНО: Імпорт менеджера WebSocket
+from websocket_manager import manager
 
 # --- ІМПОРТИ РОУТЕРІВ ---
 from admin_order_management import router as admin_order_router
@@ -1078,6 +1082,35 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- WEBSOCKET ENDPOINTS ---
+
+@app.websocket("/ws/staff")
+async def websocket_staff_endpoint(websocket: WebSocket):
+    """WebSocket для персоналу (PWA)"""
+    await manager.connect_staff(websocket)
+    try:
+        while True:
+            # Просто підтримуємо з'єднання, можна обробляти вхідні повідомлення (ping/pong)
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_staff(websocket)
+    except Exception as e:
+        logging.error(f"Staff WS Error: {e}")
+        manager.disconnect_staff(websocket)
+
+@app.websocket("/ws/table/{table_id}")
+async def websocket_table_endpoint(websocket: WebSocket, table_id: int):
+    """WebSocket для клієнтів (QR Меню)"""
+    await manager.connect_table(websocket, table_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_table(websocket, table_id)
+    except Exception as e:
+        logging.error(f"Table WS Error: {e}")
+        manager.disconnect_table(websocket, table_id)
 
 app.include_router(in_house_menu_router)
 app.include_router(clients_router)

@@ -391,6 +391,10 @@ STAFF_DASHBOARD_HTML = """
         let selectedProduct = null;
         let selectedModifiers = new Set();
 
+        // WebSocket variables
+        let ws = null;
+        let wsRetryInterval = 1000;
+
         document.addEventListener('DOMContentLoaded', () => {{
             const activeBtn = document.querySelector('.nav-item.active');
             if (activeBtn) {{
@@ -402,18 +406,72 @@ STAFF_DASHBOARD_HTML = """
             fetchData();
             updateNotifications();
             
-            setInterval(fetchData, 7000); 
-            setInterval(updateNotifications, 4000); 
+            // --- WEBSOCKET CONNECTION ---
+            connectWebSocket();
+            // ---------------------------
+            
+            // Оставляем только обновление уведомлений (колокольчик) через редкий поллинг
+            setInterval(updateNotifications, 15000); 
             
             document.addEventListener("visibilitychange", async () => {{
                 if (document.visibilityState === 'visible') {{
                     requestWakeLock();
                     updateNotifications();
+                    // Проверяем соединение при возврате
+                    if (!ws || ws.readyState === WebSocket.CLOSED) connectWebSocket();
                 }}
             }});
             
             document.body.addEventListener('click', initNotifications, {{ once: true }});
         }});
+
+        function connectWebSocket() {{
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${{protocol}}//${{window.location.host}}/ws/staff`;
+            
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {{
+                console.log("WebSocket Connected");
+                wsRetryInterval = 1000; 
+                document.getElementById('loading-indicator').style.display = 'none';
+            }};
+
+            ws.onmessage = (event) => {{
+                try {{
+                    const data = JSON.parse(event.data);
+                    console.log("WS Message:", data);
+
+                    // Если пришло событие обновления заказа/очереди
+                    if (data.type === 'new_order' || data.type === 'order_updated' || data.type === 'item_ready') {{
+                        // Если это "новый заказ" - показываем уведомление
+                        if (data.type === 'new_order') showToast("🔔 " + data.message);
+                        else showToast("🔄 Оновлення даних...");
+                        
+                        // Обновляем текущий список
+                        fetchData(); 
+                        
+                        // Если открыто модальное окно с этим заказом - обновляем его
+                        if (editingOrderId && data.order_id == editingOrderId) {{
+                            openOrderEditModal(editingOrderId, true); 
+                        }}
+                    }}
+                }} catch (e) {{ console.error("WS Parse Error", e); }}
+            }};
+
+            ws.onclose = () => {{
+                console.log("WebSocket Disconnected. Reconnecting...");
+                setTimeout(connectWebSocket, wsRetryInterval);
+                wsRetryInterval = Math.min(wsRetryInterval * 2, 10000); 
+            }};
+
+            ws.onerror = (err) => {{
+                console.error("WS Error:", err);
+                ws.close();
+            }};
+        }}
 
         function initNotifications() {{
             if (!("Notification" in window)) return;
@@ -526,7 +584,9 @@ STAFF_DASHBOARD_HTML = """
             editingOrderId = orderId;
             const modal = document.getElementById('staff-modal');
             const body = document.getElementById('modal-body');
-            body.innerHTML = '<div style="text-align:center; padding:50px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження...</div>';
+            // Только если открываем с нуля, показываем лоадер
+            if(!keepCart) body.innerHTML = '<div style="text-align:center; padding:50px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження...</div>';
+            
             modal.classList.add('active');
             
             try {{
