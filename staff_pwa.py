@@ -34,7 +34,7 @@ from notification_manager import (
     notify_station_completion,
     create_staff_notification
 )
-from cash_service import link_order_to_shift, register_employee_debt
+from cash_service import link_order_to_shift, register_employee_debt, unregister_employee_debt
 
 # Настройка роутера и логгера
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
@@ -923,11 +923,31 @@ async def update_order_status_api(
 
     old_status = order.status.name
     new_status = await session.get(OrderStatus, new_status_id)
+    
+    # --- ВАЖЛИВО: Перевірка дозволу на зміну статусу ---
+    # Дозволяємо перехід з "Виконано" в "Скасовано" або "Активний", щоб виправити помилку.
+    # Забороняємо інші переходи для закритих замовлень.
+    
+    is_already_closed = order.status.is_completed_status or order.status.is_cancelled_status
+    is_moving_to_cancelled = new_status.is_cancelled_status
+    is_moving_to_active = not (new_status.is_completed_status or new_status.is_cancelled_status)
+
+    if is_already_closed:
+        if not (is_moving_to_cancelled or is_moving_to_active):
+             return JSONResponse({"error": "Замовлення закрите. Зміна заборонена."}, 400)
+
+    # --- ЛОГІКА КАСИ: СКАСУВАННЯ БОРГУ ---
+    # Якщо переходимо з "Виконано" (де гроші повісили на кур'єра) в "Скасовано"
+    if order.status.is_completed_status and new_status.is_cancelled_status:
+        await unregister_employee_debt(session, order)
+    # -------------------------------------
+
     order.status_id = new_status_id
     
     if payment_method:
         order.payment_method = payment_method
 
+    # --- ЛОГІКА КАСИ: НАРАХУВАННЯ БОРГУ ---
     if new_status.is_completed_status:
         if order.is_delivery:
              if order.courier_id:
@@ -943,6 +963,7 @@ async def update_order_status_api(
                 elif order.accepted_by_waiter_id: debtor_id = order.accepted_by_waiter_id
             
             await register_employee_debt(session, order, debtor_id)
+    # -----------------------------------------------
 
     session.add(OrderStatusHistory(order_id=order.id, status_id=new_status_id, actor_info=f"{employee.full_name} (PWA)"))
     await session.commit()

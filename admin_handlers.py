@@ -19,11 +19,9 @@ from decimal import Decimal
 
 from models import Order, Product, Category, OrderStatus, Employee, Role, Settings, OrderStatusHistory, OrderItem
 from courier_handlers import _generate_waiter_order_view
-# --- ЗМІНА: Додано імпорт create_staff_notification ---
 from notification_manager import notify_all_parties_on_status_change, create_staff_notification
-# ------------------------------------------------------------
-# --- КАСА: Імпорт функції прив'язки ---
-from cash_service import link_order_to_shift, register_employee_debt
+# --- КАСА: Імпорт сервісів ---
+from cash_service import link_order_to_shift, register_employee_debt, unregister_employee_debt
 
 logger = logging.getLogger(__name__)
 
@@ -196,15 +194,34 @@ def register_admin_handlers(dp: Dispatcher):
         if not order: return await callback.answer("Замовлення не знайдено!", show_alert=True)
         if order.status_id == new_status_id: return await callback.answer("Статус вже встановлено.")
 
-        # --- БЛОКУВАННЯ ЗАВЕРШЕНИХ ---
-        if order.status.is_completed_status or order.status.is_cancelled_status:
-             return await callback.answer("⛔️ Замовлення вже закрите. Зміна статусу заборонена.", show_alert=True)
-        # -----------------------------
-
         new_status = await session.get(OrderStatus, new_status_id)
         if not new_status: return await callback.answer("Статус не знайдено в БД.", show_alert=True)
 
-        # --- КАСА: АВТОМАТИЧНА ПРИВ'ЯЗКА ПРИ ОПЛАТІ ---
+        # --- ВАЖЛИВО: Перевірка для розблокування змін ---
+        # Якщо замовлення закрите (Completed/Cancelled), ми дозволяємо зміну ТІЛЬКИ якщо:
+        # 1. Адміністратор хоче скасувати помилково завершене замовлення (Completed -> Cancelled).
+        # 2. Адміністратор хоче повернути замовлення в роботу (Completed/Cancelled -> Active).
+        
+        # Забороняємо зміну, якщо воно вже закрите, і ми намагаємося перевести його в інший статус, 
+        # який НЕ є скасуванням (і не є поверненням в роботу - тут спрощена логіка).
+        # В даному випадку дозволяємо перехід Completed -> Cancelled для виправлення боргів.
+        
+        is_already_closed = order.status.is_completed_status or order.status.is_cancelled_status
+        is_moving_to_cancelled = new_status.is_cancelled_status
+        is_moving_to_active = not (new_status.is_completed_status or new_status.is_cancelled_status)
+
+        if is_already_closed:
+            if not (is_moving_to_cancelled or is_moving_to_active):
+                 return await callback.answer("⛔️ Замовлення вже закрите. Зміна статусу заборонена.", show_alert=True)
+
+        # --- ЛОГІКА КАСИ: СКАСУВАННЯ БОРГУ ---
+        # Якщо переходимо з "Виконано" (де гроші повісили на кур'єра) в "Скасовано"
+        if order.status.is_completed_status and new_status.is_cancelled_status:
+            await unregister_employee_debt(session, order)
+        # -------------------------------------
+
+        # --- ЛОГІКА КАСИ: НАРАХУВАННЯ БОРГУ ---
+        # Якщо переходимо в "Виконано"
         if new_status.is_completed_status:
             await link_order_to_shift(session, order, employee.id)
             
@@ -214,7 +231,7 @@ def register_admin_handlers(dp: Dispatcher):
                 elif order.accepted_by_waiter_id:
                     await register_employee_debt(session, order, order.accepted_by_waiter_id)
                 else:
-                    order.is_cash_turned_in = True
+                    order.is_cash_turned_in = True # Адмін закрив сам, гроші в касі
         # -----------------------------------------------
         
         old_status_name = order.status.name if order.status else 'Невідомий'
@@ -245,6 +262,8 @@ def register_admin_handlers(dp: Dispatcher):
              msg += " ⚠️ Гроші записані в борг виконавцю."
         elif new_status.is_completed_status:
              msg += " 💰 Гроші враховано."
+        elif order.status.is_completed_status and new_status.is_cancelled_status:
+             msg += " ↩️ Борг співробітника анульовано."
              
         await callback.answer(msg)
 
@@ -261,9 +280,10 @@ def register_admin_handlers(dp: Dispatcher):
         order = await session.get(Order, order_id, options=[joinedload(Order.status)])
         if not order: return
 
-        if order.status.is_completed_status or order.status.is_cancelled_status:
-            await message.answer("Помилка: Замовлення вже закрите.")
-            return
+        # Якщо намагаємося скасувати вже закрите - перевіряємо, чи треба списати борг
+        if order.status.is_completed_status:
+             # Логіка списання боргу
+             await unregister_employee_debt(session, order)
 
         old_status_name = order.status.name if order.status else 'Невідомий'
         
@@ -298,8 +318,9 @@ def register_admin_handlers(dp: Dispatcher):
         if not order: return await callback.answer("Замовлення не знайдено!", show_alert=True)
         
         # --- БЛОКУВАННЯ РЕДАГУВАННЯ ---
+        # Тут залишаємо блокування редагування вмісту, бо це складніше відкотити фінансово
         if order.status.is_completed_status or order.status.is_cancelled_status:
-            return await callback.answer("⛔️ Неможливо редагувати закрите замовлення.", show_alert=True)
+            return await callback.answer("⛔️ Неможливо редагувати закрите замовлення. Спочатку змініть статус на активний.", show_alert=True)
         
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="👤 Клієнт", callback_data=f"edit_customer_{order_id}"),

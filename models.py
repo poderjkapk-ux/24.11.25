@@ -10,12 +10,12 @@ import secrets
 import os
 from decimal import Decimal
 
-# Если нужно для тайп-хинтинга (чтобы IDE понимала, что такое Modifier),
-# но избегая циклического импорта в рантайме
+# Якщо потрібно для тайп-хінтингу (щоб IDE розуміла, що таке Modifier),
+# але уникаючи циклічного імпорту в рантаймі
 if TYPE_CHECKING:
     from inventory_models import Modifier
 
-# Чтение DATABASE_URL из переменных окружения
+# Зчитування DATABASE_URL зі змінних оточення
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     raise ValueError("Помилка: Змінна оточення DATABASE_URL не встановлена.")
@@ -84,10 +84,10 @@ class Employee(Base):
     role: Mapped["Role"] = relationship("Role", back_populates="employees", lazy='selectin')
     
     # --- НОВЕ: Прив'язка до складу/цеху ---
-    # Дозволяє закріпити повара за конкретним цехом (Кухня, Бар, Піца-цех)
+    # Дозволяє закріпити кухаря за конкретним цехом (Кухня, Бар, Піца-цех)
     assigned_warehouse_id: Mapped[Optional[int]] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
-    # НОВОЕ ПОЛЕ: Список ID цехов, за которые отвечает сотрудник (JSON)
+    # НОВЕ ПОЛЕ: Список ID цехів, за які відповідає співробітник (JSON)
     assigned_workshop_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     
     is_on_shift: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
@@ -103,6 +103,32 @@ class Employee(Base):
     
     # Зв'язок зі сповіщеннями
     notifications: Mapped[List["StaffNotification"]] = relationship("StaffNotification", back_populates="employee")
+    
+    # --- НОВЕ: Зв'язок з історією балансу ---
+    balance_history: Mapped[List["BalanceHistory"]] = relationship("BalanceHistory", back_populates="employee", cascade="all, delete-orphan")
+
+
+class BalanceHistory(Base):
+    """
+    Історія змін фінансового балансу співробітника.
+    Потрібна для аудиту: звідки з'явився борг і куди зникли гроші.
+    """
+    __tablename__ = 'balance_history'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(sa.ForeignKey('employees.id'), nullable=False, index=True)
+    
+    # Сума зміни (+ збільшення боргу, - погашення)
+    amount: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
+    
+    # Баланс після операції
+    new_balance: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
+    
+    # Причина (наприклад: "Оплата замовлення #123", "Здача виручки в касу")
+    reason: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime, default=func.now(), server_default=func.now())
+    
+    employee: Mapped["Employee"] = relationship("Employee", back_populates="balance_history")
 
 
 class StaffNotification(Base):
@@ -228,7 +254,7 @@ class OrderItem(Base):
     price_at_moment: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
     preparation_area: Mapped[str] = mapped_column(sa.String(20), default='kitchen', server_default=text("'kitchen'"))
     
-    # --- НОВОЕ ПОЛЕ: Готовность конкретного блюда ---
+    # --- НОВЕ ПОЛЕ: Готовність конкретної страви ---
     is_ready: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
     # --- МОДИФІКАТОРИ (JSON) ---
@@ -291,7 +317,7 @@ class Order(Base):
     kitchen_done: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     bar_done: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
 
-    # --- СКЛАД: Флаг списання інгредієнтів ---
+    # --- СКЛАД: Прапор списання інгредієнтів ---
     # Запобігає повторному списанню при багаторазовій зміні статусу
     is_inventory_deducted: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
 
