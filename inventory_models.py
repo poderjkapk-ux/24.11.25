@@ -23,7 +23,7 @@ class Warehouse(Base):
     # Флаг: является ли склад производственным цехом (Кухня/Бар), где готовят, но не хранят продукты
     is_production: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
-    # --- НОВЕ ПОЛЕ: Склад списання ---
+    # Склад списания
     # Если это цех (is_production=True), тут указываем ID реального склада, откуда списывать ингредиенты
     linked_warehouse_id: Mapped[int | None] = mapped_column(sa.ForeignKey('warehouses.id'), nullable=True)
     
@@ -43,17 +43,44 @@ class Supplier(Base):
     comment: Mapped[str] = mapped_column(sa.String(255), nullable=True)
 
 class Ingredient(Base):
-    """Ингредиенты (Сырье: Мука, Томаты, Мясо)"""
+    """Ингредиенты (Сырье: Мука, Томаты, Мясо) ИЛИ Полуфабрикаты (Тесто, Соус)"""
     __tablename__ = 'ingredients'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(sa.String(100))
     unit_id: Mapped[int] = mapped_column(sa.ForeignKey('units.id'))
     
-    # Текущая себестоимость (обновляется при приходе)
+    # Текущая себестоимость (обновляется при приходе или производстве)
     current_cost: Mapped[float] = mapped_column(sa.Numeric(10, 2), default=0.00)
+    
+    # --- Флаг полуфабриката ---
+    is_semi_finished: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
     unit: Mapped["Unit"] = relationship("Unit")
     stocks: Mapped[list["Stock"]] = relationship("Stock", back_populates="ingredient")
+    
+    # Связь с рецептом (если это П/Ф)
+    recipe_components: Mapped[list["IngredientRecipeItem"]] = relationship(
+        "IngredientRecipeItem", 
+        foreign_keys="IngredientRecipeItem.parent_ingredient_id",
+        back_populates="parent_ingredient", 
+        cascade="all, delete-orphan"
+    )
+
+class IngredientRecipeItem(Base):
+    """Состав полуфабриката: Из чего состоит П/Ф"""
+    __tablename__ = 'ingredient_recipe_items'
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    
+    # Родитель (П/Ф, который мы готовим, напр. "Тесто")
+    parent_ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'), nullable=False)
+    
+    # Ребенок (Сырье, напр. "Мука")
+    child_ingredient_id: Mapped[int] = mapped_column(sa.ForeignKey('ingredients.id'), nullable=False)
+    
+    gross_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3)) # Сколько нужно сырья
+    
+    parent_ingredient: Mapped["Ingredient"] = relationship("Ingredient", foreign_keys=[parent_ingredient_id], back_populates="recipe_components")
+    child_ingredient: Mapped["Ingredient"] = relationship("Ingredient", foreign_keys=[child_ingredient_id])
 
 class Modifier(Base):
     """Модификаторы (Добавки к блюдам: Сыр, Сироп, Молоко)"""
@@ -96,8 +123,7 @@ class TechCardItem(Base):
     gross_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3)) # Брутто
     net_amount: Mapped[float] = mapped_column(sa.Numeric(10, 3))   # Нетто
     
-    # --- НОВЕ ПОЛЕ: Тільки для доставки/самовивозу ---
-    # Якщо True, цей інгредієнт списується тільки якщо замовлення НЕ в закладі
+    # Флаг: Только для доставки/самовивозу
     is_takeaway: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
     tech_card: Mapped["TechCard"] = relationship("TechCard", back_populates="components")

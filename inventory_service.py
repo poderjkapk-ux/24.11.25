@@ -9,7 +9,8 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from inventory_models import (
     Stock, InventoryDoc, InventoryDocItem, TechCard, 
-    TechCardItem, Ingredient, Warehouse, Modifier, AutoDeductionRule
+    TechCardItem, Ingredient, Warehouse, Modifier, AutoDeductionRule,
+    IngredientRecipeItem
 )
 from models import Order, OrderItem, Product
 
@@ -503,3 +504,78 @@ async def process_inventory_check(session: AsyncSession, doc_id: int):
     # Помечаем документ инвентаризации как проведенный
     inv_doc.is_processed = True
     await session.commit()
+
+async def process_production(session: AsyncSession, ingredient_id: int, quantity: float, warehouse_id: int):
+    """
+    Процесс производства полуфабриката.
+    1. Рассчитывает кол-во сырья на заданный объем П/Ф.
+    2. Списывает сырье (Write-off).
+    3. Рассчитывает новую себестоимость П/Ф.
+    4. Оприходует П/Ф (Supply).
+    """
+    qty_to_produce = Decimal(str(quantity))
+    if qty_to_produce <= 0: raise ValueError("Кількість має бути більше 0")
+
+    # 1. Получаем рецепт П/Ф
+    # ВАЖЛИВО: Додаємо joinedload(Ingredient.unit) щоб уникнути MissingGreenlet при зверненні до unit.name
+    pf_ingredient = await session.get(Ingredient, ingredient_id, options=[
+        selectinload(Ingredient.recipe_components).joinedload(IngredientRecipeItem.child_ingredient),
+        joinedload(Ingredient.unit)
+    ])
+    
+    if not pf_ingredient or not pf_ingredient.is_semi_finished:
+        raise ValueError("Цей товар не є напівфабрикатом або не знайдений.")
+        
+    if not pf_ingredient.recipe_components:
+        raise ValueError("У напівфабриката немає рецепту (складових).")
+
+    # 2. Формируем список сырья для списания и считаем себестоимость партии
+    raw_materials_to_deduct = []
+    total_batch_cost = Decimal(0)
+
+    for comp in pf_ingredient.recipe_components:
+        # Сколько сырья нужно на 1 ед. П/Ф * количество производства
+        needed_qty = Decimal(str(comp.gross_amount)) * qty_to_produce
+        
+        # Текущая цена сырья
+        raw_cost = Decimal(str(comp.child_ingredient.current_cost or 0))
+        
+        total_batch_cost += needed_qty * raw_cost
+        
+        raw_materials_to_deduct.append({
+            'ingredient_id': comp.child_ingredient_id,
+            'qty': needed_qty,
+            'price': raw_cost # Для списания цена информативна, но важна для отчетов
+        })
+
+    # Цена за 1 единицу готового П/Ф
+    if qty_to_produce > 0:
+        new_unit_cost = total_batch_cost / qty_to_produce
+    else:
+        new_unit_cost = Decimal(0)
+
+    # 3. Создаем документы
+    date_str = datetime.now().strftime('%d.%m %H:%M')
+    
+    # А) Списание сырья
+    await process_movement(
+        session, 'writeoff', raw_materials_to_deduct, 
+        source_wh_id=warehouse_id, 
+        comment=f"Виробництво: {pf_ingredient.name} ({qty_to_produce} {pf_ingredient.unit.name})"
+    )
+    
+    # Б) Приход П/Ф (с новой рассчитанной ценой)
+    pf_item = [{
+        'ingredient_id': ingredient_id,
+        'qty': qty_to_produce,
+        'price': new_unit_cost
+    }]
+    
+    await process_movement(
+        session, 'supply', pf_item,
+        target_wh_id=warehouse_id,
+        supplier_id=None, # Внутреннее производство
+        comment=f"Вироблено: {pf_ingredient.name}"
+    )
+    
+    return True

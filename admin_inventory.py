@@ -13,7 +13,8 @@ from sqlalchemy.orm import joinedload, selectinload
 # Import models
 from inventory_models import (
     Ingredient, Unit, Warehouse, TechCard, TechCardItem, Stock, Supplier, 
-    InventoryDoc, InventoryDocItem, Modifier, AutoDeductionRule
+    InventoryDoc, InventoryDocItem, Modifier, AutoDeductionRule,
+    IngredientRecipeItem  # Додано нову модель
 )
 from models import Product, Settings
 from dependencies import get_db_session, check_credentials
@@ -80,6 +81,7 @@ INVENTORY_STYLES = """
 def get_nav(active_tab):
     tabs = {
         "dashboard": {"icon": "fa-chart-pie", "label": "Дашборд"},
+        "production": {"icon": "fa-fire-burner", "label": "Виробництво (П/Ф)"}, # --- НОВЕ
         "warehouses": {"icon": "fa-warehouse", "label": "Склади та Цеха"},
         "suppliers": {"icon": "fa-truck-field", "label": "Постачальники"},
         "ingredients": {"icon": "fa-carrot", "label": "Інгредієнти"},
@@ -573,7 +575,28 @@ async def ingredients_page(q: str = Query(None), session: AsyncSession = Depends
     units = (await session.execute(select(Unit))).scalars().all()
     
     unit_opts = "".join([f"<option value='{u.id}'>{u.name}</option>" for u in units])
-    rows = "".join([f"<tr><td>{i.id}</td><td><b>{html.escape(i.name)}</b></td><td>{i.unit.name}</td><td>{i.current_cost:.2f} грн</td><td style='text-align:right;'><button class='button-sm secondary'><i class='fa-solid fa-pen'></i></button></td></tr>" for i in ingredients])
+    
+    rows = ""
+    for i in ingredients:
+        pf_badge = "<span class='inv-badge badge-orange'>П/Ф</span>" if i.is_semi_finished else ""
+        
+        # Кнопка рецепта тільки для П/Ф
+        recipe_btn = ""
+        if i.is_semi_finished:
+            recipe_btn = f"<a href='/admin/inventory/ingredients/{i.id}/recipe' class='button-sm' style='margin-right:5px;' title='Склад рецепту'><i class='fa-solid fa-list'></i> Рецепт</a>"
+            
+        rows += f"""
+        <tr>
+            <td>{i.id}</td>
+            <td><b>{html.escape(i.name)}</b> {pf_badge}</td>
+            <td>{i.unit.name}</td>
+            <td>{i.current_cost:.2f} грн</td>
+            <td style='text-align:right;'>
+                {recipe_btn}
+                <button class='button-sm secondary'><i class='fa-solid fa-pen'></i></button>
+            </td>
+        </tr>
+        """
     
     body = f"""
     {get_nav('ingredients')}
@@ -584,12 +607,20 @@ async def ingredients_page(q: str = Query(None), session: AsyncSession = Depends
                 <input type="text" name="search" class="search-input" placeholder="Пошук сировини..." value="{q or ''}">
             </form>
         </div>
-        <form action="/admin/inventory/ingredients/add" method="post" class="inline-add-form">
+        
+        <form action="/admin/inventory/ingredients/add" method="post" class="inline-add-form" style="align-items:center;">
             <strong style="white-space:nowrap;">🥬 Новий:</strong>
-            <input type="text" name="name" placeholder="Назва (напр. Картопля)" required style="flex:1;">
-            <select name="unit_id" style="width:120px;">{unit_opts}</select>
+            <input type="text" name="name" placeholder="Назва (напр. Тісто, Картопля)" required style="flex:1;">
+            <select name="unit_id" style="width:100px;">{unit_opts}</select>
+            
+            <div class="checkbox-group" style="margin:0 10px; background:white; padding:5px 10px; border:1px solid #ddd; border-radius:5px;">
+                <input type="checkbox" id="is_pf" name="is_semi_finished" value="true">
+                <label for="is_pf" style="margin:0; font-size:0.9em; cursor:pointer;">Це напівфабрикат</label>
+            </div>
+            
             <button type="submit" class="button">Створити</button>
         </form>
+        
         <div class="inv-table-wrapper">
             <table class="inv-table">
                 <thead><tr><th>ID</th><th>Назва</th><th>Од. вим.</th><th>Собівартість</th><th></th></tr></thead>
@@ -601,9 +632,96 @@ async def ingredients_page(q: str = Query(None), session: AsyncSession = Depends
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Інгредієнти", body=body, site_title=settings.site_title, **get_active_classes()))
 
 @router.post("/ingredients/add")
-async def add_ing(name: str = Form(...), unit_id: int = Form(...), session: AsyncSession = Depends(get_db_session)):
-    session.add(Ingredient(name=name, unit_id=unit_id))
+async def add_ing(
+    name: str = Form(...), 
+    unit_id: int = Form(...), 
+    is_semi_finished: bool = Form(False), 
+    session: AsyncSession = Depends(get_db_session)
+):
+    session.add(Ingredient(name=name, unit_id=unit_id, is_semi_finished=is_semi_finished))
     await session.commit()
+    return RedirectResponse("/admin/inventory/ingredients", 303)
+
+# --- РЕДАКТИРОВАНИЕ РЕЦЕПТА ПОЛУФАБРИКАТА ---
+@router.get("/ingredients/{pf_id}/recipe", response_class=HTMLResponse)
+async def edit_pf_recipe(pf_id: int, session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    pf = await session.get(Ingredient, pf_id, options=[
+        joinedload(Ingredient.recipe_components).joinedload(IngredientRecipeItem.child_ingredient).joinedload(Ingredient.unit),
+        joinedload(Ingredient.unit)
+    ])
+    
+    if not pf or not pf.is_semi_finished:
+        return HTMLResponse("Не є напівфабрикатом")
+
+    # Список сировини для додавання (виключаючи самого себе, щоб уникнути циклів)
+    all_ing = (await session.execute(select(Ingredient).where(Ingredient.id != pf_id).order_by(Ingredient.name))).scalars().all()
+    ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in all_ing])
+
+    rows = ""
+    total_cost_per_unit = 0
+    
+    # Розрахунок вартості рецепта на 1 одиницю П/Ф
+    for item in pf.recipe_components:
+        cost = float(item.gross_amount) * float(item.child_ingredient.current_cost or 0)
+        total_cost_per_unit += cost
+        rows += f"""
+        <tr>
+            <td>{item.child_ingredient.name}</td>
+            <td>{float(item.gross_amount)} {item.child_ingredient.unit.name}</td>
+            <td>{item.child_ingredient.current_cost}</td>
+            <td>{cost:.2f} грн</td>
+            <td style="text-align:right;"><a href="/admin/inventory/ingredients/recipe/del/{item.id}" style="color:red;">X</a></td>
+        </tr>
+        """
+
+    body = f"""
+    {get_nav('ingredients')}
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <div>
+                <h2>🥣 Рецепт: {pf.name}</h2>
+                <div style="color:#666;">Розрахунок на <b>1 {pf.unit.name}</b> готового продукту</div>
+            </div>
+            <a href="/admin/inventory/ingredients" class="button secondary">Назад</a>
+        </div>
+        
+        <div style="margin-bottom:20px; padding:15px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px;">
+            <strong>Розрахункова собівартість:</strong> {total_cost_per_unit:.2f} грн / {pf.unit.name}
+        </div>
+
+        <form action="/admin/inventory/ingredients/{pf.id}/recipe/add" method="post" class="inline-add-form">
+            <strong>➕ Додати складову:</strong>
+            <select name="child_id" required style="width:200px;">{ing_opts}</select>
+            <input type="number" step="0.001" name="gross" placeholder="Кількість (Брутто)" required style="width:120px;">
+            <button type="submit" class="button">Додати</button>
+        </form>
+
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead><tr><th>Сировина</th><th>Кількість (на 1 од. П/Ф)</th><th>Ціна сировини</th><th>Вартість в П/Ф</th><th></th></tr></thead>
+                <tbody>{rows or "<tr><td colspan='5' style='text-align:center;'>Рецепт порожній</td></tr>"}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"Рецепт {pf.name}", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.post("/ingredients/{pf_id}/recipe/add")
+async def add_pf_component(pf_id: int, child_id: int = Form(...), gross: float = Form(...), session: AsyncSession = Depends(get_db_session)):
+    session.add(IngredientRecipeItem(parent_ingredient_id=pf_id, child_ingredient_id=child_id, gross_amount=gross))
+    await session.commit()
+    return RedirectResponse(f"/admin/inventory/ingredients/{pf_id}/recipe", 303)
+
+@router.get("/ingredients/recipe/del/{item_id}")
+async def del_pf_component(item_id: int, session: AsyncSession = Depends(get_db_session)):
+    item = await session.get(IngredientRecipeItem, item_id)
+    if item:
+        pf_id = item.parent_ingredient_id
+        await session.delete(item)
+        await session.commit()
+        return RedirectResponse(f"/admin/inventory/ingredients/{pf_id}/recipe", 303)
     return RedirectResponse("/admin/inventory/ingredients", 303)
 
 # --- STOCK ---
@@ -645,10 +763,7 @@ async def stock_page(warehouse_id: int = Query(None), session: AsyncSession = De
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Залишки", body=body, site_title=settings.site_title, **get_active_classes()))
 
-# --------------------------------------------------------------------------
-# --- ИНВЕНТАРИЗАЦИЯ (CHECKS) - ОБНОВЛЕННЫЙ БЛОК ---
-# --------------------------------------------------------------------------
-
+# --- ИНВЕНТАРИЗАЦИЯ (CHECKS) ---
 @router.get("/checks", response_class=HTMLResponse)
 async def inventory_checks_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
@@ -1478,7 +1593,7 @@ async def edit_tc(
     settings = await session.get(Settings, 1) or Settings()
     tc = await session.get(TechCard, tc_id, options=[joinedload(TechCard.product), joinedload(TechCard.components).joinedload(TechCardItem.ingredient).joinedload(Ingredient.unit)])
     
-    ing_opts = "".join([f"<option value='{i.id}'>{i.name}</option>" for i in (await session.execute(select(Ingredient))).scalars().all()])
+    ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in (await session.execute(select(Ingredient))).scalars().all()])
     
     comp_rows = ""
     cost = 0
@@ -1972,3 +2087,97 @@ async def report_suppliers(
     """
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Звіт: Постачальники", body=body, site_title=settings.site_title, **get_active_classes()))
+
+# --- НОВОЕ: Вкладка "Виробництво" ---
+@router.get("/production", response_class=HTMLResponse)
+async def production_page(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
+    settings = await session.get(Settings, 1) or Settings()
+    
+    # Список П/Ф для выбора
+    pfs = (await session.execute(select(Ingredient).where(Ingredient.is_semi_finished==True).order_by(Ingredient.name))).scalars().all()
+    pf_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in pfs])
+    
+    # Склады
+    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
+    wh_opts = "".join([f"<option value='{w.id}'>{w.name}</option>" for w in warehouses])
+    
+    # Последние акты производства (Supply без supplier_id)
+    query = select(InventoryDoc).options(joinedload(InventoryDoc.target_warehouse))\
+        .where(InventoryDoc.doc_type == 'supply', InventoryDoc.supplier_id == None)\
+        .order_by(desc(InventoryDoc.created_at)).limit(20)
+        
+    docs = (await session.execute(query)).scalars().all()
+    
+    history_rows = ""
+    for d in docs:
+        history_rows += f"""
+        <tr onclick="window.location='/admin/inventory/docs/{d.id}'" style="cursor:pointer;">
+            <td>#{d.id}</td>
+            <td>{d.created_at.strftime('%d.%m %H:%M')}</td>
+            <td>{d.comment}</td>
+            <td>{d.target_warehouse.name}</td>
+        </tr>
+        """
+
+    body = f"""
+    {get_nav('production')}
+    
+    <div class="card" style="border-left: 5px solid #f59e0b;">
+        <h3 style="color:#d97706;"><i class="fa-solid fa-fire-burner"></i> Акт виробництва</h3>
+        <p style="color:#666; font-size:0.9rem;">
+            Створює напівфабрикат на складі, списуючи сировину згідно з рецептом.
+            <br>Собівартість П/Ф буде перерахована автоматично на основі списаних продуктів.
+        </p>
+        
+        <form action="/admin/inventory/production/create" method="post" style="background:#fff7ed; padding:20px; border-radius:10px; border:1px solid #ffedd5;">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-bottom:15px;">
+                <div>
+                    <label><b>Що готуємо (П/Ф):</b></label>
+                    <select name="ingredient_id" required style="width:100%; padding:10px;">
+                        <option value="">-- Оберіть --</option>
+                        {pf_opts}
+                    </select>
+                </div>
+                <div>
+                    <label><b>На який склад (Цех):</b></label>
+                    <select name="warehouse_id" required style="width:100%; padding:10px;">
+                        {wh_opts}
+                    </select>
+                </div>
+            </div>
+            
+            <div style="margin-bottom:20px;">
+                <label><b>Кількість готового продукту:</b></label>
+                <input type="number" step="0.001" name="quantity" required placeholder="Напр. 5.0" style="width:150px; padding:10px; font-size:1.1em;">
+            </div>
+            
+            <button type="submit" class="button warning">🍳 Виробити та списати сировину</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Історія виробництва</h3>
+        <div class="inv-table-wrapper">
+            <table class="inv-table">
+                <thead><tr><th>ID</th><th>Дата</th><th>Опис</th><th>Склад</th></tr></thead>
+                <tbody>{history_rows or "<tr><td colspan='4' style='text-align:center; padding:20px;'>Історія порожня</td></tr>"}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Виробництво", body=body, site_title=settings.site_title, **get_active_classes()))
+
+@router.post("/production/create")
+async def create_production(
+    ingredient_id: int = Form(...),
+    quantity: float = Form(...),
+    warehouse_id: int = Form(...),
+    session: AsyncSession = Depends(get_db_session)
+):
+    from inventory_service import process_production
+    try:
+        await process_production(session, ingredient_id, quantity, warehouse_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+        
+    return RedirectResponse("/admin/inventory/production", 303)
