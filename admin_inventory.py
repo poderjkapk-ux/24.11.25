@@ -1588,15 +1588,22 @@ async def delete_tech_card(tc_id: int, session: AsyncSession = Depends(get_db_se
 async def edit_tc(
     tc_id: int, 
     session: AsyncSession = Depends(get_db_session), 
-    user=Depends(check_credentials)
-):
+    user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
     tc = await session.get(TechCard, tc_id, options=[joinedload(TechCard.product), joinedload(TechCard.components).joinedload(TechCardItem.ingredient).joinedload(Ingredient.unit)])
     
-    ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in (await session.execute(select(Ingredient))).scalars().all()])
+    # --- ВИПРАВЛЕННЯ ---
+    # Додаємо .options(joinedload(Ingredient.unit)), щоб завантажити одиниці виміру
+    ing_res = await session.execute(
+        select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))
+    ingredients = ing_res.scalars().all()
+    
+    ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in ingredients])
+    # -------------------
     
     comp_rows = ""
     cost = 0
+    # ... решта коду функції без змін ...
     if tc:
         for c in tc.components:
             sub = float(c.gross_amount) * float(c.ingredient.current_cost)
