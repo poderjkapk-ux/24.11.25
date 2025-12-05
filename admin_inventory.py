@@ -81,7 +81,7 @@ INVENTORY_STYLES = """
 def get_nav(active_tab):
     tabs = {
         "dashboard": {"icon": "fa-chart-pie", "label": "Дашборд"},
-        "production": {"icon": "fa-fire-burner", "label": "Виробництво (П/Ф)"}, # --- НОВЕ
+        "production": {"icon": "fa-fire-burner", "label": "Виробництво (П/Ф)"}, 
         "warehouses": {"icon": "fa-warehouse", "label": "Склади та Цеха"},
         "suppliers": {"icon": "fa-truck-field", "label": "Постачальники"},
         "ingredients": {"icon": "fa-carrot", "label": "Інгредієнти"},
@@ -2094,7 +2094,14 @@ async def production_page(session: AsyncSession = Depends(get_db_session), user=
     settings = await session.get(Settings, 1) or Settings()
     
     # Список П/Ф для выбора
-    pfs = (await session.execute(select(Ingredient).where(Ingredient.is_semi_finished==True).order_by(Ingredient.name))).scalars().all()
+    # ДОБАВЛЕНО: .options(joinedload(Ingredient.unit)) - для избежания MissingGreenlet при доступе к unit.name
+    pfs = (await session.execute(
+        select(Ingredient)
+        .options(joinedload(Ingredient.unit)) 
+        .where(Ingredient.is_semi_finished==True)
+        .order_by(Ingredient.name)
+    )).scalars().all()
+    
     pf_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in pfs])
     
     # Склады

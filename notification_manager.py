@@ -393,7 +393,9 @@ async def notify_all_parties_on_status_change(
     """
     Централизованная функция уведомлений и логики склада при смене статуса.
     """
-    await session.refresh(order, ['status', 'courier', 'accepted_by_waiter', 'table'])
+    # FIX: Добавлено 'items' в список refresh, чтобы избежать MissingGreenlet при обращении к order.items в inventory_service
+    await session.refresh(order, ['status', 'courier', 'accepted_by_waiter', 'table', 'items'])
+    
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     
     new_status = order.status
