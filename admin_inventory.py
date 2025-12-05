@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from inventory_models import (
     Ingredient, Unit, Warehouse, TechCard, TechCardItem, Stock, Supplier, 
     InventoryDoc, InventoryDocItem, Modifier, AutoDeductionRule,
-    IngredientRecipeItem  # Додано нову модель
+    IngredientRecipeItem
 )
 from models import Product, Settings
 from dependencies import get_db_session, check_credentials
@@ -666,11 +666,15 @@ async def edit_pf_recipe(pf_id: int, session: AsyncSession = Depends(get_db_sess
     for item in pf.recipe_components:
         cost = float(item.gross_amount) * float(item.child_ingredient.current_cost or 0)
         total_cost_per_unit += cost
+        
+        # Исправлено отображение цены сырья
+        raw_price = float(item.child_ingredient.current_cost or 0)
+        
         rows += f"""
         <tr>
             <td>{item.child_ingredient.name}</td>
             <td>{float(item.gross_amount)} {item.child_ingredient.unit.name}</td>
-            <td>{item.child_ingredient.current_cost}</td>
+            <td>{raw_price:.2f} грн</td>
             <td>{cost:.2f} грн</td>
             <td style="text-align:right;"><a href="/admin/inventory/ingredients/recipe/del/{item.id}" style="color:red;">X</a></td>
         </tr>
@@ -1592,26 +1596,33 @@ async def edit_tc(
     settings = await session.get(Settings, 1) or Settings()
     tc = await session.get(TechCard, tc_id, options=[joinedload(TechCard.product), joinedload(TechCard.components).joinedload(TechCardItem.ingredient).joinedload(Ingredient.unit)])
     
-    # --- ВИПРАВЛЕННЯ ---
-    # Додаємо .options(joinedload(Ingredient.unit)), щоб завантажити одиниці виміру
     ing_res = await session.execute(
         select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))
     ingredients = ing_res.scalars().all()
     
     ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in ingredients])
-    # -------------------
     
     comp_rows = ""
     cost = 0
-    # ... решта коду функції без змін ...
+    
     if tc:
         for c in tc.components:
-            sub = float(c.gross_amount) * float(c.ingredient.current_cost)
+            ing_cost = float(c.ingredient.current_cost or 0)
+            sub = float(c.gross_amount) * ing_cost
             cost += sub
-            # Додаємо іконку, якщо це тільки на винос
             takeaway_icon = "<span class='inv-badge badge-blue'><i class='fa-solid fa-box'></i> Тільки винос</span>" if c.is_takeaway else ""
             
-            comp_rows += f"<tr><td>{c.ingredient.name}</td><td>{c.gross_amount}</td><td>{c.net_amount}</td><td>{takeaway_icon}</td><td>{sub:.2f}</td><td><a href='/admin/inventory/tc/del/{c.id}' style='color:red'>X</a></td></tr>"
+            comp_rows += f"""
+            <tr>
+                <td>{c.ingredient.name}</td>
+                <td>{ing_cost:.2f} грн</td>
+                <td>{c.gross_amount}</td>
+                <td>{c.net_amount}</td>
+                <td>{takeaway_icon}</td>
+                <td>{sub:.2f}</td>
+                <td><a href='/admin/inventory/tc/del/{c.id}' style='color:red'>X</a></td>
+            </tr>
+            """
 
     body = f"""
     {get_nav('tech_cards')}
@@ -1620,12 +1631,13 @@ async def edit_tc(
         <div style="margin-bottom:20px; font-weight:bold; color:#15803d;">Собівартість: {cost:.2f} грн</div>
         <div class="inv-table-wrapper">
             <table class="inv-table">
-                <thead><tr><th>Інгредієнт</th><th>Брутто</th><th>Нетто</th><th>Умови</th><th>Вартість</th><th></th></tr></thead>
+                <thead><tr><th>Інгредієнт</th><th>Ціна од.</th><th>Брутто</th><th>Нетто</th><th>Умови</th><th>Вартість</th><th></th></tr></thead>
                 <tbody>
                     {comp_rows}
                     <tr style="background:#f8f9fa;">
                         <form action="/admin/inventory/tc/{tc.id}/add" method="post">
                             <td style="padding:5px;"><select name="ingredient_id" style="width:100%;">{ing_opts}</select></td>
+                            <td>-</td>
                             <td style="padding:5px;"><input type="number" step="0.001" name="gross" placeholder="Брутто" required style="width:80px;"></td>
                             <td style="padding:5px;"><input type="number" step="0.001" name="net" placeholder="Нетто" required style="width:80px;"></td>
                             <td style="padding:5px;">
@@ -1735,25 +1747,13 @@ async def inventory_usage_report(
             # Форматирование и определение знака
             qty_formatted = f"{item.quantity:.3f}"
             
-            # Для инвентаризации: если было списание, то минус, если приход - плюс.
-            # Но в InventoryDocItem хранится просто кол-во.
-            # В process_inventory_check мы создаем отдельные доки writeoff/supply.
-            # Поэтому сам док 'inventory' обычно не содержит движений (items в нем справочные),
-            # а движения идут через связанные доки. Но здесь мы смотрим InventoryDocItem.
-            # Если это док типа 'inventory', то item.quantity там - это ФАКТ. Это не движение.
-            # Движение создается отдельными доками writeoff/supply.
-            
             if doc.doc_type == 'inventory':
-                # Для инвентаризации это просто фиксация факта, не движение само по себе (движения идут отдельными документами)
-                # Поэтому можно пометить как "Факт: X"
                 qty_formatted = f"Факт: {qty_formatted}"
                 color = "black"
             elif doc.doc_type in ['writeoff', 'deduction', 'transfer']:
                  if doc.doc_type == 'transfer' and not doc.source_warehouse_id: 
-                     # Это входящий трансфер? Нет, трансфер всегда имеет source и target.
                      pass
                  else: 
-                     # Это расход
                      qty_formatted = f"-{qty_formatted}"
             
             report_rows += f"""
