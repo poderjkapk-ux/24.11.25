@@ -1363,7 +1363,9 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
     type_label = {'supply': 'Прихід', 'transfer': 'Переміщення', 'writeoff': 'Списання', 'deduction': 'Авто-списання'}.get(doc.doc_type, doc.doc_type)
     header_info = ""
     if doc.doc_type == 'supply':
-        header_info = f"<div class='doc-info-row'><span>Постачальник:</span> <b>{doc.supplier.name if doc.supplier else '-'}</b></div>"
+        # Якщо це виробництво (немає постачальника), пишемо про це
+        supplier_name = doc.supplier.name if doc.supplier else "Внутрішнє виробництво"
+        header_info = f"<div class='doc-info-row'><span>Постачальник:</span> <b>{supplier_name}</b></div>"
         header_info += f"<div class='doc-info-row'><span>На склад:</span> <b>{doc.target_warehouse.name if doc.target_warehouse else '-'}</b></div>"
     elif doc.doc_type == 'writeoff':
         header_info = f"<div class='doc-info-row'><span>Зі складу:</span> <b>{doc.source_warehouse.name if doc.source_warehouse else '-'}</b></div>"
@@ -1418,7 +1420,9 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         """
         
         pay_block = ""
-        if doc.doc_type == 'supply':
+        # --- ВИПРАВЛЕННЯ ТУТ ---
+        # Додано перевірку "and doc.supplier_id", щоб не просити оплату для виробництва
+        if doc.doc_type == 'supply' and doc.supplier_id:
             debt = float(total_sum) - float(doc.paid_amount)
             if debt > 0.01:
                 pay_block = f"""
@@ -1438,6 +1442,7 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
             else:
                 pay_block = "<div style='margin-top:20px; text-align:center; color:#15803d; font-weight:bold;'>🎉 Накладна повністю оплачена</div>"
     
+    # Для запобігання помилки reference before assignment
     pay_block = pay_block if 'pay_block' in locals() else ""
 
     body = f"""
