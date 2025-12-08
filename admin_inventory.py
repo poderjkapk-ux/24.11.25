@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from sqlalchemy.orm import joinedload, selectinload
 
-# Import models
+# Імпорт моделей
 from inventory_models import (
     Ingredient, Unit, Warehouse, TechCard, TechCardItem, Stock, Supplier, 
     InventoryDoc, InventoryDocItem, Modifier, AutoDeductionRule,
@@ -19,13 +19,13 @@ from inventory_models import (
 from models import Product, Settings
 from dependencies import get_db_session, check_credentials
 from templates import ADMIN_HTML_TEMPLATE
-# Импортируем функции сервиса
+# Імпортуємо функції сервісу
 from inventory_service import apply_doc_stock_changes, process_inventory_check
 from cash_service import add_shift_transaction, get_any_open_shift
 
 router = APIRouter(prefix="/admin/inventory", tags=["inventory"])
 
-# --- STYLES & COMPONENTS ---
+# --- СТИЛІ ТА КОМПОНЕНТИ ---
 
 INVENTORY_STYLES = """
 <style>
@@ -94,7 +94,7 @@ def get_nav(active_tab):
         "reports/profitability": {"icon": "fa-money-bill-trend-up", "label": "Рентабельність"},
         "reports/suppliers": {"icon": "fa-file-invoice-dollar", "label": "Звіт по накладних"} 
     }
-    # Подсветка родительской вкладки для под-страниц
+    # Підсвітка батьківської вкладки
     if active_tab == 'rules': active_tab = 'modifiers'
     
     html = f"{INVENTORY_STYLES}<div class='inv-nav'>"
@@ -190,16 +190,13 @@ async def warehouses_list(
 ):
     settings = await session.get(Settings, 1) or Settings()
     
-    # Завантажуємо склади для відображення
     warehouses = (await session.execute(
         select(Warehouse).options(joinedload(Warehouse.linked_warehouse)).order_by(Warehouse.name)
     )).scalars().all()
     
-    # Завантажуємо склади для вибору "прив'язаного складу" (тільки не виробничі)
     all_storage_warehouses = (await session.execute(select(Warehouse).where(Warehouse.is_production == False))).scalars().all()
     storage_opts = "<option value=''>-- Без прив'язки --</option>" + "".join([f"<option value='{w.id}'>{w.name}</option>" for w in all_storage_warehouses])
     
-    # Обработка ошибки
     error_html = ""
     if error == "has_stock":
         error_html = """
@@ -286,7 +283,6 @@ async def add_warehouse(
     linked_warehouse_id: int = Form(None),
     session: AsyncSession = Depends(get_db_session)
 ):
-    # Якщо склад не виробничий, linked_warehouse_id має бути None
     linked_id = linked_warehouse_id if is_production else None
     
     session.add(Warehouse(
@@ -301,7 +297,6 @@ async def add_warehouse(
 async def delete_warehouse(w_id: int, session: AsyncSession = Depends(get_db_session)):
     w = await session.get(Warehouse, w_id)
     if w:
-        # Проверка на наличие остатков
         stock_count = await session.scalar(select(func.count(Stock.id)).where(Stock.warehouse_id == w_id, Stock.quantity != 0))
         if stock_count > 0:
             return RedirectResponse("/admin/inventory/warehouses?error=has_stock", 303)
@@ -667,7 +662,6 @@ async def edit_pf_recipe(pf_id: int, session: AsyncSession = Depends(get_db_sess
         cost = float(item.gross_amount) * float(item.child_ingredient.current_cost or 0)
         total_cost_per_unit += cost
         
-        # Исправлено отображение цены сырья
         raw_price = float(item.child_ingredient.current_cost or 0)
         
         rows += f"""
@@ -767,7 +761,7 @@ async def stock_page(warehouse_id: int = Query(None), session: AsyncSession = De
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Склад: Залишки", body=body, site_title=settings.site_title, **get_active_classes()))
 
-# --- ИНВЕНТАРИЗАЦИЯ (CHECKS) ---
+# --- ІНВЕНТАРИЗАЦІЯ (CHECKS) ---
 @router.get("/checks", response_class=HTMLResponse)
 async def inventory_checks_list(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
@@ -857,7 +851,7 @@ async def create_inventory_check(
     session.add(doc)
     await session.flush()
     
-    # Добавляем все ингредиенты с 0 кол-вом
+    # Додаємо всі інгредієнти
     all_ingredients = (await session.execute(select(Ingredient))).scalars().all()
     
     for ing in all_ingredients:
@@ -889,7 +883,7 @@ async def view_inventory_check(
     doc.items.sort(key=lambda x: x.ingredient.name)
 
     rows = ""
-    # Для подсчета в режиме просмотра (если уже проведено)
+    # Для підрахунку в режимі перегляду
     total_diff_money_plus = 0
     total_diff_money_minus = 0
 
@@ -898,11 +892,10 @@ async def view_inventory_check(
         diff_display = "-"
         current_stock_val = 0
         
-        # Получаем цену (себестоимость) для отображения и расчетов
         cost = float(item.ingredient.current_cost or 0)
 
         if not doc.is_processed:
-            # Если черновик - подгружаем актуальный остаток
+            # Чернетка - показуємо актуальний залишок
             current_stock = await session.scalar(
                 select(Stock.quantity).where(
                     Stock.warehouse_id == doc.source_warehouse_id, 
@@ -912,7 +905,6 @@ async def view_inventory_check(
             current_stock_val = float(current_stock)
             system_qty_display = f"{current_stock_val:.3f}"
             
-            # Поле ввода с data-атрибутами для JS
             input_field = f"""
             <input type="number" step="0.001" name="qty_{item.id}" 
                    value="{float(item.quantity)}" 
@@ -922,11 +914,10 @@ async def view_inventory_check(
                    style="width:100px; padding:5px; border:1px solid #ccc; border-radius:4px; text-align:center; font-weight:bold;">
             """
             
-            # Ячейка разницы (заполняется JS)
             diff_display = f"<span class='diff-cell' data-id='{item.id}'>0</span>"
             
         else:
-            # Если проведено - просто текст
+            # Проведено
             input_field = f"<b>{float(item.quantity)}</b>"
             diff_display = "-" 
             system_qty_display = "Архів"
@@ -982,7 +973,7 @@ async def view_inventory_check(
         
         js_script = """
         <script>
-            // Живой поиск
+            // Живий пошук
             function filterTable() {
                 const input = document.getElementById('inv-search');
                 const filter = input.value.toLowerCase();
@@ -997,7 +988,7 @@ async def view_inventory_check(
                 }
             }
 
-            // Авто-заполнение (Факт = Система)
+            // Авто-заповнення (Факт = Система)
             function fillSystemValues() {
                 if(!confirm("Заповнити всі поля 'Факт' системними значеннями? Це зітре введені дані.")) return;
                 
@@ -1008,7 +999,7 @@ async def view_inventory_check(
                 recalcTotals();
             }
 
-            // Пересчет разницы и итогов
+            // Перерахунок різниці та підсумків
             function recalcTotals() {
                 let totalPlus = 0;
                 let totalMinus = 0;
@@ -1020,7 +1011,7 @@ async def view_inventory_check(
                     const cost = parseFloat(inp.dataset.cost) || 0;
                     const diff = fact - sys;
                     
-                    // Находим ячейку разницы в той же строке
+                    // Знаходимо комірку різниці
                     const row = inp.closest('tr');
                     const diffCell = row.querySelector('.diff-cell');
                     
@@ -1042,7 +1033,7 @@ async def view_inventory_check(
                 document.getElementById('total-minus').innerText = totalMinus.toFixed(2);
             }
 
-            // Слушаем изменения во всех инпутах
+            // Слухаємо зміни
             document.addEventListener('DOMContentLoaded', () => {
                 const inputs = document.querySelectorAll('.inv-qty-input');
                 inputs.forEach(inp => {
@@ -1107,9 +1098,9 @@ async def update_inventory_check(
     
     doc = await session.get(InventoryDoc, doc_id, options=[selectinload(InventoryDoc.items)])
     if not doc or doc.is_processed:
-        raise HTTPException(400, "Документ не найден или уже закрыт")
+        raise HTTPException(400, "Документ не знайдено або вже закрито")
 
-    # Обновляем количества
+    # Оновлюємо кількості
     for key, value in form_data.items():
         if key.startswith("qty_"):
             try:
@@ -1163,7 +1154,7 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
         if d.doc_type == 'supply' and d.paid_amount > 0:
             paid_info = f"<br><span style='font-size:0.75rem; color:#15803d;'>💸 Сплачено: {d.paid_amount}</span>"
         
-        # Link logic
+        # Посилання
         link = f"/admin/inventory/docs/{d.id}"
         if d.doc_type == 'inventory':
             link = f"/admin/inventory/checks/{d.id}"
@@ -1290,15 +1281,15 @@ async def create_doc_action(
     src_id = int(source_warehouse_id) if source_warehouse_id and source_warehouse_id.strip().isdigit() else None
     tgt_id = int(target_warehouse_id) if target_warehouse_id and target_warehouse_id.strip().isdigit() else None
 
-    # ВАЛИДАЦИЯ: Проверка обязательных полей
+    # ВАЛІДАЦІЯ
     if doc_type == 'supply':
-        if not s_id: raise HTTPException(400, "Для типа 'Приход' обязателен Поставщик.")
-        if not tgt_id: raise HTTPException(400, "Для типа 'Приход' обязателен Склад (Куда).")
+        if not s_id: raise HTTPException(400, "Для типу 'Прихід' обов'язковий Постачальник.")
+        if not tgt_id: raise HTTPException(400, "Для типу 'Прихід' обов'язковий Склад (Куди).")
     elif doc_type == 'transfer':
-        if not src_id or not tgt_id: raise HTTPException(400, "Для перемещения нужны оба склада (Откуда и Куда).")
-        if src_id == tgt_id: raise HTTPException(400, "Склады 'Откуда' и 'Куда' должны отличаться.")
+        if not src_id or not tgt_id: raise HTTPException(400, "Для переміщення потрібні обидва склади.")
+        if src_id == tgt_id: raise HTTPException(400, "Склади 'Звідки' і 'Куди' повинні відрізнятися.")
     elif doc_type == 'writeoff':
-        if not src_id: raise HTTPException(400, "Для списания обязателен Склад (Откуда).")
+        if not src_id: raise HTTPException(400, "Для списання обов'язковий Склад (Звідки).")
 
     doc = InventoryDoc(
         doc_type=doc_type,
@@ -1316,10 +1307,10 @@ async def create_doc_action(
 async def delete_document(doc_id: int, session: AsyncSession = Depends(get_db_session)):
     doc = await session.get(InventoryDoc, doc_id)
     if not doc:
-        raise HTTPException(404, "Документ не найден")
+        raise HTTPException(404, "Документ не знайдено")
     
     if doc.is_processed:
-        raise HTTPException(400, "Нельзя удалить уже проведенный документ! Используйте сторно или обратную операцию.")
+        raise HTTPException(400, "Неможливо видалити вже проведений документ!")
         
     await session.delete(doc)
     await session.commit()
@@ -1363,7 +1354,6 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
     type_label = {'supply': 'Прихід', 'transfer': 'Переміщення', 'writeoff': 'Списання', 'deduction': 'Авто-списання'}.get(doc.doc_type, doc.doc_type)
     header_info = ""
     if doc.doc_type == 'supply':
-        # Якщо це виробництво (немає постачальника), пишемо про це
         supplier_name = doc.supplier.name if doc.supplier else "Внутрішнє виробництво"
         header_info = f"<div class='doc-info-row'><span>Постачальник:</span> <b>{supplier_name}</b></div>"
         header_info += f"<div class='doc-info-row'><span>На склад:</span> <b>{doc.target_warehouse.name if doc.target_warehouse else '-'}</b></div>"
@@ -1379,7 +1369,7 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
     if not doc.is_processed:
         status_ui = f"""
         <div style="margin-top:20px; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-            <a href="/admin/inventory/docs/delete/{doc.id}" onclick="return confirm('Видалити цей чернетку повністю?');" class="button danger">
+            <a href="/admin/inventory/docs/delete/{doc.id}" onclick="return confirm('Видалити цю чернетку повністю?');" class="button danger">
                 <i class="fa-solid fa-trash"></i> Видалити
             </a>
             <form action="/admin/inventory/docs/{doc.id}/approve" method="post" style="margin:0;">
@@ -1420,8 +1410,7 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         """
         
         pay_block = ""
-        # --- ВИПРАВЛЕННЯ ТУТ ---
-        # Додано перевірку "and doc.supplier_id", щоб не просити оплату для виробництва
+        # Додано перевірку, чи є постачальник (щоб не просити оплату для внутрішнього виробництва)
         if doc.doc_type == 'supply' and doc.supplier_id:
             debt = float(total_sum) - float(doc.paid_amount)
             if debt > 0.01:
@@ -1442,7 +1431,6 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
             else:
                 pay_block = "<div style='margin-top:20px; text-align:center; color:#15803d; font-weight:bold;'>🎉 Накладна повністю оплачена</div>"
     
-    # Для запобігання помилки reference before assignment
     pay_block = pay_block if 'pay_block' in locals() else ""
 
     body = f"""
@@ -1514,10 +1502,9 @@ async def del_doc_item(doc_id: int, item_id: int, session: AsyncSession = Depend
 
 @router.post("/docs/{doc_id}/approve")
 async def approve_doc(doc_id: int, session: AsyncSession = Depends(get_db_session)):
-    # Предварительная проверка наличия товаров
     count_res = await session.execute(select(func.count(InventoryDocItem.id)).where(InventoryDocItem.doc_id == doc_id))
     if count_res.scalar() == 0:
-        raise HTTPException(400, "Нельзя провести пустой документ! Добавьте товары или удалите черновик.")
+        raise HTTPException(400, "Неможливо провести порожній документ!")
 
     try:
         await apply_doc_stock_changes(session, doc_id)
@@ -1593,12 +1580,14 @@ async def delete_tech_card(tc_id: int, session: AsyncSession = Depends(get_db_se
         await session.commit()
     return RedirectResponse("/admin/inventory/tech_cards", status_code=303)
 
+# --- РЕДАГУВАННЯ ТЕХКАРТИ (З ЦІНОЮ ТА ПРИБУТКОМ) ---
 @router.get("/tech_cards/{tc_id}", response_class=HTMLResponse)
 async def edit_tc(
     tc_id: int, 
     session: AsyncSession = Depends(get_db_session), 
     user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
+    # Завантажуємо техкарту разом з продуктом
     tc = await session.get(TechCard, tc_id, options=[joinedload(TechCard.product), joinedload(TechCard.components).joinedload(TechCardItem.ingredient).joinedload(Ingredient.unit)])
     
     ing_res = await session.execute(
@@ -1608,7 +1597,7 @@ async def edit_tc(
     ing_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in ingredients])
     
     comp_rows = ""
-    cost = 0
+    cost = 0.0
     
     if tc:
         for c in tc.components:
@@ -1629,11 +1618,57 @@ async def edit_tc(
             </tr>
             """
 
+    # --- БЛОК РОЗРАХУНКУ ПРИБУТКУ ---
+    product_price = float(tc.product.price)
+    profit = product_price - cost
+    markup = (profit / cost * 100) if cost > 0 else 0
+    margin = (profit / product_price * 100) if product_price > 0 else 0
+    
+    profit_color = "#16a34a" if profit > 0 else "#dc2626"
+
+    stats_html = f"""
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 25px; display: flex; gap: 30px; align-items: center; flex-wrap: wrap;">
+        
+        <div>
+            <div style="font-size: 0.85rem; color: #64748b; text-transform: uppercase; font-weight: bold;">Собівартість</div>
+            <div style="font-size: 1.5rem; font-weight: 800; color: #334155;">{cost:.2f} <small>грн</small></div>
+        </div>
+
+        <form action="/admin/inventory/tc/{tc.id}/update_price" method="post" style="display:flex; flex-direction:column; margin:0;">
+            <label style="font-size: 0.85rem; color: #64748b; text-transform: uppercase; font-weight: bold; margin-bottom: 5px;">Ціна продажу</label>
+            <div style="display:flex; gap: 5px;">
+                <input type="number" step="0.01" name="price" value="{product_price:.2f}" style="width: 100px; padding: 5px 10px; font-size: 1.1rem; font-weight: bold; border: 2px solid #cbd5e1; border-radius: 6px; margin:0;">
+                <button type="submit" class="button-sm" title="Зберегти ціну"><i class="fa-solid fa-floppy-disk"></i></button>
+            </div>
+        </form>
+
+        <div style="width: 1px; height: 40px; background: #cbd5e1;"></div>
+
+        <div>
+            <div style="font-size: 0.85rem; color: #64748b; text-transform: uppercase; font-weight: bold;">Прибуток (Маржа)</div>
+            <div style="font-size: 1.5rem; font-weight: 800; color: {profit_color};">
+                {profit:+.2f} <small>грн</small>
+            </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:2px; font-size: 0.9rem;">
+            <div>Націнка: <b>{markup:.0f}%</b></div>
+            <div>Маржинальність: <b>{margin:.0f}%</b></div>
+        </div>
+    </div>
+    """
+    # -------------------------------------
+
     body = f"""
     {get_nav('tech_cards')}
     <div class="card">
-        <div style="display:flex; justify-content:space-between;"><h2>ТК: {tc.product.name}</h2><a href="/admin/inventory/tech_cards" class="button secondary">Назад</a></div>
-        <div style="margin-bottom:20px; font-weight:bold; color:#15803d;">Собівартість: {cost:.2f} грн</div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:20px;">
+            <h2>ТК: {tc.product.name}</h2>
+            <a href="/admin/inventory/tech_cards" class="button secondary">Назад</a>
+        </div>
+        
+        {stats_html}
+
         <div class="inv-table-wrapper">
             <table class="inv-table">
                 <thead><tr><th>Інгредієнт</th><th>Ціна од.</th><th>Брутто</th><th>Нетто</th><th>Умови</th><th>Вартість</th><th></th></tr></thead>
@@ -1664,6 +1699,19 @@ async def edit_tc(
     </div>
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title=f"ТК {tc.product.name}", body=body, site_title=settings.site_title, **get_active_classes()))
+
+# --- МЕТОД ДЛЯ ОНОВЛЕННЯ ЦІНИ ПРОДУКТУ З ТЕХКАРТИ ---
+@router.post("/tc/{tc_id}/update_price")
+async def update_tc_product_price(
+    tc_id: int,
+    price: Decimal = Form(...),
+    session: AsyncSession = Depends(get_db_session)
+):
+    tc = await session.get(TechCard, tc_id, options=[joinedload(TechCard.product)])
+    if tc and tc.product:
+        tc.product.price = price
+        await session.commit()
+    return RedirectResponse(f"/admin/inventory/tech_cards/{tc_id}", 303)
 
 @router.post("/tc/{tc_id}/add")
 async def add_tc_comp(
@@ -1703,14 +1751,12 @@ async def inventory_usage_report(
 ):
     settings = await session.get(Settings, 1) or Settings()
     
-    # Список інгредієнтів для фільтру
     ingredients = (await session.execute(select(Ingredient).order_by(Ingredient.name))).scalars().all()
     ing_options = "".join([f'<option value="{i.id}" {"selected" if ingredient_id == i.id else ""}>{html.escape(i.name)}</option>' for i in ingredients])
     
     report_rows = ""
     
     if ingredient_id:
-        # Запит: Позиції накладних для обраного інгредієнта
         query = select(InventoryDocItem).join(InventoryDoc).options(
             joinedload(InventoryDocItem.doc)
         ).where(
@@ -1718,7 +1764,6 @@ async def inventory_usage_report(
             InventoryDoc.is_processed == True
         )
         
-        # Фільтр по датах
         if date_from:
             dt_from = datetime.strptime(date_from, "%Y-%m-%d")
             query = query.where(InventoryDoc.created_at >= dt_from)
@@ -1733,7 +1778,6 @@ async def inventory_usage_report(
         for item in items:
             doc = item.doc
             
-            # Переклад типів операцій та кольори
             type_map = {
                 'supply': ('📥 Прихід', 'green'),
                 'writeoff': ('🗑️ Списання', 'red'),
@@ -1744,12 +1788,10 @@ async def inventory_usage_report(
             }
             type_label, color = type_map.get(doc.doc_type, (doc.doc_type, 'black'))
             
-            # Деталі (посилання на замовлення, якщо є)
             details = html.escape(doc.comment or '-')
             if doc.linked_order_id:
                 details = f"<a href='/admin/order/manage/{doc.linked_order_id}'>Замовлення #{doc.linked_order_id}</a>"
             
-            # Форматирование и определение знака
             qty_formatted = f"{item.quantity:.3f}"
             
             if doc.doc_type == 'inventory':
@@ -1817,16 +1859,11 @@ async def inventory_usage_report(
     """
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Звіт по руху", body=body, site_title=settings.site_title, **get_active_classes()))
 
-# --- ЗВІТ ПО РЕНТАБЕЛЬНОСТІ (ЮНІТ-ЕКОНОМІКА) ---
+# --- ЗВІТ ПО РЕНТАБЕЛЬНОСТІ ---
 @router.get("/reports/profitability", response_class=HTMLResponse)
 async def report_profitability(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
-    """
-    Звіт, що показує поточну собівартість (cost price) на основі техкарт та актуальних цін інгредієнтів,
-    порівнюючи її з ціною продажу (price).
-    """
     settings = await session.get(Settings, 1) or Settings()
     
-    # Отримуємо всі продукти з техкартами
     products_res = await session.execute(
         select(Product)
         .where(Product.is_active == True)
@@ -1834,11 +1871,9 @@ async def report_profitability(session: AsyncSession = Depends(get_db_session), 
     )
     products = products_res.scalars().all()
     
-    # Для кожного продукту шукаємо техкарту і рахуємо cost price
     data = []
     
     for p in products:
-        # Шукаємо техкарту для продукту
         tc = await session.scalar(
             select(TechCard)
             .where(TechCard.product_id == p.id)
@@ -1848,8 +1883,6 @@ async def report_profitability(session: AsyncSession = Depends(get_db_session), 
         cost_price = 0.0
         if tc:
             for item in tc.components:
-                # Ціна інгредієнта * кількість брутто
-                # current_cost може бути None або Decimal
                 ing_cost = float(item.ingredient.current_cost or 0)
                 amount = float(item.gross_amount or 0)
                 cost_price += ing_cost * amount
@@ -1857,10 +1890,7 @@ async def report_profitability(session: AsyncSession = Depends(get_db_session), 
         sale_price = float(p.price)
         margin = sale_price - cost_price
         
-        # Відсоток маржі (Gross Margin %)
         margin_percent = (margin / sale_price * 100) if sale_price > 0 else 0
-        
-        # Націнка (Markup %)
         markup_percent = (margin / cost_price * 100) if cost_price > 0 else 0
         
         data.append({
@@ -1873,17 +1903,15 @@ async def report_profitability(session: AsyncSession = Depends(get_db_session), 
             "markup_percent": markup_percent
         })
     
-    # Сортуємо: спочатку ті, де менша маржа (проблемні)
     data.sort(key=lambda x: x['margin_percent'])
     
     rows = ""
     for item in data:
-        # Підсвітка проблемних позицій
         row_style = ""
         margin_badge = f"{item['margin_percent']:.1f}%"
         
         if item['margin_percent'] < 30:
-            row_style = "background-color: #fff1f2;" # Червонуватий
+            row_style = "background-color: #fff1f2;"
             margin_badge = f"<span style='color:#e11d48; font-weight:bold;'>📉 {item['margin_percent']:.1f}%</span>"
         elif item['margin_percent'] > 60:
             margin_badge = f"<span style='color:#16a34a; font-weight:bold;'>🚀 {item['margin_percent']:.1f}%</span>"
@@ -1937,23 +1965,21 @@ async def report_suppliers(
     supplier_id: int = Query(None),
     date_from: str = Query(None),
     date_to: str = Query(None),
-    sort_by: str = Query("date_desc"), # date_desc, date_asc, amount_desc, amount_asc
+    sort_by: str = Query("date_desc"),
     session: AsyncSession = Depends(get_db_session),
     user=Depends(check_credentials)
 ):
     settings = await session.get(Settings, 1) or Settings()
     
-    # 1. Фильтры
     suppliers = (await session.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
     sup_opts = f"<option value=''>-- Всі постачальники --</option>"
     for s in suppliers:
         selected = "selected" if supplier_id == s.id else ""
         sup_opts += f"<option value='{s.id}' {selected}>{html.escape(s.name)}</option>"
 
-    # 2. Запрос документов (только Supply - Приход)
     query = select(InventoryDoc).options(
         joinedload(InventoryDoc.supplier),
-        selectinload(InventoryDoc.items) # Загружаем товары для подсчета суммы
+        selectinload(InventoryDoc.items) 
     ).where(InventoryDoc.doc_type == 'supply')
 
     if supplier_id:
@@ -1967,11 +1993,9 @@ async def report_suppliers(
         dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
         query = query.where(InventoryDoc.created_at <= dt_to)
 
-    # Получаем сырые данные
     docs_res = await session.execute(query)
     docs = docs_res.scalars().all()
 
-    # 3. Обработка данных (подсчет сумм)
     report_data = []
     total_period_sum = Decimal(0)
     total_period_paid = Decimal(0)
@@ -1994,7 +2018,6 @@ async def report_suppliers(
             "is_processed": d.is_processed
         })
 
-    # 4. Сортировка (Python side, так как сумма вычисляемая)
     if sort_by == 'date_desc':
         report_data.sort(key=lambda x: x['date'], reverse=True)
     elif sort_by == 'date_asc':
@@ -2004,13 +2027,11 @@ async def report_suppliers(
     elif sort_by == 'amount_asc':
         report_data.sort(key=lambda x: x['total'])
 
-    # 5. Генерация таблицы
     rows = ""
     for row in report_data:
         status_icon = "✅" if row['is_processed'] else "⚠️"
         date_str = row['date'].strftime('%d.%m.%Y %H:%M')
         
-        # Подсветка долга
         debt_display = f"{row['debt']:.2f}"
         if row['debt'] > 0:
             debt_display = f"<span style='color:#dc2626; font-weight:bold;'>{debt_display}</span>"
@@ -2032,7 +2053,6 @@ async def report_suppliers(
         </tr>
         """
 
-    # 6. HTML Шаблон
     body = f"""
     {get_nav('reports/suppliers')}
     
@@ -2100,13 +2120,12 @@ async def report_suppliers(
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Звіт: Постачальники", body=body, site_title=settings.site_title, **get_active_classes()))
 
-# --- НОВОЕ: Вкладка "Виробництво" ---
+# --- ВИРОБНИЦТВО ---
 @router.get("/production", response_class=HTMLResponse)
 async def production_page(session: AsyncSession = Depends(get_db_session), user=Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
     
     # Список П/Ф для выбора
-    # ДОБАВЛЕНО: .options(joinedload(Ingredient.unit)) - для избежания MissingGreenlet при доступе к unit.name
     pfs = (await session.execute(
         select(Ingredient)
         .options(joinedload(Ingredient.unit)) 
@@ -2116,11 +2135,11 @@ async def production_page(session: AsyncSession = Depends(get_db_session), user=
     
     pf_opts = "".join([f"<option value='{i.id}'>{i.name} ({i.unit.name})</option>" for i in pfs])
     
-    # Склады
+    # Склади
     warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
     wh_opts = "".join([f"<option value='{w.id}'>{w.name}</option>" for w in warehouses])
     
-    # Последние акты производства (Supply без supplier_id)
+    # Останні акти виробництва
     query = select(InventoryDoc).options(joinedload(InventoryDoc.target_warehouse))\
         .where(InventoryDoc.doc_type == 'supply', InventoryDoc.supplier_id == None)\
         .order_by(desc(InventoryDoc.created_at)).limit(20)
