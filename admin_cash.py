@@ -1,4 +1,3 @@
-
 # admin_cash.py
 
 import html
@@ -255,19 +254,19 @@ async def handover_form(
     if not active_shift:
         return HTMLResponse("<h1>Спочатку відкрийте касову зміну!</h1><a href='/admin/cash'>Назад</a>")
 
-    # --- ИСПРАВЛЕНИЕ: Добавлен фильтр, исключающий отмененные заказы ---
+    # --- ВИДАЛЕНО ФІЛЬТР is_cancelled_status=False ---
+    # Це дозволяє бачити скасовані замовлення, за якими висить борг (штраф)
     orders_res = await session.execute(
         select(Order).where(
             Order.payment_method == 'cash',
             Order.is_cash_turned_in == False,
-            Order.status.has(is_cancelled_status=False), # <--- Фильтр отмененных
             or_(
                 Order.courier_id == employee.id,
                 Order.accepted_by_waiter_id == employee.id,
                 Order.completed_by_courier_id == employee.id
             )
         )
-        .options(joinedload(Order.table))
+        .options(joinedload(Order.table), joinedload(Order.status))
         .order_by(Order.id.desc())
     )
     orders = orders_res.scalars().all()
@@ -278,10 +277,14 @@ async def handover_form(
         total_sum += o.total_price
         target = o.address if o.is_delivery else (o.table.name if o.table else 'Самовивіз')
         
+        status_label = ""
+        if o.status and o.status.is_cancelled_status:
+            status_label = " <span style='color:red; font-size:0.8em;'>[СКАСОВАНО/ШТРАФ]</span>"
+        
         rows += f"""
         <tr>
             <td style="text-align:center;"><input type="checkbox" name="order_ids" value="{o.id}" checked onchange="recalcTotal()"></td>
-            <td>#{o.id}</td>
+            <td>#{o.id} {status_label}</td>
             <td>{o.created_at.strftime('%d.%m %H:%M')}</td>
             <td>{html.escape(target or '')}</td>
             <td style="text-align:right; font-weight:bold;"><span class="amount">{o.total_price:.2f}</span> грн</td>
@@ -387,7 +390,8 @@ async def process_handover_route(
     username: str = Depends(check_credentials)
 ):
     form_data = await request.form()
-    order_ids = [int(x) for x in form.getlist("order_ids")]
+    # FIX: Changed 'form' to 'form_data'
+    order_ids = [int(x) for x in form_data.getlist("order_ids")]
     
     if not order_ids:
         raise HTTPException(status_code=400, detail="Не вибрано жодного замовлення")
