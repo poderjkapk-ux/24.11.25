@@ -12,7 +12,7 @@ from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotificat
 # --- СКЛАД: Импорт функций списания и возврата ---
 from inventory_service import deduct_products_by_tech_card, reverse_deduction
 
-# ДОДАНО: Імпорт менеджера WebSocket для відправки подій
+# Імпорт менеджера WebSocket для відправки подій
 from websocket_manager import manager
 
 logger = logging.getLogger(__name__)
@@ -37,9 +37,9 @@ async def notify_new_order_to_staff(admin_bot: Bot, order: Order, session: Async
     """
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     
-    # Загружаем связи
+    # Загружаем связи (додано joinedload(OrderItem.product) для безпеки)
     query = select(Order).where(Order.id == order.id).options(
-        selectinload(Order.items),
+        selectinload(Order.items).joinedload(OrderItem.product),
         joinedload(Order.status),
         joinedload(Order.table)
     )
@@ -264,7 +264,6 @@ async def notify_station_completion(bot: Bot, order: Order, area: str, session: 
     Якщо вказано employee_id, визначаємо страви, які готуються в цехах, прив'язаних до цього співробітника.
     """
     # 1. Завантажуємо замовлення з усіма необхідними зв'язками для формування повідомлення
-    # Використовуємо select для повного завантаження, щоб уникнути MissingGreenlet
     query = select(Order).where(Order.id == order.id).options(
         joinedload(Order.table),
         joinedload(Order.accepted_by_waiter),
@@ -374,7 +373,6 @@ async def notify_station_completion(bot: Bot, order: Order, area: str, session: 
         except Exception: pass
 
     # --- 7. WEBSOCKET BROADCAST ---
-    # Сповіщаємо весь персонал про готовність (щоб у офіціанта/кур'єра з'явилися галочки)
     await manager.broadcast_staff({
         "type": "item_ready",
         "order_id": order.id,
@@ -393,11 +391,19 @@ async def notify_all_parties_on_status_change(
     """
     Централизованная функция уведомлений и логики склада при смене статуса.
     """
-    # FIX: Добавлено 'items' в список refresh, чтобы избежать MissingGreenlet при обращении к order.items в inventory_service
-    await session.refresh(order, ['status', 'courier', 'accepted_by_waiter', 'table', 'items'])
+    # ВИПРАВЛЕНО: Використовуємо явний запит select замість refresh, щоб уникнути помилок MissingGreenlet
+    # Це гарантує, що колекція items (та product) завантажується асинхронно
+    query = select(Order).where(Order.id == order.id).options(
+        selectinload(Order.items).joinedload(OrderItem.product), # Критично для списання
+        joinedload(Order.status),
+        joinedload(Order.courier),
+        joinedload(Order.accepted_by_waiter),
+        joinedload(Order.table)
+    )
+    result = await session.execute(query)
+    order = result.scalar_one()
     
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
-    
     new_status = order.status
     
     # --- 1. ЛОГИКА СКЛАДА (Списание и Возврат) ---
@@ -420,6 +426,7 @@ async def notify_all_parties_on_status_change(
         is_deducted = getattr(order, 'is_inventory_deducted', False)
         if not is_deducted:
             try:
+                # Тепер items завантажені правильно, помилки не буде
                 await deduct_products_by_tech_card(session, order)
                 order.is_inventory_deducted = True
                 await session.commit()
@@ -469,7 +476,6 @@ async def notify_all_parties_on_status_change(
             target_employees.append(order.courier)
             ready_message += f"Кур'єр: {html.quote(order.courier.full_name)}"
 
-        # Если исполнителя нет, уведомляем операторов
         if not target_employees:
              operator_roles_res = await session.execute(select(Role.id).where(Role.can_manage_orders == True))
              op_ids = operator_roles_res.scalars().all()
