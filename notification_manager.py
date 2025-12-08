@@ -1,3 +1,4 @@
+
 # notification_manager.py
 
 import logging
@@ -12,6 +13,7 @@ from sqlalchemy.orm import selectinload, joinedload
 from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotification
 # --- СКЛАД: Импорт функций списания и возврата ---
 from inventory_service import deduct_products_by_tech_card, reverse_deduction
+from inventory_models import InventoryDoc # Додано для зміни типу документа
 
 # Импорт менеджера WebSocket для отправки событий
 from websocket_manager import manager
@@ -386,7 +388,7 @@ async def notify_all_parties_on_status_change(
     # А. ПОВЕРНЕННЯ НА СКЛАД ПРИ СКАСУВАННІ
     if new_status.is_cancelled_status and order.is_inventory_deducted:
         # Перевіряємо прапорець skip_inventory_return
-        # Якщо він True - значить це "Списання" (Waste), повертати продукти не треба
+        # Якщо він False - повертаємо товари на склад (клієнт відмовився)
         if not order.skip_inventory_return:
             try:
                 await reverse_deduction(session, order)
@@ -396,8 +398,31 @@ async def notify_all_parties_on_status_change(
             except Exception as e:
                 logger.error(f"Помилка повернення на склад для #{order.id}: {e}")
         else:
-            # Якщо skip_return = True, то продукти не повертаються (вважаються списаними як втрати)
-            logger.info(f"Замовлення #{order.id} скасовано БЕЗ повернення продуктів (Списання/Штраф).")
+            # Якщо skip_return = True, то це "Списання" (Waste).
+            # Ми перетворюємо документ "Deduction" (Продаж) на "Writeoff" (Списання)
+            # щоб в звітах це виглядало як втрати, а не продажі.
+            try:
+                docs_to_update = await session.execute(
+                    select(InventoryDoc).where(
+                        InventoryDoc.linked_order_id == order.id,
+                        InventoryDoc.doc_type == 'deduction'
+                    )
+                )
+                
+                updated_count = 0
+                for doc in docs_to_update.scalars().all():
+                    doc.doc_type = 'writeoff'
+                    doc.comment = f"Списання (Скасування) замовлення #{order.id}"
+                    updated_count += 1
+                
+                if updated_count > 0:
+                    await session.commit()
+                    logger.info(f"Замовлення #{order.id}: {updated_count} накладних продажу перетворено на списання.")
+                else:
+                    logger.warning(f"Замовлення #{order.id}: Документів продажу не знайдено для конвертації в списання.")
+                    
+            except Exception as e:
+                logger.error(f"Помилка конвертації документів для #{order.id}: {e}")
 
     # Б. СПИСАННЯ СО СКЛАДА (якщо статус "Готовий до видачі" або завершальний)
     if (new_status.name == "Готовий до видачі" or new_status.is_completed_status) and not order.is_inventory_deducted:

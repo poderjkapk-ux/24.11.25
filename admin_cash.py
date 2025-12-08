@@ -1,3 +1,4 @@
+
 # admin_cash.py
 
 import html
@@ -226,7 +227,6 @@ async def cash_dashboard(
         </div>
         """
 
-    # --- ИСПРАВЛЕНИЕ ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
 
@@ -255,18 +255,19 @@ async def handover_form(
     if not active_shift:
         return HTMLResponse("<h1>Спочатку відкрийте касову зміну!</h1><a href='/admin/cash'>Назад</a>")
 
-    # Знаходимо неоплачені замовлення
+    # --- ИСПРАВЛЕНИЕ: Добавлен фильтр, исключающий отмененные заказы ---
     orders_res = await session.execute(
         select(Order).where(
             Order.payment_method == 'cash',
             Order.is_cash_turned_in == False,
+            Order.status.has(is_cancelled_status=False), # <--- Фильтр отмененных
             or_(
                 Order.courier_id == employee.id,
                 Order.accepted_by_waiter_id == employee.id,
                 Order.completed_by_courier_id == employee.id
             )
         )
-        .options(joinedload(Order.table))  # <--- ИСПРАВЛЕНИЕ: Добавлена подгрузка стола
+        .options(joinedload(Order.table))
         .order_by(Order.id.desc())
     )
     orders = orders_res.scalars().all()
@@ -347,7 +348,7 @@ async def handover_form(
                             </tr>
                         </thead>
                         <tbody>
-                            {rows or "<tr><td colspan='5' style='text-align:center; padding:20px;'>Немає доступних замовлень</td></tr>"}
+                            {rows or "<tr><td colspan='5' style='text-align:center; padding:20px;'>Немає доступних замовлень (або всі борги погашено)</td></tr>"}
                         </tbody>
                     </table>
                 </div>
@@ -367,7 +368,6 @@ async def handover_form(
     </div>
     """
     
-    # --- ИСПРАВЛЕНИЕ ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
     
@@ -387,7 +387,7 @@ async def process_handover_route(
     username: str = Depends(check_credentials)
 ):
     form_data = await request.form()
-    order_ids = [int(x) for x in form_data.getlist("order_ids")]
+    order_ids = [int(x) for x in form.getlist("order_ids")]
     
     if not order_ids:
         raise HTTPException(status_code=400, detail="Не вибрано жодного замовлення")
@@ -399,7 +399,6 @@ async def process_handover_route(
         
     return RedirectResponse("/admin/cash", status_code=303)
 
-# --- ІСТОРІЯ ЗМІН ---
 @router.get("/admin/cash/history", response_class=HTMLResponse)
 async def cash_history(session: AsyncSession = Depends(get_db_session), username: str = Depends(check_credentials)):
     settings = await session.get(Settings, 1) or Settings()
@@ -477,13 +476,11 @@ async def cash_history(session: AsyncSession = Depends(get_db_session), username
     </div>
     """
     
-    # --- ИСПРАВЛЕНИЕ ---
     active_classes = {key: "" for key in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "reports_active", "settings_active", "design_active", "inventory_active"]}
     active_classes["reports_active"] = "active"
     
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(title="Історія змін", body=body, site_title=settings.site_title, **active_classes))
 
-# --- ДРУК Z-ЗВІТУ ---
 @router.get("/admin/cash/z_report/{shift_id}", response_class=HTMLResponse)
 async def print_z_report(shift_id: int, session: AsyncSession = Depends(get_db_session)):
     shift = await session.get(CashShift, shift_id, options=[joinedload(CashShift.employee)])

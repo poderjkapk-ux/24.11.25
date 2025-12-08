@@ -1,3 +1,4 @@
+
 # staff_pwa.py
 
 import html
@@ -1550,10 +1551,12 @@ async def cashier_api_action(
             if not shift: return JSONResponse({"error": "Відкрийте зміну!"}, 400)
             
             # Знаходимо замовлення з боргом
+            # --- ИСПРАВЛЕНИЕ: Фильтр отмененных ---
             orders_res = await session.execute(
                 select(Order.id).where(
                     Order.payment_method == 'cash',
                     Order.is_cash_turned_in == False,
+                    Order.status.has(is_cancelled_status=False), # <--- Фильтр
                     or_(
                         Order.courier_id == target_emp_id,
                         Order.accepted_by_waiter_id == target_emp_id,
