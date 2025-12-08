@@ -82,68 +82,53 @@ async def fetch_db_modifiers(session: AsyncSession, items_list: list) -> dict:
 async def check_and_update_order_readiness(session: AsyncSession, order_id: int, bot):
     """
     Проверяет готовность всех блюд в заказе.
-    Если все блюда Кухни готовы -> kitchen_done = True
-    Если все блюда Бара готовы -> bar_done = True
+    Обновляет глобальный статус заказа, если все позиции готовы.
     """
     order = await session.get(Order, order_id, options=[selectinload(Order.items).joinedload(OrderItem.product)])
     if not order: return
 
+    # Проверяем глобальную готовность (все айтемы готовы)
+    all_items_ready = all(i.is_ready for i in order.items)
+    
+    # Обновляем легаси флаги для совместимости (если они используются где-то еще)
     kitchen_items = [i for i in order.items if i.preparation_area != 'bar']
     bar_items = [i for i in order.items if i.preparation_area == 'bar']
-
-    # Проверка кухни
-    all_kitchen_ready = all(i.is_ready for i in kitchen_items) if kitchen_items else True
-    # Проверка бара
-    all_bar_ready = all(i.is_ready for i in bar_items) if bar_items else True
-
+    
     updated = False
     
-    # Логика обновления статусов цехов
     if kitchen_items:
-        if all_kitchen_ready and not order.kitchen_done:
-            order.kitchen_done = True
+        new_k_done = all(i.is_ready for i in kitchen_items)
+        if new_k_done != order.kitchen_done:
+            order.kitchen_done = new_k_done
             updated = True
-            await notify_station_completion(bot, order, 'kitchen', session)
-        elif not all_kitchen_ready and order.kitchen_done:
-            # Если сняли галочку и стало не готово
-            order.kitchen_done = False
-            updated = True
+            if new_k_done:
+                await notify_station_completion(bot, order, 'kitchen', session)
 
     if bar_items:
-        if all_bar_ready and not order.bar_done:
-            order.bar_done = True
+        new_b_done = all(i.is_ready for i in bar_items)
+        if new_b_done != order.bar_done:
+            order.bar_done = new_b_done
             updated = True
-            await notify_station_completion(bot, order, 'bar', session)
-        elif not all_bar_ready and order.bar_done:
-            order.bar_done = False
+            if new_b_done:
+                await notify_station_completion(bot, order, 'bar', session)
+
+    # Если ВСЕ готово, меняем глобальный статус заказа
+    if all_items_ready:
+        ready_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Готовий до видачі").limit(1))
+        
+        # Меняем статус только если он еще не финальный и не "Готов"
+        if ready_status and order.status_id != ready_status.id and not order.status.is_completed_status:
+            old_status = order.status.name if order.status else "Unknown"
+            order.status_id = ready_status.id
+            session.add(OrderStatusHistory(order_id=order.id, status_id=ready_status.id, actor_info="Система (Авто-готовність)"))
+            
+            # Уведомляем всех о смене статуса
+            await notify_all_parties_on_status_change(
+                order, old_status, "Система", bot, None, session
+            )
             updated = True
 
     if updated:
-        # Если ВСЕ готово, меняем глобальный статус заказа
-        has_k = bool(kitchen_items)
-        has_b = bool(bar_items)
-        
-        is_fully_done = False
-        if has_k and has_b:
-            if order.kitchen_done and order.bar_done: is_fully_done = True
-        elif has_k:
-            if order.kitchen_done: is_fully_done = True
-        elif has_b:
-            if order.bar_done: is_fully_done = True
-            
-        if is_fully_done:
-            ready_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Готовий до видачі").limit(1))
-            # Меняем статус только если он еще не финальный и не "Готов"
-            if ready_status and order.status_id != ready_status.id and not order.status.is_completed_status:
-                old_status = order.status.name if order.status else "Unknown"
-                order.status_id = ready_status.id
-                session.add(OrderStatusHistory(order_id=order.id, status_id=ready_status.id, actor_info="Система (Авто-готовність)"))
-                
-                # Уведомляем всех о смене статуса
-                await notify_all_parties_on_status_change(
-                    order, old_status, "Система", bot, None, session
-                )
-
         await session.commit()
 
 # --- АВТОРИЗАЦИЯ ---
@@ -179,7 +164,7 @@ async def login_action(
     if not employee:
         return RedirectResponse(url="/staff/login?error=1", status_code=303)
     
-    # Простая проверка пароля (или admin backdoor)
+    # Простая проверка пароля
     if not employee.password_hash:
         if password == "admin": pass 
         else: return RedirectResponse(url="/staff/login?error=1", status_code=303)
@@ -251,7 +236,7 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
             tabs_html += '<button class="nav-item active" onclick="switchTab(\'orders\')"><i class="fa-solid fa-list-ul"></i> Мої замовлення</button>'
         tabs_html += '<button class="nav-item" onclick="switchTab(\'tables\')"><i class="fa-solid fa-chair"></i> Столи</button>'
         
-    # 3. КУХНЯ / БАР
+    # 3. КУХНЯ / БАР (ОБЪЕДИНЕНО В PRODUCTION)
     if is_kitchen or is_bar:
         active_cls = "active" if not (is_admin_operator or is_waiter) else ""
         tabs_html += f'<button class="nav-item {active_cls}" onclick="switchTab(\'production\')"><i class="fa-solid fa-fire-burner"></i> Черга</button>'
@@ -448,7 +433,6 @@ async def _render_tables_view(session: AsyncSession, employee: Employee):
     return JSONResponse({"html": html_content})
 
 async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
-    """Генерация списка заказов для официанта с группировкой по столам и статусами блюд."""
     final_ids = (await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))).scalars().all()
     
     tables_sub = select(Table.id).where(Table.assigned_waiters.any(Employee.id == employee.id))
@@ -491,10 +475,7 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
                     mods_names = [m['name'] for m in item.modifiers]
                     mods_str = f" <small style='color:#666;'>({', '.join(mods_names)})</small>"
                 
-                # --- ЛОГИКА ГАЛОЧЕК ДЛЯ ОФИЦИАНТА ---
-                # Используем поле is_ready
                 is_ready = item.is_ready
-                
                 icon = "✅" if is_ready else "⏳"
                 style = "color:green; font-weight:bold;" if is_ready else "color:#555;"
                 
@@ -514,7 +495,6 @@ async def _get_waiter_orders_grouped(session: AsyncSession, employee: Employee):
             else: 
                 btns += f"<button class='action-btn secondary' onclick=\"openOrderEditModal({o.id})\">✏️ Деталі / Оплата</button>"
             
-            # Статус текста (Индикатор готовности цехов)
             status_parts = [o.status.name]
             if o.kitchen_done: status_parts.append("🍳Готово")
             if o.bar_done: status_parts.append("🍹Готово")
@@ -584,12 +564,20 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
     """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
+    """
+    Генерация списка заказов для экрана производства (Кухня/Бар).
+    ИСПРАВЛЕНО: Фильтрация строго по ID цехов (assigned_workshop_ids).
+    """
     orders_data = []
     
-    # Получаем ID цехов, назначенных сотруднику
+    # 1. Получаем ID цехов, назначенных сотруднику
     my_workshop_ids = employee.assigned_workshop_ids or []
     
-    # Загружаем заказы "В работе"
+    if not my_workshop_ids:
+        # Если цеха не назначены - сотрудник не видит заказов
+        return []
+
+    # 2. Загружаем заказы со статусами, видимыми для производства
     status_query = select(OrderStatus.id).where(
         or_(OrderStatus.visible_to_chef == True, OrderStatus.visible_to_bartender == True)
     )
@@ -602,9 +590,7 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
             joinedload(Order.status)
         ).where(
             Order.status_id.in_(status_ids), 
-            Order.status.has(requires_kitchen_notify=True),
-            # Показываем заказ, если хотя бы один из цехов еще не закончил
-            or_(Order.kitchen_done == False, Order.bar_done == False)
+            Order.status.has(requires_kitchen_notify=True)
         ).order_by(Order.id.asc())
         
         orders = (await session.execute(q)).scalars().all()
@@ -613,27 +599,22 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
             for o in orders:
                 active_items_html = ""
                 done_items_html = ""
-                count_active = 0
-                count_total = 0
+                count_active_my_items = 0
+                count_total_my_items = 0
                 
                 for item in o.items:
-                    # Проверяем, относится ли товар к цехам сотрудника
+                    # Проверяем, совпадает ли production_warehouse_id товара с цехами сотрудника
                     prod_wh_id = item.product.production_warehouse_id
-                    is_my_item = not my_workshop_ids or (prod_wh_id in my_workshop_ids)
                     
-                    # Также проверяем роль (Кухня vs Бар) для совместимости
-                    is_bar_item = item.preparation_area == 'bar'
-                    if is_bar_item and not employee.role.can_receive_bar_orders: is_my_item = False
-                    if not is_bar_item and not employee.role.can_receive_kitchen_orders: is_my_item = False
-
-                    if is_my_item:
-                        count_total += 1
+                    if not prod_wh_id:
+                        continue
+                        
+                    if prod_wh_id in my_workshop_ids:
+                        count_total_my_items += 1
+                        
                         mods = f"<br><small>{', '.join([m['name'] for m in item.modifiers])}</small>" if item.modifiers else ""
                         
-                        # --- ОТОБРАЖЕНИЕ БЛЮДА ---
                         if item.is_ready:
-                            # Уже готовое блюдо (серое, зачеркнутое)
-                            # При клике спрашиваем "Вернуть?"
                             done_items_html += f"""
                             <div onclick="if(confirm('Повернути цю страву в роботу?')) performAction('toggle_item', {o.id}, {item.id})" 
                                  style="padding:12px 15px; border-bottom:1px solid #eee; cursor:pointer; font-size:1rem; display:flex; align-items:center; background:#f9f9f9; color:#999; text-decoration:line-through;">
@@ -642,9 +623,7 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                             </div>
                             """
                         else:
-                            # Активное блюдо (белое, большое)
-                            # При клике спрашиваем "Готово?"
-                            count_active += 1
+                            count_active_my_items += 1
                             active_items_html += f"""
                             <div onclick="if(confirm('Страва готова?')) performAction('toggle_item', {o.id}, {item.id})" 
                                  style="padding:18px 15px; border-bottom:1px solid #eee; cursor:pointer; font-size:1.15rem; display:flex; align-items:center; background:white; font-weight:500;">
@@ -653,13 +632,11 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                             </div>
                             """
                 
-                # Показываем заказ только если есть хотя бы одно блюдо этого цеха
-                if count_total > 0:
-                    if count_active == 0: continue
+                if count_total_my_items > 0:
+                    if count_active_my_items == 0: continue # Все готово, скрываем
 
                     table_info = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
                     
-                    # Собираем все вместе
                     full_content = f"""
                     <div class='info-row'><i class='fa-solid fa-utensils'></i> <b>{table_info}</b> <span style="color:#777; margin-left:10px;">#{o.id}</span></div>
                     <div style='border-radius:8px; overflow:hidden; border:1px solid #ddd; margin-top:5px;'>
@@ -668,15 +645,13 @@ async def _get_production_orders(session: AsyncSession, employee: Employee):
                     </div>
                     """
                     
-                    btns = "" # Кнопок не надо, все на кликах
-                    
                     orders_data.append({"id": o.id, "html": STAFF_ORDER_CARD.format(
                         id=o.id, 
                         time=o.created_at.strftime('%H:%M'), 
                         badge_class="warning", 
                         status="В роботі", 
                         content=full_content,
-                        buttons=btns, 
+                        buttons="", 
                         color="#f39c12"
                     )})
 
@@ -688,12 +663,9 @@ async def _get_my_courier_orders(session: AsyncSession, employee: Employee):
     orders = (await session.execute(q)).scalars().all()
     res = []
     for o in orders:
-        # Формируем список с галочками
         items_html_list = []
         for item in o.items:
-            # Используем is_ready
             is_ready = item.is_ready
-            
             icon = "✅" if is_ready else "⏳"
             style = "color:#27ae60;" if is_ready else "color:#555;"
             items_html_list.append(f"<div style='{style}'>{icon} {html.escape(item.product_name)} x{item.quantity}</div>")
@@ -924,10 +896,6 @@ async def update_order_status_api(
     old_status = order.status.name
     new_status = await session.get(OrderStatus, new_status_id)
     
-    # --- ВАЖЛИВО: Перевірка дозволу на зміну статусу ---
-    # Дозволяємо перехід з "Виконано" в "Скасовано" або "Активний", щоб виправити помилку.
-    # Забороняємо інші переходи для закритих замовлень.
-    
     is_already_closed = order.status.is_completed_status or order.status.is_cancelled_status
     is_moving_to_cancelled = new_status.is_cancelled_status
     is_moving_to_active = not (new_status.is_completed_status or new_status.is_cancelled_status)
@@ -936,18 +904,16 @@ async def update_order_status_api(
         if not (is_moving_to_cancelled or is_moving_to_active):
              return JSONResponse({"error": "Замовлення закрите. Зміна заборонена."}, 400)
 
-    # --- ЛОГІКА КАСИ: СКАСУВАННЯ БОРГУ ---
-    # Якщо переходимо з "Виконано" (де гроші повісили на кур'єра) в "Скасовано"
+    # Скасування боргу при переході з Виконано в Скасовано
     if order.status.is_completed_status and new_status.is_cancelled_status:
         await unregister_employee_debt(session, order)
-    # -------------------------------------
 
     order.status_id = new_status_id
     
     if payment_method:
         order.payment_method = payment_method
 
-    # --- ЛОГІКА КАСИ: НАРАХУВАННЯ БОРГУ ---
+    # Нарахування боргу при завершенні
     if new_status.is_completed_status:
         if order.is_delivery:
              if order.courier_id:
@@ -963,7 +929,6 @@ async def update_order_status_api(
                 elif order.accepted_by_waiter_id: debtor_id = order.accepted_by_waiter_id
             
             await register_employee_debt(session, order, debtor_id)
-    # -----------------------------------------------
 
     session.add(OrderStatusHistory(order_id=order.id, status_id=new_status_id, actor_info=f"{employee.full_name} (PWA)"))
     await session.commit()
@@ -984,7 +949,6 @@ async def update_order_items_api(
     order_id = int(data.get("orderId"))
     items = data.get("items") 
     
-    # ВАЖНО: Добавляем joinedload(Order.status), чтобы иметь доступ к свойствам статуса
     order = await session.get(Order, order_id, options=[joinedload(Order.status)])
     
     if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
@@ -995,10 +959,8 @@ async def update_order_items_api(
     if order.status.is_completed_status or order.status.is_cancelled_status:
         return JSONResponse({"error": "Замовлення закрите"}, 400)
         
-    # --- НОВАЯ ПРОВЕРКА (Блокировка редактирования если на кухне) ---
     if order.status.requires_kitchen_notify:
-        return JSONResponse({"error": "Замовлення вже на кухні. Редагування заборонено. Створіть нове замовлення для додаткових страв."}, 403)
-    # ---------------------------------------------------------------
+        return JSONResponse({"error": "Замовлення вже на кухні. Редагування заборонено."}, 403)
     
     if order.is_inventory_deducted:
         return JSONResponse({"error": "Склад вже списано. Редагування заборонено."}, 403)
@@ -1011,9 +973,7 @@ async def update_order_items_api(
         products = (await session.execute(select(Product).where(Product.id.in_(prod_ids)))).scalars().all()
         prod_map = {p.id: p for p in products}
         
-        # --- FIX: Загружаем модификаторы из БД ---
         db_modifiers = await fetch_db_modifiers(session, items)
-        # -------------------------------------------
         
         for item in items:
             pid = int(item['id'])
@@ -1021,7 +981,6 @@ async def update_order_items_api(
             if pid in prod_map and qty > 0:
                 p = prod_map[pid]
                 
-                # --- FIX: Реконструируем модификаторы ---
                 final_mods = []
                 mods_price = Decimal(0)
                 for raw_mod in item.get('modifiers', []):
@@ -1036,7 +995,6 @@ async def update_order_items_api(
                             "ingredient_id": m_db.ingredient_id,
                             "ingredient_qty": float(m_db.ingredient_qty)
                         })
-                # ---------------------------------------
                 
                 item_price = p.price + mods_price
                 total_price += item_price * qty
@@ -1051,15 +1009,12 @@ async def update_order_items_api(
                     modifiers=final_mods
                 ))
     
-    # --- ЛОГИКА ДОСТАВКИ (Фикс потери стоимости доставки) ---
     if order.is_delivery:
         settings = await session.get(Settings, 1) or Settings()
-        # Проверяем порог бесплатной доставки
         delivery_cost = settings.delivery_cost
         if settings.free_delivery_from is not None and total_price >= settings.free_delivery_from:
             delivery_cost = Decimal(0)
         total_price += delivery_cost
-    # ---------------------------------------------------------
 
     order.kitchen_done = False
     order.bar_done = False
@@ -1086,16 +1041,15 @@ async def handle_action_api(
         action = data.get("action")
         order_id = int(data.get("orderId"))
         
-        # --- ЛОГИКА ПОШТУЧНОЙ ГОТОВНОСТИ ---
         if action == "toggle_item":
             item_id = int(data.get("extra"))
             item = await session.get(OrderItem, item_id)
             if item:
-                # Toggle ready state
+                # Поштучная готовность
                 item.is_ready = not item.is_ready
                 await session.commit()
                 
-                # Проверяем, готов ли весь заказ (для конкретного цеха)
+                # Проверка готовности всего заказа
                 await check_and_update_order_readiness(session, order_id, request.app.state.admin_bot)
                 return JSONResponse({"success": True})
         
@@ -1141,6 +1095,7 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
                 "name": p.name, 
                 "price": float(p.price), 
                 "preparation_area": p.preparation_area,
+                "production_warehouse_id": p.production_warehouse_id, # Важно для фильтрации
                 "modifiers": p_mods 
             })
             
@@ -1176,9 +1131,7 @@ async def create_waiter_order(
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
         
-        # --- FIX: Загружаем модификаторы из БД ---
         db_modifiers = await fetch_db_modifiers(session, cart)
-        # -------------------------------------------
         
         for item in cart:
             pid = int(item['id'])
@@ -1187,7 +1140,6 @@ async def create_waiter_order(
             if pid in products_map and qty > 0:
                 prod = products_map[pid]
                 
-                # --- FIX: Реконструируем модификаторы ---
                 final_mods = []
                 mods_price = Decimal(0)
                 for raw_mod in item.get('modifiers', []):
@@ -1202,7 +1154,6 @@ async def create_waiter_order(
                             "ingredient_id": m_db.ingredient_id,
                             "ingredient_qty": float(m_db.ingredient_qty)
                         })
-                # ---------------------------------------
                 
                 item_price = prod.price + mods_price
                 total += item_price * qty

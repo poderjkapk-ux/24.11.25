@@ -34,15 +34,15 @@ class WaiterCreateOrderStates(StatesGroup):
     managing_cart = State()
     choosing_category = State()
     choosing_product = State()
-    choosing_modifiers = State() # Новый статус для выбора модификаторов
-
+    choosing_modifiers = State()
 
 def get_staff_login_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text="🔐 Вхід оператора"))
     builder.row(KeyboardButton(text="🚚 Вхід кур'єра"))
     builder.row(KeyboardButton(text="🤵 Вхід офіціанта"))
-    builder.row(KeyboardButton(text="🧑‍🍳 Вхід повара"), KeyboardButton(text="🍹 Вхід бармена"))
+    # Універсальна кнопка для входу виробничого персоналу
+    builder.row(KeyboardButton(text="🧑‍🍳 Вхід на зміну (Цех)"))
     return builder.as_markup(resize_keyboard=True)
 
 def get_staff_keyboard(employee: Employee):
@@ -60,10 +60,9 @@ def get_staff_keyboard(employee: Employee):
             role_buttons.append(KeyboardButton(text="📦 Мої замовлення"))
         if role.can_serve_tables:
             role_buttons.append(KeyboardButton(text="🍽 Мої столики"))
-        if role.can_receive_kitchen_orders:
-             role_buttons.append(KeyboardButton(text="🔪 Кухня"))
-        if role.can_receive_bar_orders:
-             role_buttons.append(KeyboardButton(text="🍹 Бар"))
+        # Універсальна кнопка для виробництва (Кухня/Бар/Піца і т.д.)
+        if role.can_receive_kitchen_orders or role.can_receive_bar_orders:
+             role_buttons.append(KeyboardButton(text="🔥 Замовлення (Цех)"))
             
     if role_buttons:
         builder.row(*role_buttons)
@@ -71,10 +70,11 @@ def get_staff_keyboard(employee: Employee):
     builder.row(KeyboardButton(text="🚪 Вийти"))
     return builder.as_markup(resize_keyboard=True)
 
-# --- ДОПОМІЖНА ФУНКЦІЯ: Отримання відфільтрованого тексту чека ---
-async def _get_filtered_order_text(session: AsyncSession, order: Order, area: str) -> str:
+# --- ДОПОМІЖНА ФУНКЦІЯ: Отримання відфільтрованого тексту чека по ID цехів ---
+async def _get_workshop_order_text(session: AsyncSession, order: Order, workshop_ids: list[int]) -> str:
     """
-    Повертає текст складу замовлення, залишаючи ТІЛЬКИ товари для вказаного цеху.
+    Повертає текст складу замовлення, залишаючи ТІЛЬКИ товари, 
+    які готуються у цехах зі списку workshop_ids.
     """
     if 'items' not in order.__dict__:
         await session.refresh(order, ['items'])
@@ -84,22 +84,24 @@ async def _get_filtered_order_text(session: AsyncSession, order: Order, area: st
 
     filtered_lines = []
     for item in order.items:
-        # Перевіряємо цех
-        is_target = False
-        if area == 'bar' and item.preparation_area == 'bar':
-            is_target = True
-        elif area == 'kitchen' and item.preparation_area != 'bar':
-            is_target = True
+        # Завантажуємо продукт, якщо його немає, щоб отримати production_warehouse_id
+        # (зазвичай він завантажується через selectinload, але перевірка не завадить)
+        if 'product' not in item.__dict__:
+             item.product = await session.get(Product, item.product_id)
 
-        if is_target:
+        # Перевіряємо, чи належить товар до одного з цехів працівника
+        # item.product.production_warehouse_id - це ID складу виробництва
+        if item.product and item.product.production_warehouse_id in workshop_ids:
             mods_str = ""
             if item.modifiers:
-                # item.modifiers це список dict з JSON поля
                 mod_names = [m.get('name', '') for m in item.modifiers]
                 if mod_names:
                     mods_str = f" (+ {', '.join(mod_names)})"
             
-            filtered_lines.append(f"- {html_module.escape(item.product_name)}{mods_str} x {item.quantity}")
+            # Статус конкретної страви
+            status_icon = "✅" if item.is_ready else "⏳"
+            
+            filtered_lines.append(f"{status_icon} {html_module.escape(item.product_name)}{mods_str} x {item.quantity}")
 
     if not filtered_lines:
         return ""
@@ -107,40 +109,49 @@ async def _get_filtered_order_text(session: AsyncSession, order: Order, area: st
     return "\n".join(filtered_lines)
 
 
-# --- ЕКРАН ПОВАРА (Тільки 'kitchen') ---
-async def show_chef_orders(message_or_callback: Message | CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
+# --- УНІВЕРСАЛЬНИЙ ЕКРАН ВИРОБНИЦТВА (Цех) ---
+async def show_workshop_orders(message_or_callback: Message | CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
     user_id = message_or_callback.from_user.id
     message = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
 
     employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == user_id).options(joinedload(Employee.role)))
     
-    if not employee or not employee.role.can_receive_kitchen_orders:
-         return await message.answer("❌ У вас немає прав повара.")
-    if not employee.is_on_shift:
-         return await message.answer("🔴 Ви не на зміні.")
+    if not employee: return await message.answer("❌ Авторизуйтесь.")
+    if not employee.is_on_shift: return await message.answer("🔴 Ви не на зміні.")
+    
+    # Отримуємо ID цехів співробітника (налаштовується в адмінці)
+    my_workshop_ids = employee.assigned_workshop_ids or []
+    if not my_workshop_ids:
+        # Спроба фолбека для старих налаштувань (якщо поле пусте, але є роль)
+        # Але краще вимагати налаштування.
+        return await message.answer("❌ За вами не закріплено жодного цеху. Зверніться до адміністратора для налаштування прав.")
 
-    kitchen_statuses_res = await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_chef == True))
-    kitchen_status_ids = kitchen_statuses_res.scalars().all()
+    # Статуси "В роботі"
+    statuses_res = await session.execute(select(OrderStatus.id).where(OrderStatus.requires_kitchen_notify == True))
+    status_ids = statuses_res.scalars().all()
 
     orders_res = await session.execute(
         select(Order)
-        .options(joinedload(Order.status), joinedload(Order.table), selectinload(Order.items))
-        .where(Order.status_id.in_(kitchen_status_ids))
+        .options(joinedload(Order.status), joinedload(Order.table), selectinload(Order.items).joinedload(OrderItem.product))
+        .where(Order.status_id.in_(status_ids))
         .order_by(Order.id.asc())
     )
     all_orders = orders_res.scalars().all()
 
-    text = "🔪 <b>Замовлення на кухні:</b>\n\n"
+    text = "🔥 <b>Черга замовлень (Ваш цех):</b>\n\n"
     count = 0
     
     kb = InlineKeyboardBuilder()
+    
     for order in all_orders:
-        if order.kitchen_done:
-            continue
-
-        products_text = await _get_filtered_order_text(session, order, 'kitchen')
-        if not products_text:
-            continue
+        # Отримуємо текст тільки для товарів мого цеху
+        products_text = await _get_workshop_order_text(session, order, my_workshop_ids)
+        
+        # Якщо тексту немає - значить в цьому замовленні немає страв для мого цеху
+        if not products_text: continue 
+            
+        # Якщо в тексті немає іконки "⏳" - значить всі мої страви вже готові, ховати замовлення
+        if "⏳" not in products_text: continue 
             
         count += 1
         table_info = order.table.name if order.table else ('Доставка' if order.is_delivery else 'Самовивіз')
@@ -150,83 +161,32 @@ async def show_chef_orders(message_or_callback: Message | CallbackQuery, session
                  f"Час: {order.created_at.strftime('%H:%M')}\n"
                  f"{products_text}\n\n")
         
-        kb.row(InlineKeyboardButton(text=f"✅ Видача #{order.id}", callback_data=f"chef_ready_{order.id}_kitchen"))
+        # Кнопка "Все готово" для цього замовлення (для цього цеху)
+        kb.row(InlineKeyboardButton(text=f"✅ Готово #{order.id}", callback_data=f"chef_ready_all_{order.id}"))
     
     if count == 0:
-        text += "Наразі активних замовлень немає."
+        text += "👍 Черга пуста. Все приготовлено."
         
     kb.adjust(1)
+    # Кнопка оновлення
+    kb.row(InlineKeyboardButton(text="🔄 Оновити список", callback_data="refresh_workshop"))
     
     try:
         if isinstance(message_or_callback, CallbackQuery):
-            if message_or_callback.message.text != text: 
-                await message.edit_text(text, reply_markup=kb.as_markup())
+            # Щоб не блимало, якщо текст не змінився
+            if message.text != text.replace("<b>", "").replace("</b>", ""): # Aiogram іноді псує форматування при порівнянні
+                 await message.edit_text(text, reply_markup=kb.as_markup())
+            else:
+                 # Просто оновлюємо клавіатуру якщо треба
+                 try: await message.edit_reply_markup(reply_markup=kb.as_markup())
+                 except: pass
             await message_or_callback.answer()
         else:
             await message.answer(text, reply_markup=kb.as_markup())
     except TelegramBadRequest: pass
 
 
-# --- ЕКРАН БАРМЕНА (Тільки 'bar') ---
-async def show_bartender_orders(message_or_callback: Message | CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
-    user_id = message_or_callback.from_user.id
-    message = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
-
-    employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == user_id).options(joinedload(Employee.role)))
-    
-    if not employee or not employee.role.can_receive_bar_orders:
-         return await message.answer("❌ У вас немає прав бармена.")
-    if not employee.is_on_shift:
-         return await message.answer("🔴 Ви не на зміні.")
-
-    bar_statuses_res = await session.execute(select(OrderStatus.id).where(OrderStatus.visible_to_bartender == True))
-    bar_status_ids = bar_statuses_res.scalars().all()
-
-    orders_res = await session.execute(
-        select(Order)
-        .options(joinedload(Order.status), joinedload(Order.table), selectinload(Order.items))
-        .where(Order.status_id.in_(bar_status_ids))
-        .order_by(Order.id.asc())
-    )
-    all_orders = orders_res.scalars().all()
-
-    text = "🍹 <b>Замовлення на барі:</b>\n\n"
-    count = 0
-    
-    kb = InlineKeyboardBuilder()
-    for order in all_orders:
-        if order.bar_done:
-            continue
-
-        products_text = await _get_filtered_order_text(session, order, 'bar')
-        if not products_text:
-            continue
-            
-        count += 1
-        table_info = order.table.name if order.table else ('Доставка' if order.is_delivery else 'Самовивіз')
-        
-        text += (f"═════════════════\n"
-                 f"<b>№{order.id}</b> ({table_info})\n"
-                 f"Час: {order.created_at.strftime('%H:%M')}\n"
-                 f"{products_text}\n\n")
-        
-        kb.row(InlineKeyboardButton(text=f"✅ Готово #{order.id}", callback_data=f"chef_ready_{order.id}_bar"))
-    
-    if count == 0:
-        text += "Наразі активних замовлень немає."
-
-    kb.adjust(1)
-    
-    try:
-        if isinstance(message_or_callback, CallbackQuery):
-            if message_or_callback.message.text != text:
-                await message.edit_text(text, reply_markup=kb.as_markup())
-            await message_or_callback.answer()
-        else:
-            await message.answer(text, reply_markup=kb.as_markup())
-    except TelegramBadRequest: pass
-
-
+# --- ЕКРАН КУР'ЄРА ---
 async def show_courier_orders(message_or_callback: Message | CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
     user_id = message_or_callback.from_user.id
     message = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
@@ -341,7 +301,10 @@ async def _generate_waiter_order_view(order: Order, session: AsyncSession):
                 mod_names = [m.get('name', '') for m in item.modifiers]
                 if mod_names:
                     mods_str = f" (+ {', '.join(mod_names)})"
-            lines.append(f"- {html_module.escape(item.product_name)}{mods_str} x {item.quantity}")
+            
+            # Додаємо галочку готовності
+            icon = "✅" if item.is_ready else ""
+            lines.append(f"- {icon} {html_module.escape(item.product_name)}{mods_str} x {item.quantity}")
         products_formatted = "\n".join(lines)
     else:
         products_formatted = "- <i>(Пусто)</i>"
@@ -388,7 +351,7 @@ async def _generate_waiter_order_view(order: Order, session: AsyncSession):
 def register_courier_handlers(dp_admin: Dispatcher):
     dp_admin.message.register(start_handler, CommandStart())
 
-    @dp_admin.message(F.text.in_({"🚚 Вхід кур'єра", "🔐 Вхід оператора", "🤵 Вхід офіціанта", "🧑‍🍳 Вхід повара", "🍹 Вхід бармена"}))
+    @dp_admin.message(F.text.in_({"🚚 Вхід кур'єра", "🔐 Вхід оператора", "🤵 Вхід офіціанта", "🧑‍🍳 Вхід на зміну (Цех)"}))
     async def staff_login_start(message: Message, state: FSMContext, session: AsyncSession):
         user_id = message.from_user.id
         employee = await session.scalar(
@@ -402,13 +365,12 @@ def register_courier_handlers(dp_admin: Dispatcher):
         if "кур'єра" in message.text: role_type = "courier"
         elif "оператора" in message.text: role_type = "operator"
         elif "офіціанта" in message.text: role_type = "waiter"
-        elif "повара" in message.text: role_type = "chef"
-        elif "бармена" in message.text: role_type = "bartender"
+        elif "Цех" in message.text: role_type = "workshop" # Повар/Бармен
             
         await state.set_state(StaffAuthStates.waiting_for_phone)
         await state.update_data(role_type=role_type)
         kb = InlineKeyboardBuilder().add(InlineKeyboardButton(text="❌ Скасувати", callback_data="cancel_auth")).as_markup()
-        await message.answer(f"Будь ласка, введіть номер телефону для ролі **{role_type}**:", reply_markup=kb)
+        await message.answer(f"Будь ласка, введіть номер телефону для авторизації:", reply_markup=kb)
 
     @dp_admin.message(StaffAuthStates.waiting_for_phone)
     async def process_staff_phone(message: Message, state: FSMContext, session: AsyncSession):
@@ -419,15 +381,15 @@ def register_courier_handlers(dp_admin: Dispatcher):
         
         employee = await session.scalar(select(Employee).options(joinedload(Employee.role)).where(Employee.phone_number == phone))
         
-        role_checks = {
-            "courier": lambda e: e and e.role.can_be_assigned,
-            "operator": lambda e: e and e.role.can_manage_orders,
-            "waiter": lambda e: e and e.role.can_serve_tables,
-            "chef": lambda e: e and e.role.can_receive_kitchen_orders,
-            "bartender": lambda e: e and e.role.can_receive_bar_orders,
-        }
+        # Перевірка прав
+        is_allowed = False
+        if employee:
+            if role_type == "courier" and employee.role.can_be_assigned: is_allowed = True
+            elif role_type == "operator" and employee.role.can_manage_orders: is_allowed = True
+            elif role_type == "waiter" and employee.role.can_serve_tables: is_allowed = True
+            elif role_type == "workshop" and (employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders): is_allowed = True
         
-        if role_checks.get(role_type, lambda e: False)(employee):
+        if is_allowed:
             employee.telegram_user_id = message.from_user.id
             await session.commit()
             await state.clear()
@@ -435,7 +397,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
             keyboard = get_staff_keyboard(employee)
             await message.answer(f"🎉 Доброго дня, {employee.full_name}! Ви успішно авторизовані як {employee.role.name}.", reply_markup=keyboard)
         else:
-            await message.answer(f"❌ Співробітника з таким номером не знайдено або він не має прав для ролі '{role_type}'. Спробуйте ще раз.")
+            await message.answer(f"❌ Співробітника з таким номером не знайдено або він не має відповідних прав. Спробуйте ще раз.")
 
     @dp_admin.callback_query(F.data == "cancel_auth")
     async def cancel_auth(callback: CallbackQuery, state: FSMContext):
@@ -481,23 +443,63 @@ def register_courier_handlers(dp_admin: Dispatcher):
         else:
             await message.answer("❌ Ви не авторизовані.")
 
-    @dp_admin.message(F.text.in_({"📦 Мої замовлення", "🍽 Мої столики", "🔪 Кухня", "🍹 Бар"}))
+    # --- МАРШРУТИЗАЦІЯ КНОПОК ---
+    @dp_admin.message(F.text.in_({"📦 Мої замовлення", "🍽 Мої столики", "🔥 Замовлення (Цех)", "🔪 Кухня", "🍹 Бар"}))
     async def handle_show_items_by_role(message: Message, session: AsyncSession, state: FSMContext, **kwargs: Dict[str, Any]):
         employee = await session.scalar(
             select(Employee).where(Employee.telegram_user_id == message.from_user.id).options(joinedload(Employee.role))
         )
         if not employee: return await message.answer("❌ Ви не авторизовані.")
 
-        if message.text == "📦 Мої замовлення" and employee.role.can_be_assigned:
+        text = message.text
+        # Кур'єр
+        if text == "📦 Мої замовлення" and employee.role.can_be_assigned:
             await show_courier_orders(message, session)
-        elif message.text == "🍽 Мої столики" and employee.role.can_serve_tables:
+        # Офіціант
+        elif text == "🍽 Мої столики" and employee.role.can_serve_tables:
             await show_waiter_tables(message, session, state)
-        elif message.text == "🔪 Кухня" and employee.role.can_receive_kitchen_orders:
-            await show_chef_orders(message, session)
-        elif message.text == "🍹 Бар" and employee.role.can_receive_bar_orders:
-            await show_bartender_orders(message, session)
+        # Виробництво (Універсально)
+        elif (text in ["🔥 Замовлення (Цех)", "🔪 Кухня", "🍹 Бар"]) and (employee.role.can_receive_kitchen_orders or employee.role.can_receive_bar_orders):
+            await show_workshop_orders(message, session)
         else:
-            await message.answer("❌ Ваша роль не дозволяє переглядати ці дані.")
+            await message.answer("❌ Ваша роль не дозволяє переглядати ці дані або кнопка застаріла.")
+
+    @dp_admin.callback_query(F.data == "refresh_workshop")
+    async def refresh_workshop_handler(callback: CallbackQuery, session: AsyncSession):
+        await show_workshop_orders(callback, session)
+
+    # --- МАСОВА ГОТОВНІСТЬ (Для Telegram) ---
+    @dp_admin.callback_query(F.data.startswith("chef_ready_all_"))
+    async def chef_mark_all_ready(callback: CallbackQuery, session: AsyncSession):
+        order_id = int(callback.data.split("_")[-1])
+        user_id = callback.from_user.id
+        
+        employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == user_id))
+        if not employee or not employee.assigned_workshop_ids:
+            return await callback.answer("Помилка прав доступу або не призначено цехи", show_alert=True)
+            
+        order = await session.get(Order, order_id, options=[selectinload(Order.items).joinedload(OrderItem.product)])
+        if not order: return await callback.answer("Замовлення не знайдено")
+        
+        marked_count = 0
+        for item in order.items:
+            # Відмічаємо тільки ті товари, які належать до цехів цього співробітника
+            if item.product.production_warehouse_id in employee.assigned_workshop_ids:
+                if not item.is_ready:
+                    item.is_ready = True
+                    marked_count += 1
+        
+        if marked_count > 0:
+            await session.commit()
+            
+            # Імпортуємо тут, щоб уникнути циклічного імпорту в notification_manager
+            from staff_pwa import check_and_update_order_readiness
+            await check_and_update_order_readiness(session, order_id, callback.bot)
+            
+            await callback.answer(f"✅ Відмічено {marked_count} страв як готові")
+            await show_workshop_orders(callback, session)
+        else:
+            await callback.answer("Всі ваші страви вже готові")
 
     @dp_admin.callback_query(F.data.startswith("courier_view_order_"))
     async def courier_view_order_details(callback: CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
@@ -539,81 +541,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
     @dp_admin.callback_query(F.data == "show_courier_orders_list")
     async def back_to_list(callback: CallbackQuery, session: AsyncSession, **kwargs: Dict[str, Any]):
         await show_courier_orders(callback, session)
-
-    @dp_admin.callback_query(F.data.startswith("chef_ready_"))
-    async def chef_ready_for_issuance(callback: CallbackQuery, session: AsyncSession):
-        client_bot = dp_admin.get("client_bot")
-        employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == callback.from_user.id).options(joinedload(Employee.role)))
-        
-        parts = callback.data.split("_")
-        order_id = int(parts[2])
-        area = parts[3] if len(parts) > 3 else 'kitchen'
-        
-        order = await session.get(Order, order_id, options=[
-            joinedload(Order.status), 
-            joinedload(Order.table), 
-            joinedload(Order.accepted_by_waiter),
-            joinedload(Order.courier),
-            selectinload(Order.items)
-        ])
-        if not order: return await callback.answer("Замовлення не знайдено.")
-
-        ready_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Готовий до видачі").limit(1))
-        if not ready_status: return await callback.answer("Статус 'Готовий до видачі' не налаштовано.", show_alert=True)
-        
-        already_done = False
-        if area == 'kitchen':
-            if order.kitchen_done: already_done = True
-            order.kitchen_done = True
-        elif area == 'bar':
-            if order.bar_done: already_done = True
-            order.bar_done = True
-            
-        has_kitchen_items = any(item.preparation_area != 'bar' for item in order.items)
-        has_bar_items = any(item.preparation_area == 'bar' for item in order.items)
-        
-        is_fully_ready = True
-        if has_kitchen_items and not order.kitchen_done:
-            is_fully_ready = False
-        if has_bar_items and not order.bar_done:
-            is_fully_ready = False
-            
-        old_status_name = order.status.name
-        actor_info = f"{employee.role.name if employee else 'Кухня/Бар'}: {employee.full_name if employee else 'Невідомий'}"
-        
-        if area == 'bar': actor_info += " (Бар)"
-        else: actor_info += " (Кухня)"
-        
-        if is_fully_ready and order.status_id != ready_status.id:
-            order.status_id = ready_status.id
-            session.add(OrderStatusHistory(order_id=order.id, status_id=ready_status.id, actor_info=actor_info))
-        
-        await session.commit()
-        
-        if not already_done:
-            await notify_station_completion(callback.bot, order, area, session)
-        
-        if is_fully_ready and old_status_name != ready_status.name:
-            await notify_all_parties_on_status_change(
-                order=order, 
-                old_status_name=old_status_name,
-                actor_info=actor_info,
-                admin_bot=callback.bot,
-                client_bot=client_bot,
-                session=session
-            )
-
-        products_formatted = await _get_filtered_order_text(session, order, area)
-        
-        done_text = f"✅ <b>ВИДАНО ({actor_info}): Замовлення #{order.id}</b>\n"
-        if not is_fully_ready:
-             done_text += "<i>(Чекаємо інший цех для повного завершення)</i>\n"
-        done_text += f"Склад:\n{products_formatted}"
-        
-        try: await callback.message.edit_text(done_text, reply_markup=None)
-        except TelegramBadRequest: pass
-        
-        await callback.answer(f"Сигнал видачі для #{order.id} відправлено!")
 
     @dp_admin.callback_query(F.data.startswith("staff_ask_payment_"))
     async def staff_ask_payment_method(callback: CallbackQuery, session: AsyncSession):
@@ -708,7 +635,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
         if debt_message:
              await callback.message.answer(debt_message)
 
-            
     # --- ОБРОБНИКИ ДЛЯ ОФІЦІАНТА ---
     
     @dp_admin.callback_query(F.data.startswith("waiter_view_table_"))
@@ -802,7 +728,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 item_total = item['price'] * item['quantity']
                 total_price += item_total
                 
-                # Отображение модификаторов
                 mods_str = ""
                 if item.get('modifiers'):
                     mod_names = [m['name'] for m in item['modifiers']]
@@ -810,7 +735,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
 
                 text += f"- {html_module.escape(item['name'])}{mods_str} ({item['quantity']} шт.) = {item_total:.2f} грн\n"
                 
-                # Используем уникальный ключ товара в корзине
                 kb.row(
                     InlineKeyboardButton(text="➖", callback_data=f"waiter_cart_qnt_{item_key}_-1"),
                     InlineKeyboardButton(text=f"{item['quantity']}x {html_module.escape(item['name'])}", callback_data="noop"),
@@ -883,14 +807,12 @@ def register_courier_handlers(dp_admin: Dispatcher):
     @dp_admin.callback_query(WaiterCreateOrderStates.choosing_product, F.data.startswith("waiter_cart_prod_"))
     async def waiter_cart_add_product(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
         product_id = int(callback.data.split("_")[-1])
-        # Загружаем продукт с модификаторами
         product = await session.get(Product, product_id, options=[selectinload(Product.modifiers)])
         
         if not product:
             return await callback.answer("Помилка", show_alert=True)
 
         if product.modifiers:
-            # Если есть модификаторы, переходим к их выбору
             await state.set_state(WaiterCreateOrderStates.choosing_modifiers)
             await state.update_data(
                 current_product_id=product.id,
@@ -901,7 +823,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
             )
             await _show_modifier_selection(callback, product, [])
         else:
-            # Если нет, добавляем сразу
             await _add_product_to_fsm_cart(state, product, [])
             await state.set_state(WaiterCreateOrderStates.managing_cart)
             await _display_waiter_cart(callback, state, session)
@@ -919,7 +840,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
             ))
         
         kb.row(InlineKeyboardButton(text="📥 Додати в замовлення", callback_data="waiter_mod_confirm"))
-        kb.row(InlineKeyboardButton(text="⬅️ Назад до страв", callback_data="waiter_cart_back_to_cart")) # Или back_to_products
+        kb.row(InlineKeyboardButton(text="⬅️ Назад до страв", callback_data="waiter_cart_back_to_cart"))
 
         current_total = product.price + sum(m.price for m in product.modifiers if m.id in selected_ids)
         
@@ -950,7 +871,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
         mod_ids = data.get("selected_mod_ids", [])
         
         product = await session.get(Product, product_id)
-        # Загружаем объекты модификаторов для формирования структуры
         modifiers = []
         if mod_ids:
             modifiers = (await session.execute(select(Modifier).where(Modifier.id.in_(mod_ids)))).scalars().all()
@@ -964,19 +884,15 @@ def register_courier_handlers(dp_admin: Dispatcher):
         data = await state.get_data()
         cart = data.get("cart", {})
         
-        # Формируем уникальный ключ для позиции (чтобы отличать "Бургер" от "Бургер + Сыр")
         mod_ids_str = "-".join(sorted([str(m.id) for m in modifiers]))
         unique_key = f"{product.id}_{mod_ids_str}"
         
-        # Формируем структуру модификаторов для FSM (храним ID для восстановления из БД при сохранении)
         mods_data = [{"id": m.id, "name": m.name} for m in modifiers]
         
         if unique_key in cart:
             cart[unique_key]["quantity"] += 1
         else:
-            # Расчет цены для отображения (при сохранении пересчитаем из БД)
             unit_price = float(product.price) + sum(float(m.price) for m in modifiers)
-            
             cart[unique_key] = {
                 "product_id": product.id,
                 "name": product.name,
@@ -988,15 +904,11 @@ def register_courier_handlers(dp_admin: Dispatcher):
             
         await state.update_data(cart=cart)
 
-    # -----------------------------------
-
     @dp_admin.callback_query(WaiterCreateOrderStates.managing_cart, F.data.startswith("waiter_cart_qnt_"))
     async def waiter_cart_change_quantity(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-        # Получаем ключ из callback data (учтите, что он может быть длинным)
-        # Формат: waiter_cart_qnt_{UNIQUE_KEY}_{CHANGE}
         parts = callback.data.split("_")
         change = int(parts[-1])
-        unique_key = "_".join(parts[3:-1]) # Собираем ключ обратно, если он содержал _
+        unique_key = "_".join(parts[3:-1])
         
         data = await state.get_data()
         cart = data.get("cart", {})
@@ -1020,16 +932,13 @@ def register_courier_handlers(dp_admin: Dispatcher):
         if not cart:
              return await callback.answer("Кошик порожній.", show_alert=True)
 
-        # 1. Сбор ID продуктов
         product_ids = {item['product_id'] for item in cart.values()}
         
-        # 2. Сбор ID модификаторов
         all_mod_ids = set()
         for item in cart.values():
             for m in item.get('modifiers', []):
                 all_mod_ids.add(int(m['id']))
 
-        # 3. Загрузка данных из БД
         products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
         db_products = {p.id: p for p in products_res.scalars().all()}
         
@@ -1050,7 +959,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 
             qty = item_data['quantity']
             
-            # Расчет цены на основе БД
             base_price = product.price
             mods_price_sum = Decimal(0)
             final_mods_data = []
@@ -1060,7 +968,6 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 if mid in db_modifiers:
                     m_db = db_modifiers[mid]
                     mods_price_sum += m_db.price
-                    # Сохраняем полные данные для склада
                     final_mods_data.append({
                         "id": m_db.id,
                         "name": m_db.name,
@@ -1104,7 +1011,7 @@ def register_courier_handlers(dp_admin: Dispatcher):
                 quantity=item_data["quantity"],
                 price_at_moment=item_data["price"],
                 preparation_area=item_data["area"],
-                modifiers=item_data["modifiers"] # Сохраняем JSON
+                modifiers=item_data["modifiers"]
             )
             session.add(order_item)
 
@@ -1114,11 +1021,10 @@ def register_courier_handlers(dp_admin: Dispatcher):
         session.add(OrderStatusHistory(order_id=order.id, status_id=order.status_id, actor_info=f"Офіціант: {employee.full_name}"))
         await session.commit()
         
-        await callback.answer(f"Замовлення #{order.id} створено!")
-        
         admin_bot = dp_admin.get("bot_instance")
         if admin_bot:
             await notify_new_order_to_staff(admin_bot, order, session)
 
+        await callback.answer(f"Замовлення #{order.id} створено!")
         await state.clear()
         await show_waiter_table_orders(callback, session, state, table_id=table_id)

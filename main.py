@@ -16,7 +16,6 @@ from typing import Dict, Any, Optional
 from urllib.parse import quote_plus as url_quote_plus
 
 # --- FastAPI & Uvicorn ---
-# ДОДАНО: WebSocket, WebSocketDisconnect
 from fastapi import FastAPI, Form, Request, Depends, HTTPException, File, UploadFile, Body, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -56,7 +55,7 @@ from admin_clients import router as clients_router
 from dependencies import get_db_session, check_credentials
 from auth_utils import get_password_hash 
 
-# ДОДАНО: Імпорт менеджера WebSocket
+# Імпорт менеджера WebSocket
 from websocket_manager import manager
 
 # --- ІМПОРТИ РОУТЕРІВ ---
@@ -200,7 +199,6 @@ async def show_my_orders(message_or_callback: Message | CallbackQuery, session: 
     message = message_or_callback.message if is_callback else message_or_callback
     user_id = message_or_callback.from_user.id
 
-    # --- ПОКРАЩЕННЯ: Ліміт 5 останніх замовлень ---
     orders_result = await session.execute(
         select(Order).options(joinedload(Order.status), selectinload(Order.items))
         .where(Order.user_id == user_id)
@@ -266,9 +264,7 @@ async def show_menu(message_or_callback: Message | CallbackQuery, session: Async
     for category in categories:
         keyboard.add(InlineKeyboardButton(text=category.name, callback_data=f"show_category_{category.id}_1"))
     
-    # --- ПОКРАЩЕННЯ: Сетка 2 колонки ---
     keyboard.adjust(2) 
-    # -----------------------------------
     
     keyboard.row(InlineKeyboardButton(text="🛒 Відкрити кошик", callback_data="cart"))
     keyboard.row(InlineKeyboardButton(text="⬅️ Головне меню", callback_data="start_menu"))
@@ -291,7 +287,6 @@ async def show_menu_callback(callback: CallbackQuery, session: AsyncSession):
 
 @dp.callback_query(F.data.startswith("show_category_"))
 async def show_category_paginated(callback: CallbackQuery, session: AsyncSession):
-    # Added answer to stop loading spinner
     await callback.answer()
     
     parts = callback.data.split("_")
@@ -318,7 +313,7 @@ async def show_category_paginated(callback: CallbackQuery, session: AsyncSession
     keyboard = InlineKeyboardBuilder()
     for product in products_on_page:
         keyboard.add(InlineKeyboardButton(text=f"{product.name} - {product.price} грн", callback_data=f"show_product_{product.id}"))
-    keyboard.adjust(1) # Продукти в 1 колонку, щоб вміщувались довгі назви
+    keyboard.adjust(1) 
 
     nav_buttons = []
     if page > 1:
@@ -330,11 +325,9 @@ async def show_category_paginated(callback: CallbackQuery, session: AsyncSession
     if nav_buttons:
         keyboard.row(*nav_buttons)
 
-    # --- ПОКРАЩЕННЯ: Швидка навігація ---
     keyboard.row(InlineKeyboardButton(text="🛒 Кошик", callback_data="cart"))
     keyboard.row(InlineKeyboardButton(text="🔙 Назад до категорій", callback_data="menu"))
     keyboard.row(InlineKeyboardButton(text="🏠 Головна", callback_data="start_menu"))
-    # ------------------------------------
 
     text = f"<b>{html.escape(category.name)}</b> (Сторінка {page}):"
 
@@ -354,7 +347,6 @@ async def get_photo_input(image_url: str):
 
 @dp.callback_query(F.data.startswith("show_product_"))
 async def show_product(callback: CallbackQuery, session: AsyncSession):
-    # Added answer to stop loading spinner
     await callback.answer()
     
     product_id = int(callback.data.split("_")[2])
@@ -372,10 +364,8 @@ async def show_product(callback: CallbackQuery, session: AsyncSession):
     kb.add(InlineKeyboardButton(text="➕ Додати в кошик", callback_data=f"add_to_cart_{product.id}"))
     kb.adjust(1)
     
-    # --- ПОКРАЩЕННЯ: Кнопки навігації ---
     kb.row(InlineKeyboardButton(text="🔙 Назад до страв", callback_data=f"show_category_{product.category_id}_1"))
     kb.row(InlineKeyboardButton(text="🛒 Кошик", callback_data="cart"), InlineKeyboardButton(text="🏠 Головна", callback_data="start_menu"))
-    # ------------------------------------
 
     photo_input = await get_photo_input(product.image_url)
     try:
@@ -422,7 +412,6 @@ async def _show_modifier_menu(callback: CallbackQuery, product, selected_ids, av
     
     kb.adjust(1)
     kb.row(InlineKeyboardButton(text="📥 Додати в кошик", callback_data="confirm_add_to_cart"))
-    # Додаємо кнопку "Назад" у вибір модифікаторів
     kb.row(InlineKeyboardButton(text="🔙 Скасувати", callback_data=f"show_product_{product.id}"))
     
     current_price = product.price + sum(m.price for m in available_modifiers if m.id in selected_ids)
@@ -469,7 +458,6 @@ async def confirm_add_to_cart_callback(callback: CallbackQuery, state: FSMContex
 async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifiers: list[Modifier], session: AsyncSession):
     user_id = callback.from_user.id
     
-    # Зберігаємо модифікатори як JSON з даними для майбутнього використання
     mods_json = [{"id": m.id, "name": m.name, "price": float(m.price or 0), "ingredient_id": m.ingredient_id, "ingredient_qty": float(m.ingredient_qty or 0)} for m in modifiers]
     
     cart_item = CartItem(
@@ -489,10 +477,7 @@ async def _add_item_to_db_cart(callback: CallbackQuery, product: Product, modifi
     
     await callback.answer(msg, show_alert=False)
     
-    # --- FIX: Use model_copy instead of direct assignment ---
-    # Creating a new callback object with updated 'data' field because the original is frozen
     new_callback = callback.model_copy(update={"data": f"show_category_{product.category_id}_1"})
-    # --------------------------------------------------------
     
     await show_category_paginated(new_callback, session)
 
@@ -640,7 +625,6 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
     kb.add(InlineKeyboardButton(text="🏠 Самовивіз", callback_data="delivery_type_pickup"))
     kb.adjust(1)
     
-    # Кнопка отмены
     kb.row(InlineKeyboardButton(text="🔙 Повернутись в кошик", callback_data="cart"))
 
     text = "Шановний клієнте, оберіть тип отримання замовлення:"
@@ -677,11 +661,9 @@ async def process_delivery_type(callback: CallbackQuery, state: FSMContext, sess
     else:
         await state.set_state(CheckoutStates.waiting_for_name)
         
-        # Юзабіліті: Кнопки для скасування
         kb = ReplyKeyboardBuilder()
         kb.add(KeyboardButton(text="❌ Скасувати"))
         
-        # Видаляємо старе інлайн повідомлення, щоб відправити нове з Reply клавіатурою (якщо потрібно)
         try: await callback.message.delete()
         except Exception: pass
         
@@ -723,7 +705,6 @@ async def process_name(message: Message, state: FSMContext):
     await state.update_data(customer_name=name)
     await state.set_state(CheckoutStates.waiting_for_phone)
     
-    # Юзабіліті: Кнопка відправки контакту
     kb = ReplyKeyboardBuilder()
     kb.row(KeyboardButton(text="📱 Надіслати мій номер", request_contact=True))
     kb.row(KeyboardButton(text="❌ Скасувати"))
@@ -739,7 +720,6 @@ async def process_phone(message: Message, state: FSMContext, session: AsyncSessi
         if not phone.startswith('+'): phone = '+' + phone
     elif message.text:
         phone = message.text.strip()
-        # Базова перевірка формату, якщо введено вручну
         if not re.match(r'^\+?\d{10,15}$', phone):
             await message.answer("Некоректний номер! Формат: +380XXXXXXXXX. Або скористайтесь кнопкою.", 
                                  reply_markup=message.reply_markup)
@@ -751,7 +731,6 @@ async def process_phone(message: Message, state: FSMContext, session: AsyncSessi
     await state.update_data(phone_number=phone)
     data = await state.get_data()
     
-    # Прибираємо клавіатуру з контактом
     remove_kb = ReplyKeyboardRemove()
     
     if data.get('is_delivery'):
@@ -762,7 +741,6 @@ async def process_phone(message: Message, state: FSMContext, session: AsyncSessi
         
         await message.answer("Дякую! Тепер введіть адресу доставки (Вулиця, будинок, під'їзд):", reply_markup=kb.as_markup(resize_keyboard=True))
     else:
-        # Якщо самовивіз - прибираємо клавіатуру перед інлайн вибором часу
         await message.answer("Номер прийнято.", reply_markup=remove_kb)
         await ask_for_order_time(message, state, session)
 
@@ -774,7 +752,6 @@ async def process_address(message: Message, state: FSMContext, session: AsyncSes
         return
     await state.update_data(address=address)
     
-    # Прибираємо клавіатуру скасування перед вибором часу
     await message.answer("Адресу збережено.", reply_markup=ReplyKeyboardRemove())
     await ask_for_order_time(message, state, session)
 
@@ -803,7 +780,6 @@ async def process_order_time(callback: CallbackQuery, state: FSMContext, session
         kb = ReplyKeyboardBuilder()
         kb.add(KeyboardButton(text="❌ Скасувати"))
         
-        # Видаляємо інлайн повідомлення, щоб відправити запит з Reply кнопкою
         try: await callback.message.delete()
         except Exception: pass
         
@@ -818,11 +794,9 @@ async def process_specific_time(message: Message, state: FSMContext, session: As
         return
     await state.update_data(delivery_time=specific_time)
     
-    # Прибираємо кнопку скасування
     await message.answer("Час встановлено.", reply_markup=ReplyKeyboardRemove())
     await ask_confirm_order(message, state)
 
-# --- НОВИЙ ЕТАП: ПІДТВЕРДЖЕННЯ ЗАМОВЛЕННЯ ---
 async def ask_confirm_order(message: Message, state: FSMContext):
     data = await state.get_data()
     
@@ -848,7 +822,7 @@ async def ask_confirm_order(message: Message, state: FSMContext):
 
 @dp.callback_query(CheckoutStates.confirm_order, F.data == "checkout_confirm")
 async def confirm_order_handler(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
-    await callback.message.edit_reply_markup(reply_markup=None) # Прибираємо кнопки щоб не натиснули двічі
+    await callback.message.edit_reply_markup(reply_markup=None) 
     await finalize_order(callback.message, state, session)
     await callback.answer()
 
@@ -857,7 +831,6 @@ async def cancel_order_handler(callback: CallbackQuery, state: FSMContext, sessi
     await state.clear()
     await callback.message.edit_text("❌ Замовлення скасовано.")
     
-    # Повертаємо головне меню
     kb = await get_main_reply_keyboard(session)
     await callback.message.answer("Ви можете продовжити покупки:", reply_markup=kb)
     await callback.answer()
@@ -875,14 +848,12 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
         await message.answer("Помилка: кошик порожній.")
         return
 
-    # 1. Collect IDs
     all_mod_ids = set()
     for cart_item in cart_items:
         if cart_item.modifiers:
             for m in cart_item.modifiers:
                 all_mod_ids.add(int(m['id']))
     
-    # 2. Fetch DB modifiers
     db_modifiers = {}
     if all_mod_ids:
         mods_res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
@@ -894,10 +865,8 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
 
     for cart_item in cart_items:
         if cart_item.product:
-            # Base price
             item_price = cart_item.product.price
             
-            # Reconstruct modifiers from DB
             final_mods_data = []
             mods_price_sum = Decimal(0)
             
@@ -924,7 +893,7 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
                 quantity=cart_item.quantity,
                 price_at_moment=item_price,
                 preparation_area=cart_item.product.preparation_area,
-                modifiers=final_mods_data # Use refreshed data
+                modifiers=final_mods_data 
             ))
 
     order = Order(
@@ -1035,13 +1004,19 @@ async def lifespan(app: FastAPI):
                 Unit(name='порц', is_weighable=False)
             ])
             
+        # --- FIX ISSUE 1: Гарантируем наличие хотя бы одного склада ---
         result_warehouses = await session.execute(select(Warehouse).limit(1))
         if not result_warehouses.scalars().first():
-            session.add_all([
-                Warehouse(name='Основной склад'),
-                Warehouse(name='Кухня'),
-                Warehouse(name='Бар')
-            ])
+            logging.info("Створення базових складів...")
+            main_wh = Warehouse(name='Основний склад', is_production=False)
+            session.add(main_wh)
+            await session.flush() # Щоб отримати ID
+            
+            kitchen = Warehouse(name='Кухня', is_production=True, linked_warehouse_id=main_wh.id)
+            bar = Warehouse(name='Бар', is_production=True, linked_warehouse_id=main_wh.id)
+            session.add_all([kitchen, bar])
+            await session.commit()
+        # --------------------------------------------------------------
 
         await session.commit()
     
@@ -1162,7 +1137,6 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         [f'<a href="#" class="footer-link menu-popup-trigger" data-item-id="{item.id}"><i class="fa-solid fa-file-lines"></i> <span>{html.escape(item.title)}</span></a>' for item in menu_items]
     )
 
-    # --- ВИПРАВЛЕННЯ СОЦМЕРЕЖ ---
     social_links = []
     if settings.instagram_url:
         social_links.append(f'<a href="{html.escape(settings.instagram_url)}" target="_blank"><i class="fa-brands fa-instagram"></i></a>')
@@ -1170,12 +1144,8 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         social_links.append(f'<a href="{html.escape(settings.facebook_url)}" target="_blank"><i class="fa-brands fa-facebook"></i></a>')
     
     social_links_html = "".join(social_links)
-    # ---------------------------
 
-    # --- NEW CODE START ---
-    # Подготовка значений для шаблона
     free_delivery = settings.free_delivery_from if settings.free_delivery_from is not None else "null"
-    # --- NEW CODE END ---
 
     template_params = {
         "logo_html": logo_html,
@@ -1202,10 +1172,8 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
         "header_image_url": settings.header_image_url or "",
         "wifi_ssid": html.escape(settings.wifi_ssid or ""),
         "wifi_password": html.escape(settings.wifi_password or ""),
-        # --- NEW PARAMS ---
         "delivery_cost_val": float(settings.delivery_cost),
         "free_delivery_from_val": float(free_delivery) if free_delivery != "null" else "null",
-        # ------------------
     }
 
     return HTMLResponse(content=WEB_ORDER_HTML.format(**template_params))
@@ -1214,8 +1182,6 @@ async def get_web_ordering_page(session: AsyncSession = Depends(get_db_session))
 async def get_menu_page_content(item_id: int, session: AsyncSession = Depends(get_db_session)):
     menu_item = await session.get(MenuItem, item_id)
     
-    # ВИПРАВЛЕНО: Додано перевірку show_in_qr
-    # Показуємо контент, якщо сторінка увімкнена на сайті АБО в QR-меню
     if not menu_item or (not menu_item.show_on_website and not menu_item.show_in_qr):
         raise HTTPException(status_code=404, detail="Сторінку не знайдено")
         
@@ -1283,28 +1249,23 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
     try:
         product_ids = [int(item['id']) for item in items]
         
-        # --- FIX: Збір всіх ID модифікаторів ---
         all_mod_ids = set()
         for item in items:
             for mod in item.get('modifiers', []):
                 if 'id' in mod:
                     all_mod_ids.add(int(mod['id']))
-        # ---------------------------------------
         
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Невірний формат ID.")
 
-    # Завантажуємо продукти
     products_res = await session.execute(select(Product).where(Product.id.in_(product_ids)))
     db_products = {str(p.id): p for p in products_res.scalars().all()}
 
-    # --- FIX: Завантажуємо актуальні модифікатори з БД ---
     db_modifiers = {}
     if all_mod_ids:
         mods_res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
         for m in mods_res.scalars().all():
             db_modifiers[m.id] = m
-    # ----------------------------------------------------
 
     total_price = Decimal('0.00')
     order_items_objects = []
@@ -1315,7 +1276,6 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
             product = db_products[pid]
             qty = int(item.get('quantity', 1))
             
-            # --- FIX: Формуємо список модифікаторів на основі даних з БД ---
             final_modifiers_data = []
             mods_price_sum = Decimal(0)
             
@@ -1324,7 +1284,6 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                 mid = int(raw_mod.get('id'))
                 if mid in db_modifiers:
                     mod_db = db_modifiers[mid]
-                    # Беремо ціну та інгредієнти з БД
                     mods_price_sum += mod_db.price
                     final_modifiers_data.append({
                         "id": mod_db.id,
@@ -1333,7 +1292,6 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                         "ingredient_id": mod_db.ingredient_id,
                         "ingredient_qty": float(mod_db.ingredient_qty)
                     })
-            # ---------------------------------------------------------------
             
             item_total_price = (product.price + mods_price_sum)
             total_price += item_total_price * qty
@@ -1344,27 +1302,21 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                 quantity=qty,
                 price_at_moment=item_total_price,
                 preparation_area=product.preparation_area,
-                modifiers=final_modifiers_data # Зберігаємо актуальні дані з БД
+                modifiers=final_modifiers_data 
             ))
 
-    # --- NEW CODE START ---
-    # --- ДОБАВЛЕНИЕ СТОИМОСТИ ДОСТАВКИ ---
     settings = await session.get(Settings, 1) or Settings()
     delivery_cost = Decimal(0)
 
     is_delivery = order_data.get('is_delivery', True)
 
     if is_delivery:
-        # Проверяем порог бесплатной доставки
         if settings.free_delivery_from is not None and total_price >= settings.free_delivery_from:
             delivery_cost = Decimal(0)
         else:
             delivery_cost = settings.delivery_cost
 
-    # Обновляем общую сумму
     total_price += delivery_cost
-    # -------------------------------------
-    # --- NEW CODE END ---
 
     address = order_data.get('address') if is_delivery else None
     order_type = 'delivery' if is_delivery else 'pickup'
