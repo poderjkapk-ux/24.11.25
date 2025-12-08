@@ -351,6 +351,8 @@ STAFF_DASHBOARD_HTML = """
         .qty-ctrl-sm {{ display: flex; gap: 15px; align-items: center; background: #f5f5f5; padding: 5px 10px; border-radius: 8px; }}
         .qty-btn-sm {{ width: 32px; height: 32px; border-radius: 50%; border: none; background: #fff; cursor: pointer; font-weight: bold; font-size: 1.1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; }}
         .big-btn {{ width: 100%; padding: 16px; background: var(--primary); color: white; border: none; border-radius: 12px; font-size: 1rem; font-weight: bold; margin-top: 15px; cursor: pointer; }}
+        .big-btn.danger {{ background: var(--red); }}
+        .big-btn.success {{ background: var(--green); }}
         
         /* MODIFIERS STYLES (NEW) */
         .mod-list {{ display: flex; flex-direction: column; gap: 5px; }}
@@ -363,6 +365,11 @@ STAFF_DASHBOARD_HTML = """
         #loading-indicator {{ text-align: center; padding: 20px; color: #999; display: none; }}
         #search-input {{ width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; margin-bottom: 10px; box-sizing: border-box; background: #f9f9f9; }}
         #search-input:focus {{ border-color: #333; background: #fff; outline: none; }}
+        
+        /* FORMS */
+        .form-group {{ margin-bottom: 15px; text-align: left; }}
+        .form-group label {{ display: block; margin-bottom: 5px; font-weight: 600; color: #555; }}
+        .form-control {{ width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 1rem; }}
     </style>
 </head>
 <body>
@@ -957,6 +964,192 @@ STAFF_DASHBOARD_HTML = """
         
         function renderNewOrderMenu() {{
              renderProductList("", false);
+        }}
+
+        // --- CASHIER FUNCTIONS ---
+
+        async function cashierAction(action, extraId = null) {{
+            let payload = {{ action: action }};
+            
+            if (action === 'open_shift') {{
+                const amount = document.getElementById('start-cash-input').value;
+                payload.start_cash = amount;
+            }} else if (action === 'close_shift') {{
+                const actual = prompt("Введіть фактичну суму готівки в касі для закриття:");
+                if (actual === null) return;
+                payload.actual_cash = actual;
+            }} else if (action === 'accept_debt') {{
+                if (!confirm("Підтвердити отримання грошей?")) return;
+                payload.target_id = extraId;
+            }}
+
+            try {{
+                const res = await fetch('/staff/api/cashier/action', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(payload)
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    showToast(data.message);
+                    fetchData(); // Оновити екран
+                }} else {{
+                    alert("Помилка: " + data.error);
+                }}
+            }} catch (e) {{ alert("Помилка з'єднання"); }}
+        }}
+
+        async function openTransactionModal() {{
+            const amount = prompt("Сума (Введіть з мінусом '-' для витрат):");
+            if (!amount) return;
+            const comment = prompt("Коментар до операції:");
+            if (!comment) return;
+            
+            const type = parseFloat(amount) >= 0 ? 'in' : 'out';
+            
+            try {{
+                const res = await fetch('/staff/api/cashier/action', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        action: 'transaction',
+                        type: type,
+                        amount: Math.abs(parseFloat(amount)),
+                        comment: comment
+                    }})
+                }});
+                const data = await res.json();
+                if(data.success) {{ showToast("Транзакція успішна"); fetchData(); }}
+                else alert(data.error);
+            }} catch(e) {{ alert("Error"); }}
+        }}
+
+        // --- SUPPLY MODAL LOGIC ---
+        let supplyData = null;
+        let supplyCart = [];
+
+        async function openSupplyModal() {{
+            const modal = document.getElementById('staff-modal');
+            document.getElementById('modal-body').innerHTML = '<div style="text-align:center; padding:30px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження довідників...</div>';
+            modal.classList.add('active');
+            
+            try {{
+                const res = await fetch('/staff/api/cashier/suppliers');
+                supplyData = await res.json();
+                supplyCart = []; // Clear cart
+                renderSupplyForm();
+            }} catch(e) {{
+                document.getElementById('modal-body').innerText = "Помилка завантаження";
+            }}
+        }}
+
+        function renderSupplyForm() {{
+            let supOpts = supplyData.suppliers.map(s => `<option value="${{s.id}}">${{s.name}}</option>`).join('');
+            let whOpts = supplyData.warehouses.map(w => `<option value="${{w.id}}">${{w.name}}</option>`).join('');
+            
+            // Генеруємо список інгредієнтів для datalist
+            let ingOpts = supplyData.ingredients.map(i => `<option value="${{i.name}} [${{i.unit}}]" data-id="${{i.id}}">`).join('');
+
+            const body = document.getElementById('modal-body');
+            body.innerHTML = `
+                <h3 style="margin:0 0 15px 0;">📥 Прихід товару</h3>
+                
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:15px;">
+                    <div>
+                        <label style="font-size:0.8rem; color:#666;">Постачальник</label>
+                        <select id="sup-select" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ddd;">${{supOpts}}</select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; color:#666;">Склад</label>
+                        <select id="wh-select" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ddd;">${{whOpts}}</select>
+                    </div>
+                </div>
+
+                <div style="background:#f9f9f9; padding:10px; border-radius:8px; border:1px solid #eee; margin-bottom:10px;">
+                    <label style="font-size:0.8rem; font-weight:bold;">Додати товар:</label>
+                    <input list="ing-list" id="ing-input" placeholder="Почніть вводити назву..." style="width:100%; padding:10px; margin-bottom:5px; border-radius:6px; border:1px solid #ccc;">
+                    <datalist id="ing-list">${{ingOpts}}</datalist>
+                    
+                    <div style="display:flex; gap:10px;">
+                        <input type="number" id="ing-qty" placeholder="К-сть" style="width:50%; padding:10px; border-radius:6px; border:1px solid #ccc;">
+                        <input type="number" id="ing-price" placeholder="Ціна (за од.)" style="width:50%; padding:10px; border-radius:6px; border:1px solid #ccc;">
+                    </div>
+                    <button class="action-btn" style="width:100%; margin-top:5px; justify-content:center;" onclick="addSupplyItem()">+ Додати в список</button>
+                </div>
+
+                <div id="supply-list" style="flex-grow:1; overflow-y:auto; border:1px solid #eee; border-radius:8px; margin-bottom:10px;"></div>
+
+                <button class="big-btn success" onclick="submitSupply()">✅ Провести накладну</button>
+                <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="closeModal()">Скасувати</button>
+            `;
+            renderSupplyList();
+        }}
+
+        function addSupplyItem() {{
+            const input = document.getElementById('ing-input');
+            const val = input.value;
+            const qty = parseFloat(document.getElementById('ing-qty').value);
+            const price = parseFloat(document.getElementById('ing-price').value);
+            
+            // Знаходимо ID з datalist
+            const option = document.querySelector(`#ing-list option[value='${{val}}']`);
+            if(!option || !qty) return alert("Виберіть товар та кількість");
+            
+            const id = parseInt(option.dataset.id);
+            
+            supplyCart.push({{ id, name: val, qty, price: price || 0 }});
+            
+            // Очистка
+            input.value = ''; document.getElementById('ing-qty').value = ''; document.getElementById('ing-price').value = '';
+            input.focus();
+            
+            renderSupplyList();
+        }}
+
+        function renderSupplyList() {{
+            const container = document.getElementById('supply-list');
+            if(supplyCart.length === 0) {{
+                container.innerHTML = "<div style='text-align:center; padding:20px; color:#999;'>Список порожній</div>";
+                return;
+            }}
+            
+            let html = "";
+            let total = 0;
+            supplyCart.forEach((item, idx) => {{
+                total += item.qty * item.price;
+                html += `
+                <div style="display:flex; justify-content:space-between; padding:10px; border-bottom:1px solid #eee; align-items:center;">
+                    <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%;">${{item.name}}</div>
+                    <div>
+                        <b>${{item.qty}}</b> x ${{item.price}} 
+                        <button onclick="supplyCart.splice(${{idx}},1); renderSupplyList();" style="border:none; background:none; color:red; margin-left:5px;">×</button>
+                    </div>
+                </div>`;
+            }});
+            container.innerHTML = html;
+        }}
+
+        async function submitSupply() {{
+            if(supplyCart.length === 0) return alert("Список товарів порожній");
+            if(!confirm("Створити накладну?")) return;
+            
+            const supplierId = document.getElementById('sup-select').value;
+            const warehouseId = document.getElementById('wh-select').value;
+            
+            const items = supplyCart.map(i => ({{ ingredient_id: i.id, qty: i.qty, price: i.price }}));
+            
+            try {{
+                const res = await fetch('/staff/api/cashier/supply', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        supplier_id: supplierId,
+                        warehouse_id: warehouseId,
+                        items: items,
+                        comment: "Мобільна накладна"
+                    }})
+                }});
+                const data = await res.json();
+                if(data.success) {{ showToast("Прихід проведено!"); closeModal(); }}
+                else alert(data.error);
+            }} catch(e) {{ alert("Error"); }}
         }}
     </script>
 </body>

@@ -8,7 +8,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func, delete, and_
+from sqlalchemy import select, or_, func, delete, and_, desc
 from sqlalchemy.orm import joinedload, selectinload
 
 # Импорт моделей и зависимостей
@@ -16,8 +16,9 @@ from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
     Category, Product, OrderStatusHistory, StaffNotification
 )
-# Импорт модели модификаторов
-from inventory_models import Modifier
+# Импорт моделей инвентаря
+from inventory_models import Modifier, Supplier, InventoryDoc, InventoryDocItem, Warehouse
+
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
 
@@ -34,7 +35,13 @@ from notification_manager import (
     notify_station_completion,
     create_staff_notification
 )
-from cash_service import link_order_to_shift, register_employee_debt, unregister_employee_debt
+from cash_service import (
+    link_order_to_shift, register_employee_debt, unregister_employee_debt,
+    get_any_open_shift, open_new_shift, close_active_shift, 
+    process_handover, add_shift_transaction, get_shift_statistics
+)
+# Импорт сервиса инвентаря (для прихода товара и списания)
+from inventory_service import deduct_products_by_tech_card, reverse_deduction, process_movement
 
 # Настройка роутера и логгера
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
@@ -250,6 +257,10 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_db_ses
     if is_waiter or is_courier or is_admin_operator:
         tabs_html += '<button class="nav-item" onclick="switchTab(\'finance\')"><i class="fa-solid fa-wallet"></i> Каса</button>'
 
+    # 6. КАСИР (АДМІН) - Нова вкладка
+    if is_admin_operator:
+        tabs_html += '<button class="nav-item" onclick="switchTab(\'cashier_control\')"><i class="fa-solid fa-cash-register"></i> Керування</button>'
+
     # Уведомления (для всех)
     tabs_html += '<button class="nav-item" onclick="switchTab(\'notifications\')" style="position:relative;"><i class="fa-solid fa-bell"></i> Інфо<span id="nav-notify-badge" class="notify-dot" style="display:none;"></span></button>'
 
@@ -388,6 +399,14 @@ async def get_staff_data(
             else:
                 return JSONResponse({"html": "<div class='empty-state'>Доступ заборонено.</div>"})
         
+        # --- Вкладка КАСИР (УПРАВЛІННЯ) ---
+        elif view == "cashier_control":
+            if employee.role.can_manage_orders:
+                cashier_html = await _get_cashier_dashboard_view(session, employee)
+                return JSONResponse({"html": cashier_html})
+            else:
+                return JSONResponse({"html": "<div class='empty-state'>Доступ заборонено.</div>"})
+
         elif view == "notifications":
             return JSONResponse({"html": "<div id='notification-list-container' style='text-align:center; color:#999;'>Оновлення...</div>"})
 
@@ -561,6 +580,80 @@ async def _get_finance_details(session: AsyncSession, employee: Employee):
     <div style="text-align:center; margin-top:20px; font-size:0.85rem; color:#888;">
         Щоб здати гроші, зверніться до адміністратора.
     </div>
+    """
+
+async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee):
+    # 1. Перевірка зміни
+    shift = await get_any_open_shift(session)
+    
+    if not shift:
+        return """
+        <div class="card" style="text-align:center; padding:30px;">
+            <i class="fa-solid fa-store-slash" style="font-size:3rem; color:#ccc; margin-bottom:15px;"></i>
+            <h3>Зміна закрита</h3>
+            <p style="color:#666; margin-bottom:20px;">Для початку роботи відкрийте касову зміну.</p>
+            <div class="form-group">
+                <label>Початковий залишок (грн):</label>
+                <input type="number" id="start-cash-input" class="form-control" value="0.00" style="text-align:center; font-size:1.2rem;">
+            </div>
+            <button class="big-btn success" onclick="cashierAction('open_shift')">🟢 Відкрити зміну</button>
+        </div>
+        """
+
+    # 2. Статистика зміни (коротка)
+    stats = await get_shift_statistics(session, shift.id)
+    cash_in_drawer = stats['theoretical_cash']
+    
+    # 3. Боржники (хто має здати гроші)
+    debtors_res = await session.execute(
+        select(Employee).where(Employee.cash_balance > 0).order_by(desc(Employee.cash_balance))
+    )
+    debtors = debtors_res.scalars().all()
+    
+    debtors_html = ""
+    if debtors:
+        for d in debtors:
+            debtors_html += f"""
+            <div class="debt-item">
+                <div>
+                    <div style="font-weight:bold;">{html.escape(d.full_name)}</div>
+                    <div style="font-size:0.8rem; color:#666;">{d.role.name}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-weight:bold; color:#e74c3c; margin-bottom:5px;">{d.cash_balance:.2f} грн</div>
+                    <button class="action-btn" onclick="cashierAction('accept_debt', {d.id})">Прийняти</button>
+                </div>
+            </div>
+            """
+    else:
+        debtors_html = "<div style='text-align:center; color:#999; padding:15px;'>Всі гроші здано ✅</div>"
+
+    return f"""
+    <div class="finance-card" style="background:#e0f2fe;">
+        <div class="finance-header">В касі (Готівка)</div>
+        <div class="finance-amount" style="color:#0284c7;">{cash_in_drawer:.2f} грн</div>
+        <div style="font-size:0.8rem; margin-top:5px; color:#555;">
+            Продажі (Готівка): {stats['total_sales_cash']:.2f} грн
+        </div>
+    </div>
+
+    <h4 style="margin:20px 0 10px;"><i class="fa-solid fa-hand-holding-dollar"></i> Прийом виручки</h4>
+    <div class="debt-list">
+        {debtors_html}
+    </div>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:20px;">
+        <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="openSupplyModal()">
+            <i class="fa-solid fa-truck-ramp-box"></i> Прихід товару
+        </button>
+        <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="openTransactionModal()">
+            <i class="fa-solid fa-money-bill-transfer"></i> Транзакція
+        </button>
+    </div>
+
+    <button class="big-btn danger" style="margin-top:30px;" onclick="cashierAction('close_shift')">
+        🛑 Закрити зміну (Z-звіт)
+    </button>
     """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
@@ -1213,3 +1306,121 @@ async def print_recipe(order_id: int, session: AsyncSession = Depends(get_db_ses
     except Exception as e:
         logger.error(f"Error generating receipt: {e}")
         return HTMLResponse(f"Ошибка печати: {e}", status_code=500)
+
+# --- НОВЫЕ API ENDPOINTS ДЛЯ КАССИРА ---
+
+@router.post("/api/cashier/action")
+async def cashier_api_action(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "Forbidden"}, 403)
+
+    data = await request.json()
+    action = data.get("action")
+    
+    try:
+        if action == "open_shift":
+            start_cash = Decimal(str(data.get("start_cash", 0)))
+            await open_new_shift(session, employee.id, start_cash)
+            return JSONResponse({"success": True, "message": "Зміну відкрито!"})
+
+        elif action == "close_shift":
+            shift = await get_any_open_shift(session)
+            if not shift: return JSONResponse({"error": "Зміна не знайдена"}, 400)
+            
+            # Для простоти закриваємо по теоретичному залишку, або можна запитати факт
+            stats = await get_shift_statistics(session, shift.id)
+            actual_cash = Decimal(str(data.get("actual_cash", stats['theoretical_cash'])))
+            
+            await close_active_shift(session, shift.id, actual_cash)
+            return JSONResponse({"success": True, "message": "Зміну закрито!"})
+
+        elif action == "accept_debt":
+            target_emp_id = int(data.get("target_id"))
+            shift = await get_any_open_shift(session)
+            if not shift: return JSONResponse({"error": "Відкрийте зміну!"}, 400)
+            
+            # Знаходимо замовлення з боргом
+            orders_res = await session.execute(
+                select(Order.id).where(
+                    Order.payment_method == 'cash',
+                    Order.is_cash_turned_in == False,
+                    or_(
+                        Order.courier_id == target_emp_id,
+                        Order.accepted_by_waiter_id == target_emp_id,
+                        Order.completed_by_courier_id == target_emp_id
+                    )
+                )
+            )
+            order_ids = orders_res.scalars().all()
+            
+            if not order_ids:
+                return JSONResponse({"error": "Немає замовлень для здачі"}, 400)
+                
+            amount = await process_handover(session, shift.id, target_emp_id, order_ids)
+            return JSONResponse({"success": True, "message": f"Прийнято {amount} грн"})
+
+        elif action == "transaction":
+            shift = await get_any_open_shift(session)
+            if not shift: return JSONResponse({"error": "Відкрийте зміну!"}, 400)
+            
+            t_type = data.get("type") # 'in' or 'out'
+            amount = Decimal(str(data.get("amount")))
+            comment = data.get("comment")
+            
+            await add_shift_transaction(session, shift.id, amount, t_type, comment)
+            return JSONResponse({"success": True, "message": "Транзакцію проведено"})
+
+    except Exception as e:
+        logger.error(f"Cashier API Error: {e}")
+        return JSONResponse({"error": str(e)}, 500)
+
+@router.get("/api/cashier/suppliers")
+async def get_suppliers_and_warehouses(
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    """Отримання даних для форми приходу."""
+    suppliers = (await session.execute(select(Supplier).order_by(Supplier.name))).scalars().all()
+    warehouses = (await session.execute(select(Warehouse).order_by(Warehouse.name))).scalars().all()
+    
+    # Повертаємо також всі інгредієнти для пошуку
+    from inventory_models import Ingredient, Unit
+    ingredients = (await session.execute(select(Ingredient).options(joinedload(Ingredient.unit)).order_by(Ingredient.name))).scalars().all()
+    
+    return JSONResponse({
+        "suppliers": [{"id": s.id, "name": s.name} for s in suppliers],
+        "warehouses": [{"id": w.id, "name": w.name} for w in warehouses],
+        "ingredients": [{"id": i.id, "name": i.name, "unit": i.unit.name} for i in ingredients]
+    })
+
+@router.post("/api/cashier/supply")
+async def create_supply_pwa(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "Forbidden"}, 403)
+        
+    data = await request.json()
+    try:
+        items = data.get("items", []) # List of {ingredient_id, qty, price}
+        supplier_id = int(data.get("supplier_id"))
+        warehouse_id = int(data.get("warehouse_id"))
+        comment = data.get("comment", "PWA Supply")
+        
+        # Використовуємо універсальну функцію
+        await process_movement(
+            session, 'supply', items,
+            target_wh_id=warehouse_id,
+            supplier_id=supplier_id,
+            comment=f"{comment} (Created by {employee.full_name})"
+        )
+        return JSONResponse({"success": True, "message": "Накладна створена та проведена!"})
+    except Exception as e:
+        logger.error(f"Supply PWA Error: {e}")
+        return JSONResponse({"error": str(e)}, 500)
