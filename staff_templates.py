@@ -370,6 +370,12 @@ STAFF_DASHBOARD_HTML = """
         .form-group {{ margin-bottom: 15px; text-align: left; }}
         .form-group label {{ display: block; margin-bottom: 5px; font-weight: 600; color: #555; }}
         .form-control {{ width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ddd; font-size: 1rem; }}
+        
+        /* TRANSACTION TOGGLE */
+        .toggle-switch {{ display: flex; background: #eee; border-radius: 10px; padding: 4px; margin-bottom: 15px; }}
+        .toggle-option {{ flex: 1; text-align: center; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: 600; color: #666; transition: all 0.2s; }}
+        .toggle-option.active.income {{ background: #27ae60; color: white; }}
+        .toggle-option.active.expense {{ background: #e74c3c; color: white; }}
     </style>
 </head>
 <body>
@@ -998,13 +1004,65 @@ STAFF_DASHBOARD_HTML = """
             }} catch (e) {{ alert("Помилка з'єднання"); }}
         }}
 
-        async function openTransactionModal() {{
-            const amount = prompt("Сума (Введіть з мінусом '-' для витрат):");
-            if (!amount) return;
-            const comment = prompt("Коментар до операції:");
-            if (!comment) return;
+        // --- IMPROVED TRANSACTION MODAL ---
+        function openTransactionModal() {{
+            const modal = document.getElementById('staff-modal');
+            const body = document.getElementById('modal-body');
             
-            const type = parseFloat(amount) >= 0 ? 'in' : 'out';
+            let html = `
+                <h3 style="margin-top:0; text-align:center;">💸 Нова транзакція</h3>
+                
+                <div class="toggle-switch">
+                    <div class="toggle-option active income" onclick="toggleTransType(this, 'in')">📥 Внесення</div>
+                    <div class="toggle-option" onclick="toggleTransType(this, 'out')">📤 Витрата</div>
+                </div>
+                <input type="hidden" id="trans-type" value="in">
+                
+                <div class="form-group">
+                    <label>Сума (грн)</label>
+                    <input type="number" id="trans-amount" class="form-control" placeholder="0.00" style="font-size:1.5rem; text-align:center;">
+                </div>
+                
+                <div class="form-group">
+                    <label>Коментар</label>
+                    <input type="text" id="trans-comment" class="form-control" placeholder="Опис операції...">
+                </div>
+                
+                <div style="display:flex; gap:10px; margin-bottom:20px; overflow-x:auto;">
+                    <button class="action-btn secondary" style="font-size:0.8rem;" onclick="setTransComment('Розмін')">Розмін</button>
+                    <button class="action-btn secondary" style="font-size:0.8rem;" onclick="setTransComment('Інкасація')">Інкасація</button>
+                    <button class="action-btn secondary" style="font-size:0.8rem;" onclick="setTransComment('Закупівля')">Закупівля</button>
+                </div>
+                
+                <button class="big-btn success" onclick="submitTransaction()">✅ Провести</button>
+                <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="closeModal()">Скасувати</button>
+            `;
+            
+            body.innerHTML = html;
+            modal.classList.add('active');
+            setTimeout(() => document.getElementById('trans-amount').focus(), 100);
+        }}
+        
+        function toggleTransType(el, type) {{
+            document.querySelectorAll('.toggle-option').forEach(e => e.classList.remove('active', 'income', 'expense'));
+            document.getElementById('trans-type').value = type;
+            
+            el.classList.add('active');
+            if(type === 'in') el.classList.add('income');
+            else el.classList.add('expense');
+        }}
+        
+        function setTransComment(text) {{
+            document.getElementById('trans-comment').value = text;
+        }}
+        
+        async function submitTransaction() {{
+            const type = document.getElementById('trans-type').value;
+            const amount = parseFloat(document.getElementById('trans-amount').value);
+            const comment = document.getElementById('trans-comment').value;
+            
+            if(!amount || amount <= 0) return alert("Введіть коректну суму");
+            if(!comment) return alert("Введіть коментар");
             
             try {{
                 const res = await fetch('/staff/api/cashier/action', {{
@@ -1012,12 +1070,12 @@ STAFF_DASHBOARD_HTML = """
                     body: JSON.stringify({{
                         action: 'transaction',
                         type: type,
-                        amount: Math.abs(parseFloat(amount)),
+                        amount: amount,
                         comment: comment
                     }})
                 }});
                 const data = await res.json();
-                if(data.success) {{ showToast("Транзакція успішна"); fetchData(); }}
+                if(data.success) {{ showToast("Транзакція успішна"); fetchData(); closeModal(); }}
                 else alert(data.error);
             }} catch(e) {{ alert("Error"); }}
         }}
@@ -1041,86 +1099,88 @@ STAFF_DASHBOARD_HTML = """
             }}
         }}
 
-        function renderSupplyForm() {{
+        function renderSupplyForm(filterText = "") {{
             let supOpts = supplyData.suppliers.map(s => `<option value="${{s.id}}">${{s.name}}</option>`).join('');
             let whOpts = supplyData.warehouses.map(w => `<option value="${{w.id}}">${{w.name}}</option>`).join('');
             
-            // Генеруємо список інгредієнтів для datalist
-            let ingOpts = supplyData.ingredients.map(i => `<option value="${{i.name}} [${{i.unit}}]" data-id="${{i.id}}">`).join('');
+            // Filter ingredients
+            const lowerFilter = filterText.toLowerCase();
+            let ingListHtml = "";
+            supplyData.ingredients.forEach(i => {{
+                if(i.name.toLowerCase().includes(lowerFilter)) {{
+                    ingListHtml += `
+                    <div class="edit-item" style="padding:10px;">
+                        <div style="flex-grow:1;">${{i.name}} <small>(${{i.unit}})</small></div>
+                        <button class="action-btn" style="padding:5px 10px;" onclick="promptAddSupplyItem(${{i.id}}, '${{i.name.replace(/'/g, "\\'")}}')">+</button>
+                    </div>`;
+                }}
+            }});
+            if(!ingListHtml) ingListHtml = "<div style='text-align:center; color:#999; padding:10px;'>Нічого не знайдено</div>";
 
             const body = document.getElementById('modal-body');
-            body.innerHTML = `
-                <h3 style="margin:0 0 15px 0;">📥 Прихід товару</h3>
-                
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:15px;">
-                    <div>
-                        <label style="font-size:0.8rem; color:#666;">Постачальник</label>
-                        <select id="sup-select" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ddd;">${{supOpts}}</select>
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; color:#666;">Склад</label>
-                        <select id="wh-select" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ddd;">${{whOpts}}</select>
-                    </div>
-                </div>
-
-                <div style="background:#f9f9f9; padding:10px; border-radius:8px; border:1px solid #eee; margin-bottom:10px;">
-                    <label style="font-size:0.8rem; font-weight:bold;">Додати товар:</label>
-                    <input list="ing-list" id="ing-input" placeholder="Почніть вводити назву..." style="width:100%; padding:10px; margin-bottom:5px; border-radius:6px; border:1px solid #ccc;">
-                    <datalist id="ing-list">${{ingOpts}}</datalist>
+            // Check if we are re-rendering just list or full form
+            if(!document.getElementById('supply-ing-list-container')) {{
+                body.innerHTML = `
+                    <h3 style="margin:0 0 10px 0;">📥 Прихід товару</h3>
                     
-                    <div style="display:flex; gap:10px;">
-                        <input type="number" id="ing-qty" placeholder="К-сть" style="width:50%; padding:10px; border-radius:6px; border:1px solid #ccc;">
-                        <input type="number" id="ing-price" placeholder="Ціна (за од.)" style="width:50%; padding:10px; border-radius:6px; border:1px solid #ccc;">
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+                        <div>
+                            <label style="font-size:0.8rem; color:#666;">Постачальник</label>
+                            <select id="sup-select" style="width:100%; padding:8px; border-radius:8px; border:1px solid #ddd;">${{supOpts}}</select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; color:#666;">Склад</label>
+                            <select id="wh-select" style="width:100%; padding:8px; border-radius:8px; border:1px solid #ddd;">${{whOpts}}</select>
+                        </div>
                     </div>
-                    <button class="action-btn" style="width:100%; margin-top:5px; justify-content:center;" onclick="addSupplyItem()">+ Додати в список</button>
-                </div>
 
-                <div id="supply-list" style="flex-grow:1; overflow-y:auto; border:1px solid #eee; border-radius:8px; margin-bottom:10px;"></div>
+                    <input type="text" id="supply-search" placeholder="🔍 Пошук товару..." value="${{filterText}}" 
+                           oninput="renderSupplyForm(this.value)" 
+                           style="width:100%; padding:10px; border-radius:8px; border:1px solid #ddd; margin-bottom:5px;">
+                    
+                    <div id="supply-ing-list-container" class="edit-list" style="height:150px; min-height:150px; background:#f9f9f9;">${{ingListHtml}}</div>
 
-                <button class="big-btn success" onclick="submitSupply()">✅ Провести накладну</button>
-                <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="closeModal()">Скасувати</button>
-            `;
-            renderSupplyList();
+                    <h4 style="margin:10px 0 5px;">Обрано:</h4>
+                    <div id="supply-cart-container" class="edit-list" style="height:120px; min-height:120px;"></div>
+
+                    <button class="big-btn success" onclick="submitSupply()">✅ Провести накладну</button>
+                    <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="closeModal()">Скасувати</button>
+                `;
+            }} else {{
+                document.getElementById('supply-ing-list-container').innerHTML = ingListHtml;
+                // Refocus search input if needed
+                const input = document.getElementById('supply-search');
+                input.focus();
+            }}
+            renderSupplyCart();
         }}
 
-        function addSupplyItem() {{
-            const input = document.getElementById('ing-input');
-            const val = input.value;
-            const qty = parseFloat(document.getElementById('ing-qty').value);
-            const price = parseFloat(document.getElementById('ing-price').value);
+        function promptAddSupplyItem(id, name) {{
+            const qty = prompt(`Кількість для "${{name}}":`);
+            if(!qty) return;
+            const price = prompt(`Ціна за одиницю (опціонально):`, "0");
             
-            // Знаходимо ID з datalist
-            const option = document.querySelector(`#ing-list option[value='${{val}}']`);
-            if(!option || !qty) return alert("Виберіть товар та кількість");
-            
-            const id = parseInt(option.dataset.id);
-            
-            supplyCart.push({{ id, name: val, qty, price: price || 0 }});
-            
-            // Очистка
-            input.value = ''; document.getElementById('ing-qty').value = ''; document.getElementById('ing-price').value = '';
-            input.focus();
-            
-            renderSupplyList();
+            supplyCart.push({{ id, name, qty: parseFloat(qty), price: parseFloat(price)||0 }});
+            renderSupplyCart();
         }}
 
-        function renderSupplyList() {{
-            const container = document.getElementById('supply-list');
+        function renderSupplyCart() {{
+            const container = document.getElementById('supply-cart-container');
+            if(!container) return;
+            
             if(supplyCart.length === 0) {{
                 container.innerHTML = "<div style='text-align:center; padding:20px; color:#999;'>Список порожній</div>";
                 return;
             }}
             
             let html = "";
-            let total = 0;
             supplyCart.forEach((item, idx) => {{
-                total += item.qty * item.price;
                 html += `
                 <div style="display:flex; justify-content:space-between; padding:10px; border-bottom:1px solid #eee; align-items:center;">
                     <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%;">${{item.name}}</div>
                     <div>
                         <b>${{item.qty}}</b> x ${{item.price}} 
-                        <button onclick="supplyCart.splice(${{idx}},1); renderSupplyList();" style="border:none; background:none; color:red; margin-left:5px;">×</button>
+                        <button onclick="supplyCart.splice(${{idx}},1); renderSupplyCart();" style="border:none; background:none; color:red; margin-left:5px;">×</button>
                     </div>
                 </div>`;
             }});
@@ -1148,6 +1208,41 @@ STAFF_DASHBOARD_HTML = """
                 }});
                 const data = await res.json();
                 if(data.success) {{ showToast("Прихід проведено!"); closeModal(); }}
+                else alert(data.error);
+            }} catch(e) {{ alert("Error"); }}
+        }}
+        
+        // --- PAY DOC MODAL ---
+        function openPayDocModal(docId, debtAmount, supplierName) {{
+            const modal = document.getElementById('staff-modal');
+            document.getElementById('modal-body').innerHTML = `
+                <h3 style="text-align:center;">Оплата накладної #${{docId}}</h3>
+                <p style="text-align:center; color:#666;">${{supplierName}}</p>
+                
+                <div class="form-group">
+                    <label>Сума до сплати (Борг: ${{debtAmount.toFixed(2)}})</label>
+                    <input type="number" id="pay-doc-amount" class="form-control" value="${{debtAmount}}" style="font-size:1.5rem; text-align:center;">
+                </div>
+                
+                <button class="big-btn" onclick="submitDocPayment(${{docId}})">💸 Оплатити з каси</button>
+                <button class="action-btn secondary" style="width:100%; margin-top:10px; justify-content:center;" onclick="closeModal()">Скасувати</button>
+            `;
+            modal.classList.add('active');
+        }}
+        
+        async function submitDocPayment(docId) {{
+            const amount = parseFloat(document.getElementById('pay-doc-amount').value);
+            if(!amount || amount <= 0) return alert("Невірна сума");
+            
+            if(!confirm(`Видати з каси ${{amount}} грн?`)) return;
+            
+            try {{
+                const res = await fetch('/staff/api/cashier/pay_doc', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ doc_id: docId, amount: amount }})
+                }});
+                const data = await res.json();
+                if(data.success) {{ showToast("Оплачено!"); closeModal(); fetchData(); }}
                 else alert(data.error);
             }} catch(e) {{ alert("Error"); }}
         }}

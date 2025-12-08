@@ -17,7 +17,7 @@ from models import (
     Category, Product, OrderStatusHistory, StaffNotification
 )
 # Импорт моделей инвентаря
-from inventory_models import Modifier, Supplier, InventoryDoc, InventoryDocItem, Warehouse
+from inventory_models import Modifier, Supplier, InventoryDoc, InventoryDocItem, Warehouse, Ingredient
 
 from dependencies import get_db_session
 from auth_utils import verify_password, create_access_token, get_current_staff
@@ -41,7 +41,7 @@ from cash_service import (
     process_handover, add_shift_transaction, get_shift_statistics
 )
 # Импорт сервиса инвентаря (для прихода товара и списания)
-from inventory_service import deduct_products_by_tech_card, reverse_deduction, process_movement
+from inventory_service import deduct_products_by_tech_card, reverse_deduction, process_movement, generate_cook_ticket
 
 # Настройка роутера и логгера
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
@@ -628,6 +628,34 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     else:
         debtors_html = "<div style='text-align:center; color:#999; padding:15px;'>Всі гроші здано ✅</div>"
 
+    # 4. Неоплачені накладні
+    docs_res = await session.execute(
+        select(InventoryDoc)
+        .options(selectinload(InventoryDoc.items), joinedload(InventoryDoc.supplier))
+        .where(InventoryDoc.doc_type == 'supply', InventoryDoc.is_processed == True)
+        .order_by(InventoryDoc.created_at.desc())
+    )
+    docs = docs_res.scalars().all()
+    
+    unpaid_html = ""
+    for d in docs:
+        total = sum(i.quantity * i.price for i in d.items)
+        debt = total - Decimal(d.paid_amount)
+        if debt > 0.01:
+            supplier_name = html.escape(d.supplier.name if d.supplier else 'Постачальник')
+            unpaid_html += f"""
+            <div class="debt-item">
+                <div>
+                    <div style="font-weight:bold;">#{d.id} {supplier_name}</div>
+                    <div style="font-size:0.8rem; color:#666;">Борг: <span style="color:#e74c3c; font-weight:bold;">{debt:.2f}</span> / {total:.2f}</div>
+                </div>
+                <button class="action-btn" onclick="openPayDocModal({d.id}, {debt}, '{supplier_name}')">Сплатити</button>
+            </div>
+            """
+            
+    if not unpaid_html:
+        unpaid_html = "<div style='text-align:center; padding:15px; color:#999;'>Немає неоплачених накладних</div>"
+
     return f"""
     <div class="finance-card" style="background:#e0f2fe;">
         <div class="finance-header">В касі (Готівка)</div>
@@ -640,6 +668,11 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     <h4 style="margin:20px 0 10px;"><i class="fa-solid fa-hand-holding-dollar"></i> Прийом виручки</h4>
     <div class="debt-list">
         {debtors_html}
+    </div>
+    
+    <h4 style="margin:20px 0 10px;"><i class="fa-solid fa-file-invoice-dollar"></i> Неоплачені накладні</h4>
+    <div class="debt-list">
+        {unpaid_html}
     </div>
 
     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:20px;">
@@ -1423,4 +1456,39 @@ async def create_supply_pwa(
         return JSONResponse({"success": True, "message": "Накладна створена та проведена!"})
     except Exception as e:
         logger.error(f"Supply PWA Error: {e}")
+        return JSONResponse({"error": str(e)}, 500)
+
+@router.post("/api/cashier/pay_doc")
+async def pay_supply_doc_pwa(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    """Оплата накладної з каси через PWA."""
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "Forbidden"}, 403)
+        
+    data = await request.json()
+    doc_id = int(data.get("doc_id"))
+    amount = Decimal(str(data.get("amount", 0)))
+    
+    if amount <= 0: return JSONResponse({"error": "Невірна сума"}, 400)
+    
+    doc = await session.get(InventoryDoc, doc_id, options=[joinedload(InventoryDoc.supplier)])
+    if not doc: return JSONResponse({"error": "Накладна не знайдена"}, 404)
+    
+    shift = await get_any_open_shift(session)
+    if not shift: return JSONResponse({"error": "Немає відкритої зміни"}, 400)
+    
+    try:
+        comment = f"Оплата накладної #{doc.id}"
+        if doc.supplier: comment += f" ({doc.supplier.name})"
+        
+        await add_shift_transaction(session, shift.id, amount, "out", comment)
+        
+        doc.paid_amount = float(doc.paid_amount) + float(amount)
+        await session.commit()
+        return JSONResponse({"success": True, "message": "Оплату проведено!"})
+    except Exception as e:
+        logger.error(f"Pay Doc API Error: {e}")
         return JSONResponse({"error": str(e)}, 500)
