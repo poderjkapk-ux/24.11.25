@@ -1145,14 +1145,28 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
         status = "<span class='inv-badge badge-green'>Проведено</span>" if d.is_processed else "<span class='inv-badge badge-orange'>Чернетка</span>"
         
         desc_txt = ""
-        if d.doc_type == 'supply': desc_txt = f"{d.supplier.name if d.supplier else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
-        elif d.doc_type == 'writeoff': desc_txt = f"Зі складу: {d.source_warehouse.name if d.source_warehouse else '?'}"
-        elif d.doc_type == 'transfer': desc_txt = f"{d.source_warehouse.name if d.source_warehouse else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
-        elif d.doc_type == 'inventory': desc_txt = f"Склад: {d.source_warehouse.name if d.source_warehouse else '?'}"
-        
         paid_info = ""
-        if d.doc_type == 'supply' and d.paid_amount > 0:
-            paid_info = f"<br><span style='font-size:0.75rem; color:#15803d;'>💸 Сплачено: {d.paid_amount}</span>"
+
+        # --- ПОКРАЩЕНА ЛОГІКА ВІДОБРАЖЕННЯ ТИПУ ---
+        if d.doc_type == 'supply': 
+            if d.supplier:
+                # Звичайна зовнішня поставка
+                desc_txt = f"<b>{html.escape(d.supplier.name)}</b> ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
+                if d.paid_amount > 0:
+                    paid_info = f"<br><span style='font-size:0.75rem; color:#15803d;'>💸 Сплачено: {d.paid_amount}</span>"
+            else:
+                # Внутрішнє виробництво (П/Ф) - виділяємо це!
+                lbl = "🍳 Виробництво"
+                cls = "badge-orange" # Помаранчевий бейдж
+                desc_txt = f"На склад: <b>{d.target_warehouse.name if d.target_warehouse else '?'}</b>"
+                paid_info = "<br><span style='font-size:0.75rem; color:#666;'>Внутрішній акт</span>"
+
+        elif d.doc_type == 'writeoff': 
+            desc_txt = f"Зі складу: {d.source_warehouse.name if d.source_warehouse else '?'}"
+        elif d.doc_type == 'transfer': 
+            desc_txt = f"{d.source_warehouse.name if d.source_warehouse else '?'} ➔ {d.target_warehouse.name if d.target_warehouse else '?'}"
+        elif d.doc_type == 'inventory': 
+            desc_txt = f"Склад: {d.source_warehouse.name if d.source_warehouse else '?'}"
         
         # Посилання
         link = f"/admin/inventory/docs/{d.id}"
@@ -1174,7 +1188,7 @@ async def docs_page(type: str = Query(None), session: AsyncSession = Depends(get
     filter_btns = f"""
     <div style="display:flex; gap:10px; margin-bottom:10px;">
         <a href="/admin/inventory/docs" class="button-sm {'secondary' if type else ''}">Всі</a>
-        <a href="/admin/inventory/docs?type=supply" class="button-sm {'secondary' if type!='supply' else ''}">Прихід</a>
+        <a href="/admin/inventory/docs?type=supply" class="button-sm {'secondary' if type!='supply' else ''}">Прихід / Виробництво</a>
         <a href="/admin/inventory/docs?type=writeoff" class="button-sm {'secondary' if type!='writeoff' else ''}">Списання</a>
         <a href="/admin/inventory/docs?type=transfer" class="button-sm {'secondary' if type!='transfer' else ''}">Переміщення</a>
     </div>

@@ -629,11 +629,16 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     else:
         debtors_html = "<div style='text-align:center; color:#999; padding:15px;'>Всі гроші здано ✅</div>"
 
-    # 4. Неоплачені накладні
+    # 4. Неоплачені накладні (Покращене відображення)
+    # Фільтруємо: Тільки 'supply', тільки проведені, і тільки ті, де Є ПОСТАЧАЛЬНИК (виключаємо внутрішнє виробництво напівфабрикатів)
     docs_res = await session.execute(
         select(InventoryDoc)
         .options(selectinload(InventoryDoc.items), joinedload(InventoryDoc.supplier))
-        .where(InventoryDoc.doc_type == 'supply', InventoryDoc.is_processed == True)
+        .where(
+            InventoryDoc.doc_type == 'supply', 
+            InventoryDoc.is_processed == True,
+            InventoryDoc.supplier_id != None  # <--- Ігноруємо внутрішні акти (П/Ф)
+        )
         .order_by(InventoryDoc.created_at.desc())
     )
     docs = docs_res.scalars().all()
@@ -641,53 +646,103 @@ async def _get_cashier_dashboard_view(session: AsyncSession, employee: Employee)
     unpaid_html = ""
     for d in docs:
         total = sum(i.quantity * i.price for i in d.items)
-        debt = total - Decimal(d.paid_amount)
+        # Уникаємо ділення на нуль та помилок з None
+        paid = Decimal(str(d.paid_amount or 0))
+        debt = total - paid
+        
         if debt > 0.01:
             supplier_name = html.escape(d.supplier.name if d.supplier else 'Постачальник')
+            percent_paid = (paid / total * 100) if total > 0 else 0
+            
+            date_str = d.created_at.strftime('%d.%m')
+            time_str = d.created_at.strftime('%H:%M')
+            
+            # Стиль прогрес-бару
+            bar_color = "#e74c3c" # Червоний
+            if percent_paid > 50: bar_color = "#f39c12" # Помаранчевий
+            if percent_paid > 90: bar_color = "#27ae60" # Зелений
+
             unpaid_html += f"""
-            <div class="debt-item">
-                <div>
-                    <div style="font-weight:bold;">#{d.id} {supplier_name}</div>
-                    <div style="font-size:0.8rem; color:#666;">Борг: <span style="color:#e74c3c; font-weight:bold;">{debt:.2f}</span> / {total:.2f}</div>
+            <div class="invoice-card">
+                <div class="inv-header">
+                    <div class="inv-title">
+                        <i class="fa-solid fa-truck-field"></i> {supplier_name}
+                    </div>
+                    <div class="inv-date">{date_str} <small>{time_str}</small></div>
                 </div>
-                <button class="action-btn" onclick="openPayDocModal({d.id}, {debt}, '{supplier_name}')">Сплатити</button>
+                
+                <div class="inv-id">Накладна #{d.id}</div>
+                
+                <div class="inv-progress-bg">
+                    <div class="inv-progress-fill" style="width: {percent_paid}%; background-color: {bar_color};"></div>
+                </div>
+                
+                <div class="inv-footer">
+                    <div>
+                        <div style="font-size:0.75rem; color:#666;">Залишок боргу:</div>
+                        <div style="font-weight:bold; color:#e74c3c; font-size:1.1rem;">{debt:.2f} <small>грн</small></div>
+                    </div>
+                    <button class="action-btn" onclick="openPayDocModal({d.id}, {debt}, '{supplier_name}')">
+                        Сплатити
+                    </button>
+                </div>
             </div>
             """
             
     if not unpaid_html:
-        unpaid_html = "<div style='text-align:center; padding:15px; color:#999;'>Немає неоплачених накладних</div>"
+        unpaid_html = "<div style='text-align:center; padding:25px; color:#999; background:#f9f9f9; border-radius:12px;'>Немає неоплачених накладних 🎉</div>"
+
+    # Додаткові CSS стилі для нових карток
+    styles = """
+    <style>
+        .invoice-card { background: white; border-radius: 12px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #eee; }
+        .inv-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        .inv-title { font-weight: 700; color: #333; font-size: 1rem; display:flex; align-items:center; gap:8px; }
+        .inv-date { background: #f1f5f9; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; color: #64748b; }
+        .inv-id { font-size: 0.85rem; color: #94a3b8; margin-bottom: 12px; }
+        .inv-progress-bg { height: 6px; background: #f1f5f9; border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
+        .inv-progress-fill { height: 100%; transition: width 0.3s ease; }
+        .inv-footer { display: flex; justify-content: space-between; align-items: end; }
+    </style>
+    """
 
     return f"""
-    <div class="finance-card" style="background:#e0f2fe;">
-        <div class="finance-header">В касі (Готівка)</div>
+    {styles}
+    <div class="finance-card" style="background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%); border: 1px solid #bae6fd;">
+        <div class="finance-header" style="color:#0369a1;">В касі (Готівка)</div>
         <div class="finance-amount" style="color:#0284c7;">{cash_in_drawer:.2f} грн</div>
-        <div style="font-size:0.8rem; margin-top:5px; color:#555;">
-            Продажі (Готівка): {stats['total_sales_cash']:.2f} грн
+        <div style="font-size:0.8rem; margin-top:5px; color:#0c4a6e;">
+            Продажі (Готівка): <b>{stats['total_sales_cash']:.2f}</b> грн
         </div>
     </div>
 
-    <h4 style="margin:20px 0 10px;"><i class="fa-solid fa-hand-holding-dollar"></i> Прийом виручки</h4>
+    <h4 style="margin:25px 0 10px; color:#475569; text-transform:uppercase; font-size:0.85rem; letter-spacing:0.5px;">
+        <i class="fa-solid fa-hand-holding-dollar"></i> Прийом виручки від персоналу
+    </h4>
     <div class="debt-list">
         {debtors_html}
     </div>
     
-    <h4 style="margin:20px 0 10px;"><i class="fa-solid fa-file-invoice-dollar"></i> Неоплачені накладні</h4>
-    <div class="debt-list">
+    <h4 style="margin:25px 0 10px; color:#475569; text-transform:uppercase; font-size:0.85rem; letter-spacing:0.5px;">
+        <i class="fa-solid fa-file-invoice-dollar"></i> Неоплачені накладні
+    </h4>
+    <div class="invoices-list">
         {unpaid_html}
     </div>
 
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:20px;">
-        <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="openSupplyModal()">
-            <i class="fa-solid fa-truck-ramp-box"></i> Прихід товару
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:30px;">
+        <button class="action-btn secondary" style="justify-content:center; padding:15px; background:#f8fafc; border:1px solid #e2e8f0;" onclick="openSupplyModal()">
+            <i class="fa-solid fa-truck-ramp-box" style="color:#333;"></i> Прихід
         </button>
-        <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="openTransactionModal()">
-            <i class="fa-solid fa-money-bill-transfer"></i> Транзакція
+        <button class="action-btn secondary" style="justify-content:center; padding:15px; background:#f8fafc; border:1px solid #e2e8f0;" onclick="openTransactionModal()">
+            <i class="fa-solid fa-money-bill-transfer" style="color:#333;"></i> Транзакція
         </button>
     </div>
 
-    <button class="big-btn danger" style="margin-top:30px;" onclick="cashierAction('close_shift')">
+    <button class="big-btn danger" style="margin-top:30px; background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5;" onclick="cashierAction('close_shift')">
         🛑 Закрити зміну (Z-звіт)
     </button>
+    <div style="height: 50px;"></div>
     """
 
 async def _get_production_orders(session: AsyncSession, employee: Employee):
