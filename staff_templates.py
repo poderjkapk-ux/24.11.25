@@ -720,7 +720,7 @@ STAFF_DASHBOARD_HTML = """
             
             let statusOptions = "";
             statuses.forEach(s => {{
-                statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}">${{s.name}}</option>`;
+                statusOptions += `<option value="${{s.id}}" ${{s.selected ? 'selected' : ''}} data-completed="${{s.is_completed}}" data-cancelled="${{s.is_cancelled}}">${{s.name}}</option>`;
             }});
             
             const addBtn = canEdit ? `<button class="action-btn secondary" style="width:100%; margin-bottom:10px;" onclick="openAddProductModal(true)"><i class="fa-solid fa-plus"></i> Додати страву</button>` : '';
@@ -773,10 +773,11 @@ STAFF_DASHBOARD_HTML = """
             const option = selectElem.options[selectElem.selectedIndex];
             
             // --- NEW: Перевірка на статус Скасування ---
-            const statusName = option.text.toLowerCase();
-            if (statusName.includes("скасовано") || statusName.includes("відміна") || statusName.includes("cancel")) {{
+            const isCancelled = option.getAttribute('data-cancelled') === 'true';
+            
+            if (isCancelled) {{
                 document.getElementById('cancel-modal').classList.add('active');
-                selectElem.value = ""; // Скидаємо вибір
+                selectElem.value = ""; // Скидаємо вибір, щоб статус візуально не змінився до підтвердження
                 return;
             }}
             // -------------------------------------------

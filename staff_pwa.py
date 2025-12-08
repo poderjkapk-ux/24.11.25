@@ -996,7 +996,7 @@ async def get_order_details(order_id: int, session: AsyncSession = Depends(get_d
         current_s = await session.get(OrderStatus, order.status_id)
         if current_s: statuses.append(current_s)
 
-    status_list = [{"id": s.id, "name": s.name, "selected": s.id == order.status_id, "is_completed": s.is_completed_status} for s in statuses]
+    status_list = [{"id": s.id, "name": s.name, "selected": s.id == order.status_id, "is_completed": s.is_completed_status, "is_cancelled": s.is_cancelled_status} for s in statuses]
 
     items = []
     for i in order.items:
