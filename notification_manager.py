@@ -1,4 +1,3 @@
-
 # notification_manager.py
 
 import logging
@@ -13,7 +12,7 @@ from sqlalchemy.orm import selectinload, joinedload
 from models import Order, OrderStatus, Employee, Role, OrderItem, StaffNotification
 # --- СКЛАД: Импорт функций списания и возврата ---
 from inventory_service import deduct_products_by_tech_card, reverse_deduction
-from inventory_models import InventoryDoc # Додано для зміни типу документа
+from inventory_models import InventoryDoc 
 
 # Импорт менеджера WebSocket для отправки событий
 from websocket_manager import manager
@@ -362,8 +361,8 @@ async def notify_all_parties_on_status_change(
     """
     Централизованная функция уведомлений и логики склада при смене статуса.
     """
-    # !!! ВИПРАВЛЕННЯ: Зберігаємо прапор списання, тому що перезавантаження з БД його затре !!!
-    # Це потрібно, щоб передати рішення "Списати у смітник" (Waste) без повернення на склад
+    # !!! ВАЖЛИВО: Зберігаємо прапор списання, тому що перезавантаження з БД його затре !!!
+    # Цей прапор міг бути встановлений в API обробнику (наприклад, cancel_order_complex_api)
     skip_return_flag = getattr(order, 'skip_inventory_return', False)
 
     # Явная загрузка items для склада и связей
@@ -387,9 +386,9 @@ async def notify_all_parties_on_status_change(
     
     # А. ПОВЕРНЕННЯ НА СКЛАД ПРИ СКАСУВАННІ
     if new_status.is_cancelled_status and order.is_inventory_deducted:
-        # Перевіряємо прапорець skip_inventory_return
-        # Якщо він False - повертаємо товари на склад (клієнт відмовився)
+        # Перевіряємо прапорець skip_inventory_return (TRUE = "Списати в смітник", FALSE = "Вернути на полицю")
         if not order.skip_inventory_return:
+            # Варіант 1: Повернення товару (Клієнт відмовився, товар цілий)
             try:
                 await reverse_deduction(session, order)
                 if admin_chat_id_str:
@@ -398,9 +397,8 @@ async def notify_all_parties_on_status_change(
             except Exception as e:
                 logger.error(f"Помилка повернення на склад для #{order.id}: {e}")
         else:
-            # Якщо skip_return = True, то це "Списання" (Waste).
+            # Варіант 2: Списання (Waste)
             # Ми перетворюємо документ "Deduction" (Продаж) на "Writeoff" (Списання)
-            # щоб в звітах це виглядало як втрати, а не продажі.
             try:
                 docs_to_update = await session.execute(
                     select(InventoryDoc).where(
@@ -410,25 +408,29 @@ async def notify_all_parties_on_status_change(
                 )
                 
                 updated_count = 0
-                for doc in docs_to_update.scalars().all():
+                docs = docs_to_update.scalars().all()
+                for doc in docs:
                     doc.doc_type = 'writeoff'
                     doc.comment = f"Списання (Скасування) замовлення #{order.id}"
                     updated_count += 1
                 
                 if updated_count > 0:
                     await session.commit()
-                    logger.info(f"Замовлення #{order.id}: {updated_count} накладних продажу перетворено на списання.")
+                    logger.info(f"Замовлення #{order.id}: {updated_count} накладних продажу перетворено на списання (Writeoff).")
                 else:
-                    logger.warning(f"Замовлення #{order.id}: Документів продажу не знайдено для конвертації в списання.")
+                    logger.warning(f"Замовлення #{order.id} (Waste): Документів продажу (deduction) не знайдено для конвертації.")
                     
             except Exception as e:
                 logger.error(f"Помилка конвертації документів для #{order.id}: {e}")
 
     # Б. СПИСАННЯ СО СКЛАДА (якщо статус "Готовий до видачі" або завершальний)
-    if (new_status.name == "Готовий до видачі" or new_status.is_completed_status) and not order.is_inventory_deducted:
+    # Списуємо тільки якщо раніше НЕ списували
+    should_deduct = (new_status.name == "Готовий до видачі" or new_status.is_completed_status)
+    if should_deduct and not order.is_inventory_deducted:
         try:
             await deduct_products_by_tech_card(session, order)
-            order.is_inventory_deducted = True
+            # Прапорець is_inventory_deducted ставиться всередині deduct_products_by_tech_card,
+            # але ми перестраховуємося і перевіряємо, чи зберігся він
             await session.commit()
             logger.info(f"Склад списан для заказа #{order.id}")
         except Exception as e:

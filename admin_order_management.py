@@ -18,7 +18,7 @@ from templates import ADMIN_HTML_TEMPLATE, ADMIN_ORDER_MANAGE_BODY
 from dependencies import get_db_session, check_credentials
 from notification_manager import notify_all_parties_on_status_change
 # --- КАСА: Імпорт сервісів ---
-from cash_service import link_order_to_shift, register_employee_debt
+from cash_service import link_order_to_shift, register_employee_debt, unregister_employee_debt
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -52,13 +52,18 @@ async def get_manage_order_page(
     if order.items:
         for item in order.items:
             icon = "❓"
-            # Визначаємо іконку на основі збереженого preparation_area
             if item.preparation_area == 'kitchen':
                 icon = "🍳" 
             elif item.preparation_area == 'bar':
                 icon = "🍹" 
             
-            products_html_list.append(f"<li>{icon} {html.escape(item.product_name)} x {item.quantity} ({item.price_at_moment} грн)</li>")
+            # Додаємо модифікатори
+            mods_str = ""
+            if item.modifiers:
+                names = [m.get('name', '') for m in item.modifiers]
+                mods_str = f" <small>({', '.join(names)})</small>"
+
+            products_html_list.append(f"<li>{icon} {html.escape(item.product_name)}{mods_str} x {item.quantity} ({item.price_at_moment} грн)</li>")
     
     products_html = "<ul>" + "".join(products_html_list) + "</ul>" if products_html_list else "<i>Товарів немає</i>"
     # ---------------------------------------------------
@@ -95,7 +100,6 @@ async def get_manage_order_page(
     
     payment_method_text = "Готівка" if order.payment_method == 'cash' else "Картка"
     
-    # Додаємо інформацію про здачу виручки
     if order.payment_method == 'cash' and order.status.is_completed_status:
         if order.is_cash_turned_in:
             payment_method_text += " <span style='color:green; font-weight:bold;'>(В касі ✅)</span>"
@@ -127,7 +131,6 @@ async def get_manage_order_page(
         payment_method_text=payment_method_text 
     )
 
-    # --- ВИПРАВЛЕНО: Додано inventory_active в список ключів ---
     active_classes = {key: "" for key in ["clients_active", "main_active", "products_active", "categories_active", "statuses_active", "settings_active", "employees_active", "reports_active", "menu_active", "tables_active", "design_active", "inventory_active"]}
     active_classes["orders_active"] = "active"
     
@@ -153,21 +156,29 @@ async def web_set_order_status(
     if not order:
         raise HTTPException(status_code=404, detail="Замовлення не знайдено")
     
-    # Забороняємо змінювати метод оплати, якщо замовлення вже закрите (щоб не зламати касу)
-    if not (order.status.is_completed_status or order.status.is_cancelled_status):
-        order.payment_method = payment_method
-
-    # Перевірка: якщо замовлення вже закрите
-    if order.status.is_completed_status or order.status.is_cancelled_status:
-        raise HTTPException(status_code=400, detail="Замовлення вже закрите. Зміна статусу заборонена.")
-
     if order.status_id == status_id:
-        await session.commit()
+        # Якщо статус не змінився, просто оновлюємо метод оплати, якщо ще не закрито
+        if not (order.status.is_completed_status or order.status.is_cancelled_status):
+            order.payment_method = payment_method
+            await session.commit()
         return RedirectResponse(url=f"/admin/order/manage/{order_id}", status_code=303)
 
     new_status = await session.get(OrderStatus, status_id)
     old_status_name = order.status.name if order.status else "Невідомий"
     
+    # --- ВИПРАВЛЕННЯ ЛОГІКИ: Дозволяємо змінювати статус навіть якщо закрито ---
+    # Але якщо замовлення було "Виконано" і ми його скасовуємо або повертаємо в роботу,
+    # треба скасувати борг співробітника.
+    
+    if order.status.is_completed_status:
+        # Якщо переходимо з "Виконано" в будь-який інший статус - списуємо борг
+        if new_status.id != order.status_id:
+            await unregister_employee_debt(session, order)
+            logger.info(f"Admin Web: Скасування боргу для замовлення #{order.id} через зміну статусу.")
+
+    # Оновлюємо метод оплати тільки якщо замовлення ще не фіналізоване або ми його "відкриваємо"
+    order.payment_method = payment_method
+
     order.status_id = status_id
     actor_info = "Адміністратор веб-панелі"
     
@@ -176,14 +187,11 @@ async def web_set_order_status(
     
     # --- ЛОГІКА КАСИ ПРИ ЗАКРИТТІ ЧЕРЕЗ АДМІНКУ ---
     if new_status.is_completed_status:
-        # 1. ФІКСАЦІЯ ВИКОНАВЦЯ (ДЛЯ ЗВІТІВ)
-        # Якщо це доставка і кур'єр вже був призначений - зараховуємо йому
+        # 1. ФІКСАЦІЯ ВИКОНАВЦЯ
         if order.is_delivery and order.courier_id:
             order.completed_by_courier_id = order.courier_id
 
-        # 2. Прив'язуємо до зміни (адміна/касира або будь-якої відкритої)
-        # Тут ми не знаємо ID співробітника-адміна з вебу, тому передаємо None, 
-        # і функція знайде першу відкриту зміну.
+        # 2. Прив'язуємо до зміни
         await link_order_to_shift(session, order, None) 
         
         # 3. Якщо це готівка, вирішуємо, де гроші
@@ -195,8 +203,7 @@ async def web_set_order_status(
             elif order.accepted_by_waiter_id:
                 await register_employee_debt(session, order, order.accepted_by_waiter_id)
             else:
-                # Якщо нікого немає (Самовивіз або адмін сам продав)
-                # Вважаємо, що гроші відразу потрапили в касу (так як адмін зазвичай стоїть на касі)
+                # Якщо нікого немає -> вважаємо, що гроші відразу в касі
                 order.is_cash_turned_in = True
     # ----------------------------------------------
 
@@ -232,14 +239,13 @@ async def web_assign_courier(
     if not order:
         raise HTTPException(status_code=404, detail="Замовлення не знайдено")
 
+    # Тут можна дозволити змінювати кур'єра навіть у закритому, якщо потрібно виправити помилку
+    # Але для фінансової цілісності краще змінювати кур'єра тільки в активних
     if order.status.is_completed_status or order.status.is_cancelled_status:
-        raise HTTPException(status_code=400, detail="Замовлення вже закрите. Призначення кур'єра заборонено.")
+        # Для простоти поки забороняємо, щоб не плутати борги
+        raise HTTPException(status_code=400, detail="Замовлення вже закрите. Спочатку поверніть статус 'В обробці'.")
 
     admin_bot = request.app.state.admin_bot
-    # Не кидаємо помилку, якщо бот не налаштований, просто логуємо
-    if not admin_bot:
-         logger.warning("Admin bot not configured, notifications skipped.")
-         
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
 
     old_courier_id = order.courier_id
@@ -250,8 +256,7 @@ async def web_assign_courier(
         if old_courier and old_courier.telegram_user_id and admin_bot:
             try:
                 await admin_bot.send_message(old_courier.telegram_user_id, f"❗️ Замовлення #{order.id} було знято з вас оператором.")
-            except Exception as e:
-                logger.error(f"Не вдалося сповістити колишнього кур'єра {old_courier.id}: {e}")
+            except Exception: pass
 
     if courier_id == 0:
         order.courier_id = None
@@ -270,6 +275,7 @@ async def web_assign_courier(
                 statuses = statuses_res.scalars().all()
                 kb_courier.row(*[InlineKeyboardButton(text=s.name, callback_data=f"courier_set_status_{order.id}_{s.id}") for s in statuses])
                 
+                map_url = "#"
                 if order.is_delivery and order.address:
                     encoded_address = quote_plus(order.address)
                     map_url = f"http://googleusercontent.com/maps/google.com/0{encoded_address}"
