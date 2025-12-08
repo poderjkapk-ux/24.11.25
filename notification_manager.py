@@ -360,7 +360,11 @@ async def notify_all_parties_on_status_change(
     """
     Централизованная функция уведомлений и логики склада при смене статуса.
     """
-    # Явная загрузка items для склада
+    # !!! ВИПРАВЛЕННЯ: Зберігаємо прапор списання, тому що перезавантаження з БД його затре !!!
+    # Це потрібно, щоб передати рішення "Списати у смітник" (Waste) без повернення на склад
+    skip_return_flag = getattr(order, 'skip_inventory_return', False)
+
+    # Явная загрузка items для склада и связей
     query = select(Order).where(Order.id == order.id).options(
         selectinload(Order.items).joinedload(OrderItem.product), 
         joinedload(Order.status),
@@ -371,17 +375,19 @@ async def notify_all_parties_on_status_change(
     result = await session.execute(query)
     order = result.scalar_one()
     
+    # Відновлюємо прапорець на новому об'єкті
+    order.skip_inventory_return = skip_return_flag
+    
     admin_chat_id_str = os.environ.get('ADMIN_CHAT_ID')
     new_status = order.status
     
     # --- 1. ЛОГИКА СКЛАДА (Списание и Возврат) ---
     
     # А. ПОВЕРНЕННЯ НА СКЛАД ПРИ СКАСУВАННІ
-    # Перевіряємо прапорець skip_inventory_return
-    skip_return = getattr(order, 'skip_inventory_return', False)
-    
     if new_status.is_cancelled_status and order.is_inventory_deducted:
-        if not skip_return:
+        # Перевіряємо прапорець skip_inventory_return
+        # Якщо він True - значить це "Списання" (Waste), повертати продукти не треба
+        if not order.skip_inventory_return:
             try:
                 await reverse_deduction(session, order)
                 if admin_chat_id_str:
@@ -391,7 +397,7 @@ async def notify_all_parties_on_status_change(
                 logger.error(f"Помилка повернення на склад для #{order.id}: {e}")
         else:
             # Якщо skip_return = True, то продукти не повертаються (вважаються списаними як втрати)
-            logger.info(f"Замовлення #{order.id} скасовано без повернення продуктів (Списання).")
+            logger.info(f"Замовлення #{order.id} скасовано БЕЗ повернення продуктів (Списання/Штраф).")
 
     # Б. СПИСАННЯ СО СКЛАДА (якщо статус "Готовий до видачі" або завершальний)
     if (new_status.name == "Готовий до видачі" or new_status.is_completed_status) and not order.is_inventory_deducted:
