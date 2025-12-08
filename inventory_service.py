@@ -142,11 +142,8 @@ async def apply_doc_stock_changes(session: AsyncSession, doc_id: int):
 
 async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     """
-    Автоматичне списання продуктів (і модифікаторів, і упаковки) з відповідних складів/цехів.
-    Враховує, чи є інгредієнт "тільки на винос" (is_takeaway).
-    
-    ОНОВЛЕНО: Враховує прив'язку цеху до складу зберігання (linked_warehouse_id) та ціну списання.
-    Захист від відсутності складів.
+    Автоматичне списання продуктів (включно з модифікаторами) з відповідних складів.
+    ВИПРАВЛЕНО: Пріоритетне використання JSON-даних модифікаторів для надійності та правильного складу.
     """
     if order.is_inventory_deducted:
         logger.info(f"Склад для замовлення #{order.id} вже був списаний раніше.")
@@ -192,7 +189,6 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
     # --- 1. СПИСАННЯ СТРАВ ТА МОДИФІКАТОРІВ ---
     for order_item in order.items:
         # 1.1 Визначаємо цех приготування для основної страви
-        # Спочатку перевіряємо product_id, щоб уникнути помилок якщо товар видалено
         product = await session.get(Product, order_item.product_id)
         
         # Цех страви (вказаний в адмінці)
@@ -225,28 +221,41 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
         else:
             logger.warning(f"Для товару '{order_item.product_name}' (ID {order_item.product_id}) відсутня Техкарта.")
         
-        # 1.4 Списуємо інгредієнти модифікаторів
+        # 1.4 Списуємо інгредієнти модифікаторів (ВИПРАВЛЕНО)
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
-                # Отримуємо дані модифікатора з БД
-                mod_id = mod_data.get('id')
-                if mod_id:
-                    modifier_db = await session.get(Modifier, mod_id, options=[joinedload(Modifier.ingredient)])
+                # Пріоритет: беремо дані з JSON замовлення (швидше і точніше на момент замовлення)
+                ing_id = mod_data.get('ingredient_id')
+                ing_qty_val = mod_data.get('ingredient_qty')
+                
+                # Склад для модифікатора (якщо зберігся в JSON, інакше шукаємо в БД, інакше - цех страви)
+                mod_target_wh_id = mod_data.get('warehouse_id')
+
+                # Якщо в JSON немає даних (старі замовлення), шукаємо в БД
+                if not ing_id or not ing_qty_val:
+                    mod_id = mod_data.get('id')
+                    if mod_id:
+                        modifier_db = await session.get(Modifier, mod_id)
+                        if modifier_db:
+                            ing_id = modifier_db.ingredient_id
+                            ing_qty_val = modifier_db.ingredient_qty
+                            if not mod_target_wh_id:
+                                mod_target_wh_id = modifier_db.warehouse_id
+
+                # Якщо склад модифікатора не знайдено, використовуємо цех страви
+                if not mod_target_wh_id:
+                    mod_target_wh_id = prod_wh_id
+
+                # Якщо є що списувати
+                if ing_id and ing_qty_val:
+                    # Отримуємо актуальну собівартість
+                    ing_db = await session.get(Ingredient, ing_id)
+                    cost = ing_db.current_cost if ing_db else 0
                     
-                    if modifier_db and modifier_db.ingredient_id:
-                        ing_qty_val = modifier_db.ingredient_qty
-                        
-                        # Визначаємо цех для модифікатора (якщо не вказано, беремо цех страви)
-                        mod_target_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
-                        
-                        # Визначаємо реальний склад для цього цеху
-                        real_mod_storage_id = await get_real_storage_id(mod_target_wh_id)
-                        
-                        if ing_qty_val:
-                            total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                            # Ціна списання (собівартість)
-                            mod_cost = modifier_db.ingredient.current_cost if (modifier_db.ingredient and modifier_db.ingredient.current_cost) else 0
-                            add_deduction(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty, mod_cost)
+                    real_mod_storage_id = await get_real_storage_id(mod_target_wh_id)
+                    total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
+                    
+                    add_deduction(real_mod_storage_id, ing_id, total_mod_qty, cost)
 
     # --- 2. СПИСАННЯ УПАКОВКИ (Auto Rules - Загальні правила) ---
     trigger = 'in_house'
@@ -290,7 +299,7 @@ async def deduct_products_by_tech_card(session: AsyncSession, order: Order):
 async def reverse_deduction(session: AsyncSession, order: Order):
     """
     Повернення продуктів на склад (при скасуванні замовлення).
-    Дзеркальна логіка до deduct_products_by_tech_card.
+    Виправлено для підтримки JSON модифікаторів.
     """
     if not order.is_inventory_deducted:
         return
@@ -342,21 +351,36 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                 cost = component.ingredient.current_cost if component.ingredient.current_cost else 0
                 add_return(real_prod_storage_id, component.ingredient_id, total_qty, cost)
         
+        # Повернення модифікаторів
         if order_item.modifiers:
             for mod_data in order_item.modifiers:
-                mod_id = mod_data.get('id')
-                if mod_id:
-                    modifier_db = await session.get(Modifier, mod_id, options=[joinedload(Modifier.ingredient)])
-                    if modifier_db and modifier_db.ingredient_id:
-                        ing_qty_val = modifier_db.ingredient_qty
-                        
-                        mod_target_wh_id = modifier_db.warehouse_id if modifier_db.warehouse_id else prod_wh_id
-                        real_mod_storage_id = await get_real_storage_id(mod_target_wh_id)
-                        
-                        if ing_qty_val:
-                            total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
-                            mod_cost = modifier_db.ingredient.current_cost if (modifier_db.ingredient and modifier_db.ingredient.current_cost) else 0
-                            add_return(real_mod_storage_id, modifier_db.ingredient_id, total_mod_qty, mod_cost)
+                # Беремо дані з JSON
+                ing_id = mod_data.get('ingredient_id')
+                ing_qty_val = mod_data.get('ingredient_qty')
+                mod_target_wh_id = mod_data.get('warehouse_id')
+
+                # Якщо в JSON немає даних, пробуємо БД
+                if not ing_id or not ing_qty_val:
+                    mod_id = mod_data.get('id')
+                    if mod_id:
+                        modifier_db = await session.get(Modifier, mod_id, options=[joinedload(Modifier.ingredient)])
+                        if modifier_db and modifier_db.ingredient_id:
+                            ing_id = modifier_db.ingredient_id
+                            ing_qty_val = modifier_db.ingredient_qty
+                            if not mod_target_wh_id:
+                                mod_target_wh_id = modifier_db.warehouse_id
+
+                if not mod_target_wh_id:
+                    mod_target_wh_id = prod_wh_id
+
+                if ing_id and ing_qty_val:
+                    ing_db = await session.get(Ingredient, ing_id)
+                    cost = ing_db.current_cost if ing_db else 0
+                    
+                    real_mod_storage_id = await get_real_storage_id(mod_target_wh_id)
+                    total_mod_qty = Decimal(str(ing_qty_val)) * Decimal(str(order_item.quantity))
+                    
+                    add_return(real_mod_storage_id, ing_id, total_mod_qty, cost)
 
     # --- 2. ПОВЕРНЕННЯ УПАКОВКИ (Auto Rules) ---
     trigger = 'in_house'

@@ -42,6 +42,7 @@ from cash_service import (
 )
 # Импорт сервиса инвентаря (для прихода товара и списания)
 from inventory_service import deduct_products_by_tech_card, reverse_deduction, process_movement, generate_cook_ticket
+from websocket_manager import manager
 
 # Настройка роутера и логгера
 router = APIRouter(prefix="/staff", tags=["staff_pwa"])
@@ -1119,7 +1120,8 @@ async def update_order_items_api(
                             "name": m_db.name,
                             "price": float(m_db.price),
                             "ingredient_id": m_db.ingredient_id,
-                            "ingredient_qty": float(m_db.ingredient_qty)
+                            "ingredient_qty": float(m_db.ingredient_qty),
+                            "warehouse_id": m_db.warehouse_id # Сохраняем склад модификатора
                         })
                 
                 item_price = p.price + mods_price
@@ -1214,7 +1216,11 @@ async def get_full_menu(session: AsyncSession = Depends(get_db_session)):
             if p.modifiers:
                 for m in p.modifiers:
                     price_val = m.price if m.price is not None else 0
-                    p_mods.append({"id": m.id, "name": m.name, "price": float(price_val)})
+                    p_mods.append({
+                        "id": m.id, 
+                        "name": m.name, 
+                        "price": float(price_val)
+                    })
             
             prod_list.append({
                 "id": p.id, 
@@ -1257,7 +1263,18 @@ async def create_waiter_order(
         products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
         products_map = {p.id: p for p in products_res.scalars().all()}
         
-        db_modifiers = await fetch_db_modifiers(session, cart)
+        # --- Завантажуємо модифікатори для отримання warehouse_id ---
+        all_mod_ids = set()
+        for item in cart:
+            for raw_mod in item.get('modifiers', []):
+                all_mod_ids.add(int(raw_mod['id']))
+        
+        db_modifiers = {}
+        if all_mod_ids:
+            res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
+            for m in res.scalars().all():
+                db_modifiers[m.id] = m
+        # ---------------------------------------------------------------
         
         for item in cart:
             pid = int(item['id'])
@@ -1273,12 +1290,15 @@ async def create_waiter_order(
                     if mid in db_modifiers:
                         m_db = db_modifiers[mid]
                         mods_price += m_db.price
+                        
+                        # Зберігаємо всі дані для списання, включаючи warehouse_id
                         final_mods.append({
                             "id": m_db.id,
                             "name": m_db.name,
                             "price": float(m_db.price),
                             "ingredient_id": m_db.ingredient_id,
-                            "ingredient_qty": float(m_db.ingredient_qty)
+                            "ingredient_qty": float(m_db.ingredient_qty),
+                            "warehouse_id": m_db.warehouse_id # <--- ВАЖЛИВО ДЛЯ СПИСАННЯ
                         })
                 
                 item_price = prod.price + mods_price
@@ -1290,7 +1310,7 @@ async def create_waiter_order(
                     quantity=qty, 
                     price_at_moment=item_price,
                     preparation_area=prod.preparation_area,
-                    modifiers=final_mods
+                    modifiers=final_mods # JSON з warehouse_id
                 ))
         
         new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))

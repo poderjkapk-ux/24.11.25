@@ -876,12 +876,14 @@ async def finalize_order(message: Message, state: FSMContext, session: AsyncSess
                     if mid in db_modifiers:
                         mod_db = db_modifiers[mid]
                         mods_price_sum += Decimal(str(mod_db.price))
+                        # ОНОВЛЕНО: Додаємо warehouse_id для коректного списання
                         final_mods_data.append({
                             "id": mod_db.id,
                             "name": mod_db.name,
                             "price": float(mod_db.price),
                             "ingredient_id": mod_db.ingredient_id,
-                            "ingredient_qty": float(mod_db.ingredient_qty)
+                            "ingredient_qty": float(mod_db.ingredient_qty),
+                            "warehouse_id": mod_db.warehouse_id 
                         })
             
             item_price += mods_price_sum
@@ -1285,12 +1287,14 @@ async def place_web_order(request: Request, order_data: dict = Body(...), sessio
                 if mid in db_modifiers:
                     mod_db = db_modifiers[mid]
                     mods_price_sum += mod_db.price
+                    # ОНОВЛЕНО: Додаємо warehouse_id для коректного списання
                     final_modifiers_data.append({
                         "id": mod_db.id,
                         "name": mod_db.name,
                         "price": float(mod_db.price),
                         "ingredient_id": mod_db.ingredient_id,
-                        "ingredient_qty": float(mod_db.ingredient_qty)
+                        "ingredient_qty": float(mod_db.ingredient_qty),
+                        "warehouse_id": mod_db.warehouse_id 
                     })
             
             item_total_price = (product.price + mods_price_sum)
