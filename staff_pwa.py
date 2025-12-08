@@ -1,4 +1,3 @@
-
 # staff_pwa.py
 
 import html
@@ -1171,6 +1170,11 @@ async def cancel_order_complex_api(
     if not cancel_status: return JSONResponse({"error": "Статус скасування не налаштовано"}, 500)
 
     old_status_name = order.status.name
+
+    # --- FIX: Если заказ был завершен, сначала списываем старый долг (полную стоимость) ---
+    if order.status.is_completed_status:
+        await unregister_employee_debt(session, order)
+    # -----------------------------------------------------------------------------------
 
     # 1. Логика Склада
     if action_type == 'waste':

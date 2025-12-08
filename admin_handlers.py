@@ -276,11 +276,21 @@ def register_admin_handlers(dp: Dispatcher):
         # Встановлюємо прапорець, щоб не повертати на склад
         order.skip_inventory_return = True
         
-        # Виконуємо зміну статусу
+        # 1. Спочатку змінюємо статус. Функція apply_status_change автоматично:
+        #    - Зніме старий борг (повну вартість), якщо статус був "Виконано".
+        #    - Запише історію змін.
         await apply_status_change(callback, session, order, new_status)
         
-        # Додаємо борг (штраф)
+        # 2. Додаємо борг (штраф)
         target_emp_id = order.accepted_by_waiter_id or order.courier_id or order.completed_by_courier_id
+        
+        # Якщо відповідального немає, штрафуємо того, хто виконує дію (якщо це співробітник з прив'язкою)
+        if not target_emp_id:
+             # Спробуємо знайти поточного юзера (адміна/оператора)
+             user_id = callback.from_user.id
+             emp = await session.scalar(select(Employee).where(Employee.telegram_user_id == user_id))
+             if emp: target_emp_id = emp.id
+
         if target_emp_id:
             emp = await session.get(Employee, target_emp_id)
             if emp:
@@ -670,6 +680,7 @@ async def apply_status_change(callback: CallbackQuery, session: AsyncSession, or
     old_status_name = order.status.name
     
     # 1. Скасування роздрібного боргу (якщо був)
+    # Це важливо для коректного нарахування штрафу при скасуванні
     if order.status.is_completed_status:
         await unregister_employee_debt(session, order)
 
