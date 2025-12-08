@@ -785,10 +785,15 @@ STAFF_DASHBOARD_HTML = """
 
         // --- NEW ORDER & PRODUCT ADDING LOGIC ---
 
+        
         // Функція для кнопки "Створити доставку"
         function startDeliveryCreation() {{
             orderMode = 'delivery';
             cart = {{}};
+            
+            // ДОДАТИ ЦЕЙ РЯДОК:
+            document.getElementById('staff-modal').classList.add('active');
+            
             openAddProductModal(false);
         }}
 
