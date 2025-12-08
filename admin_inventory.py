@@ -16,7 +16,8 @@ from inventory_models import (
     InventoryDoc, InventoryDocItem, Modifier, AutoDeductionRule,
     IngredientRecipeItem
 )
-from models import Product, Settings
+# Додали Order в імпорт
+from models import Product, Settings, Order
 from dependencies import get_db_session, check_credentials
 from templates import ADMIN_HTML_TEMPLATE
 # Імпортуємо функції сервісу
@@ -1371,12 +1372,50 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         supplier_name = doc.supplier.name if doc.supplier else "Внутрішнє виробництво"
         header_info = f"<div class='doc-info-row'><span>Постачальник:</span> <b>{supplier_name}</b></div>"
         header_info += f"<div class='doc-info-row'><span>На склад:</span> <b>{doc.target_warehouse.name if doc.target_warehouse else '-'}</b></div>"
-    elif doc.doc_type == 'writeoff':
+    elif doc.doc_type == 'writeoff' or doc.doc_type == 'deduction':
         header_info = f"<div class='doc-info-row'><span>Зі складу:</span> <b>{doc.source_warehouse.name if doc.source_warehouse else '-'}</b></div>"
     elif doc.doc_type == 'transfer':
         header_info = f"<div class='doc-info-row'><span>Зі складу:</span> <b>{doc.source_warehouse.name if doc.source_warehouse else '-'}</b></div>"
         header_info += f"<div class='doc-info-row'><span>На склад:</span> <b>{doc.target_warehouse.name if doc.target_warehouse else '-'}</b></div>"
     
+    # --- НОВЕ: Відображення деталей замовлення (страв) ---
+    order_info_html = ""
+    if doc.linked_order_id:
+        # Завантажуємо замовлення
+        res_order = await session.execute(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(Order.id == doc.linked_order_id)
+        )
+        linked_order = res_order.scalar_one_or_none()
+
+        if linked_order:
+            dishes_list = ""
+            for o_item in linked_order.items:
+                # Додаємо модифікатори, якщо є
+                mods_str = ""
+                if o_item.modifiers:
+                    mod_names = [m.get('name', '') for m in o_item.modifiers]
+                    if mod_names:
+                        mods_str = f" <small style='color:#666;'>(+ {', '.join(mod_names)})</small>"
+                
+                dishes_list += f"<li style='margin-bottom:4px;'>🍽 <b>{o_item.product_name}</b> {mods_str} <span style='background:#eee; padding:2px 6px; border-radius:4px;'>x{o_item.quantity}</span></li>"
+            
+            order_link = f"<a href='/admin/order/manage/{linked_order.id}' target='_blank'>#{linked_order.id}</a>"
+            
+            order_info_html = f"""
+            <div style="margin-top: 20px; background: #fff7ed; padding: 15px; border-radius: 10px; border: 1px solid #ffedd5;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 style="margin:0; color: #9a3412;"><i class="fa-solid fa-utensils"></i> Списано під замовлення {order_link}</h4>
+                    <span style="font-size:0.85rem; color:#c2410c;">Автоматичний розрахунок</span>
+                </div>
+                <ul style="margin:0; padding-left: 20px; color: #333; list-style-type: none;">
+                    {dishes_list}
+                </ul>
+            </div>
+            """
+    # -----------------------------------------------------
+
     status_ui = ""
     add_form = ""
     
@@ -1424,7 +1463,6 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
         """
         
         pay_block = ""
-        # Додано перевірку, чи є постачальник (щоб не просити оплату для внутрішнього виробництва)
         if doc.doc_type == 'supply' and doc.supplier_id:
             debt = float(total_sum) - float(doc.paid_amount)
             if debt > 0.01:
@@ -1467,6 +1505,8 @@ async def view_doc(doc_id: int, session: AsyncSession = Depends(get_db_session),
                 {status_ui}
             </div>
         </div>
+        
+        {order_info_html}
         
         <div class="table-wrapper">
             <table class="inv-table">
