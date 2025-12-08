@@ -17,11 +17,12 @@ import re
 import os
 from decimal import Decimal
 
-from models import Order, Product, Category, OrderStatus, Employee, Role, Settings, OrderStatusHistory, OrderItem
+from models import Order, Product, Category, OrderStatus, Employee, Role, Settings, OrderStatusHistory, OrderItem, BalanceHistory
 from courier_handlers import _generate_waiter_order_view
 from notification_manager import notify_all_parties_on_status_change, create_staff_notification
-# --- КАСА: Імпорт сервісів ---
+# --- КАСА & СКЛАД ---
 from cash_service import link_order_to_shift, register_employee_debt, unregister_employee_debt
+from inventory_service import calculate_order_prime_cost
 
 logger = logging.getLogger(__name__)
 
@@ -198,14 +199,6 @@ def register_admin_handlers(dp: Dispatcher):
         if not new_status: return await callback.answer("Статус не знайдено в БД.", show_alert=True)
 
         # --- ВАЖЛИВО: Перевірка для розблокування змін ---
-        # Якщо замовлення закрите (Completed/Cancelled), ми дозволяємо зміну ТІЛЬКИ якщо:
-        # 1. Адміністратор хоче скасувати помилково завершене замовлення (Completed -> Cancelled).
-        # 2. Адміністратор хоче повернути замовлення в роботу (Completed/Cancelled -> Active).
-        
-        # Забороняємо зміну, якщо воно вже закрите, і ми намагаємося перевести його в інший статус, 
-        # який НЕ є скасуванням (і не є поверненням в роботу - тут спрощена логіка).
-        # В даному випадку дозволяємо перехід Completed -> Cancelled для виправлення боргів.
-        
         is_already_closed = order.status.is_completed_status or order.status.is_cancelled_status
         is_moving_to_cancelled = new_status.is_cancelled_status
         is_moving_to_active = not (new_status.is_completed_status or new_status.is_cancelled_status)
@@ -214,58 +207,105 @@ def register_admin_handlers(dp: Dispatcher):
             if not (is_moving_to_cancelled or is_moving_to_active):
                  return await callback.answer("⛔️ Замовлення вже закрите. Зміна статусу заборонена.", show_alert=True)
 
+        # --- СПЕЦІАЛЬНА ОБРОБКА СКАСУВАННЯ ---
+        if new_status.is_cancelled_status:
+            # Запитуємо у адміна тип скасування
+            kb = InlineKeyboardBuilder()
+            kb.row(InlineKeyboardButton(text="↩️ Повернути на склад (Клієнт відмовився)", callback_data=f"cancel_action_{order.id}_{new_status.id}_return"))
+            kb.row(InlineKeyboardButton(text="🗑️ Списати (Зіпсовано/Викинуто)", callback_data=f"cancel_action_{order.id}_{new_status.id}_waste"))
+            kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f"view_order_{order.id}"))
+            
+            await callback.message.edit_text(
+                f"🚫 <b>Скасування замовлення #{order.id}</b>\n\nЩо робити з продуктами, які були списані (якщо страви готувалися)?",
+                reply_markup=kb.as_markup()
+            )
+            await callback.answer()
+            return
+
         # --- ЛОГІКА КАСИ: СКАСУВАННЯ БОРГУ ---
         # Якщо переходимо з "Виконано" (де гроші повісили на кур'єра) в "Скасовано"
         if order.status.is_completed_status and new_status.is_cancelled_status:
             await unregister_employee_debt(session, order)
         # -------------------------------------
 
-        # --- ЛОГІКА КАСИ: НАРАХУВАННЯ БОРГУ ---
-        # Якщо переходимо в "Виконано"
-        if new_status.is_completed_status:
-            await link_order_to_shift(session, order, employee.id)
+        # --- СТАНДАРТНА ЗМІНА СТАТУСУ ---
+        await apply_status_change(callback, session, order, new_status)
+
+    @dp.callback_query(F.data.startswith("cancel_action_"))
+    async def process_cancel_type(callback: CallbackQuery, session: AsyncSession):
+        parts = callback.data.split("_")
+        order_id = int(parts[2])
+        status_id = int(parts[3])
+        action_type = parts[4] # 'return' or 'waste'
+        
+        order = await session.get(Order, order_id, options=[joinedload(Order.status)])
+        if not order: return
+        
+        # Встановлюємо тимчасовий атрибут для notification_manager
+        if action_type == 'waste':
+            order.skip_inventory_return = True
             
-            if order.payment_method == 'cash':
-                if order.courier_id:
-                    await register_employee_debt(session, order, order.courier_id)
-                elif order.accepted_by_waiter_id:
-                    await register_employee_debt(session, order, order.accepted_by_waiter_id)
-                else:
-                    order.is_cash_turned_in = True # Адмін закрив сам, гроші в касі
-        # -----------------------------------------------
+            # Якщо "Списати" -> Запитати про борг (собівартість)
+            cost_price = await calculate_order_prime_cost(session, order.id)
+            
+            kb = InlineKeyboardBuilder()
+            kb.row(InlineKeyboardButton(text=f"💸 Стягнути собівартість ({cost_price:.2f} грн)", callback_data=f"cancel_penalty_{order.id}_{status_id}_{cost_price}"))
+            kb.row(InlineKeyboardButton(text="🙅‍♂️ Просто списати (Без боргу)", callback_data=f"cancel_confirm_{order.id}_{status_id}_waste"))
+            
+            await callback.message.edit_text(
+                f"🗑️ <b>Списання продуктів</b>\n\nСобівартість продуктів: <b>{cost_price:.2f} грн</b>.\nЧи потрібно повісити цю суму як борг на офіціанта/кур'єра?",
+                reply_markup=kb.as_markup()
+            )
+            await callback.answer()
+            return
+
+        # Якщо 'return', просто міняємо статус (reverse_deduction спрацює автоматично)
+        new_status = await session.get(OrderStatus, status_id)
+        await apply_status_change(callback, session, order, new_status)
+
+    @dp.callback_query(F.data.startswith("cancel_penalty_"))
+    async def apply_cancellation_penalty(callback: CallbackQuery, session: AsyncSession):
+        parts = callback.data.split("_")
+        order_id = int(parts[2])
+        status_id = int(parts[3])
+        penalty_amount = Decimal(parts[4])
         
-        old_status_name = order.status.name if order.status else 'Невідомий'
-        order.status_id = new_status_id
+        order = await session.get(Order, order_id, options=[joinedload(Order.status)])
+        new_status = await session.get(OrderStatus, status_id)
         
-        history_entry = OrderStatusHistory(
-            order_id=order.id,
-            status_id=new_status_id,
-            actor_info=actor_info
-        )
-        session.add(history_entry)
+        # Встановлюємо прапорець, щоб не повертати на склад
+        order.skip_inventory_return = True
         
-        await session.commit()
+        # Виконуємо зміну статусу
+        await apply_status_change(callback, session, order, new_status)
         
-        await notify_all_parties_on_status_change(
-            order=order,
-            old_status_name=old_status_name,
-            actor_info=actor_info,
-            admin_bot=callback.bot,
-            client_bot=client_bot,
-            session=session
-        )
+        # Додаємо борг (штраф)
+        target_emp_id = order.accepted_by_waiter_id or order.courier_id or order.completed_by_courier_id
+        if target_emp_id:
+            emp = await session.get(Employee, target_emp_id)
+            if emp:
+                emp.cash_balance += penalty_amount
+                # Логуємо в історію
+                session.add(BalanceHistory(
+                    employee_id=emp.id, amount=penalty_amount, new_balance=emp.cash_balance,
+                    reason=f"Штраф (Собівартість) за скасування #{order.id}"
+                ))
+                await session.commit()
+                await callback.message.answer(f"⚠️ Нараховано борг <b>{penalty_amount:.2f} грн</b> співробітнику {emp.full_name}.")
+        else:
+            await callback.message.answer("⚠️ Не знайдено відповідального співробітника для нарахування боргу.")
+
+    @dp.callback_query(F.data.startswith("cancel_confirm_"))
+    async def confirm_cancel_waste(callback: CallbackQuery, session: AsyncSession):
+        parts = callback.data.split("_")
+        order_id = int(parts[2])
+        status_id = int(parts[3])
         
-        await _display_order_view(callback.bot, callback.message.chat.id, callback.message.message_id, order_id, session)
+        order = await session.get(Order, order_id, options=[joinedload(Order.status)])
+        new_status = await session.get(OrderStatus, status_id)
         
-        msg = f"Статус змінено на {new_status.name}."
-        if new_status.is_completed_status and order.payment_method == 'cash' and not order.is_cash_turned_in:
-             msg += " ⚠️ Гроші записані в борг виконавцю."
-        elif new_status.is_completed_status:
-             msg += " 💰 Гроші враховано."
-        elif order.status.is_completed_status and new_status.is_cancelled_status:
-             msg += " ↩️ Борг співробітника анульовано."
-             
-        await callback.answer(msg)
+        order.skip_inventory_return = True
+        await apply_status_change(callback, session, order, new_status)
 
     @dp.message(AdminEditOrderStates.waiting_for_cancellation_reason)
     async def process_cancellation_reason(message: Message, state: FSMContext, session: AsyncSession):
@@ -620,3 +660,52 @@ def register_admin_handlers(dp: Dispatcher):
         
         await _display_order_view(callback.bot, callback.message.chat.id, callback.message.message_id, order_id, session)
         await callback.answer(f"Кур'єра призначено: {new_courier_name}")
+
+async def apply_status_change(callback: CallbackQuery, session: AsyncSession, order: Order, new_status: OrderStatus):
+    """Виконує фактичну зміну статусу та оновлює фінанси."""
+    user_id = callback.from_user.id
+    employee = await session.scalar(select(Employee).where(Employee.telegram_user_id == user_id))
+    actor_info = f"Оператор: {employee.full_name}" if employee else "Адмін"
+    
+    old_status_name = order.status.name
+    
+    # 1. Скасування роздрібного боргу (якщо був)
+    if order.status.is_completed_status:
+        await unregister_employee_debt(session, order)
+
+    # 2. Зміна статусу
+    order.status_id = new_status.id
+    session.add(OrderStatusHistory(order_id=order.id, status_id=new_status.id, actor_info=actor_info))
+    
+    # 3. Нарахування роздрібного боргу (якщо Виконано)
+    if new_status.is_completed_status:
+        await link_order_to_shift(session, order, employee.id if employee else None)
+        if order.payment_method == 'cash':
+            target_id = order.courier_id or order.accepted_by_waiter_id
+            if target_id: await register_employee_debt(session, order, target_id)
+            else: order.is_cash_turned_in = True
+
+    await session.commit()
+    
+    # Отримуємо client_bot з Dispatcher, до якого належить цей callback
+    # Оскільки цей код виконується в контексті aiogram, у нас немає прямого доступу до app.state
+    # Але ми можемо припустити, що notification_manager впорається з цим, або передати None, 
+    # так як для повідомлень про зміну статусу клієнта це не завжди критично в адмінському інтерфейсі.
+    # Найкраще передати None, notification_manager спробує відправити без нього, якщо зможе.
+    
+    await notify_all_parties_on_status_change(
+        order=order,
+        old_status_name=old_status_name,
+        actor_info=actor_info,
+        admin_bot=callback.bot,
+        client_bot=None, 
+        session=session
+    )
+    
+    await _display_order_view(callback.bot, callback.message.chat.id, callback.message.message_id, order.id, session)
+    
+    msg = f"Статус змінено на {new_status.name}."
+    if new_status.is_completed_status and order.payment_method == 'cash' and not order.is_cash_turned_in:
+            msg += " ⚠️ Гроші записані в борг виконавцю."
+            
+    await callback.answer(msg)

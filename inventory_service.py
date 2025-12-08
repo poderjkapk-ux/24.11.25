@@ -35,6 +35,66 @@ async def get_stock(session: AsyncSession, warehouse_id: int, ingredient_id: int
         
     return stock
 
+async def calculate_order_prime_cost(session: AsyncSession, order_id: int) -> Decimal:
+    """
+    Рахує повну собівартість замовлення (інгредієнти страв + модифікатори) на основі поточних закупівельних цін.
+    Використовується для розрахунку суми "штрафу" при списанні скасованого замовлення.
+    """
+    order = await session.get(Order, order_id, options=[selectinload(Order.items)])
+    if not order or not order.items:
+        return Decimal(0)
+
+    total_cost = Decimal(0)
+
+    for item in order.items:
+        # 1. Собівартість страви по техкарті
+        tech_card = await session.scalar(
+            select(TechCard)
+            .where(TechCard.product_id == item.product_id)
+            .options(joinedload(TechCard.components).joinedload(TechCardItem.ingredient))
+        )
+        
+        item_cost = Decimal(0)
+        if tech_card:
+            # Визначаємо, чи це замовлення "на винос" (для упаковки в техкарті)
+            is_takeaway_order = order.is_delivery or order.order_type == 'pickup'
+            
+            for comp in tech_card.components:
+                # Ігноруємо упаковку "на винос", якщо це не доставка/самовивіз
+                if comp.is_takeaway and not is_takeaway_order:
+                    continue
+                    
+                ing_price = Decimal(str(comp.ingredient.current_cost or 0))
+                amount = Decimal(str(comp.gross_amount))
+                item_cost += ing_price * amount
+        
+        # 2. Собівартість модифікаторів
+        mods_cost = Decimal(0)
+        if item.modifiers:
+            for m in item.modifiers:
+                # Отримуємо дані про інгредієнт модифікатора
+                ing_id = m.get('ingredient_id')
+                qty_val = m.get('ingredient_qty', 0)
+                
+                # Якщо в JSON немає ID інгредієнта (старі дані), пробуємо знайти через таблицю Modifier
+                if not ing_id and m.get('id'):
+                    mod_db = await session.get(Modifier, int(m['id']))
+                    if mod_db:
+                        ing_id = mod_db.ingredient_id
+                        qty_val = mod_db.ingredient_qty
+
+                if ing_id and float(qty_val) > 0:
+                    ing = await session.get(Ingredient, int(ing_id))
+                    if ing:
+                        ing_price = Decimal(str(ing.current_cost or 0))
+                        qty = Decimal(str(qty_val))
+                        mods_cost += ing_price * qty
+
+        # Додаємо до загальної суми: (собівартість страви + собівартість модифікаторів) * кількість
+        total_cost += (item_cost + mods_cost) * item.quantity
+
+    return total_cost
+
 async def process_movement(session: AsyncSession, doc_type: str, items: list, 
                            source_wh_id: int = None, target_wh_id: int = None, 
                            supplier_id: int = None, comment: str = "", order_id: int = None):
@@ -368,8 +428,8 @@ async def reverse_deduction(session: AsyncSession, order: Order):
                 if not ing_id or not ing_qty_val:
                     mod_id = mod_data.get('id')
                     if mod_id:
-                        modifier_db = await session.get(Modifier, mod_id, options=[joinedload(Modifier.ingredient)])
-                        if modifier_db and modifier_db.ingredient_id:
+                        modifier_db = await session.get(Modifier, mod_id)
+                        if modifier_db:
                             ing_id = modifier_db.ingredient_id
                             ing_qty_val = modifier_db.ingredient_qty
                             if not mod_target_wh_id:
