@@ -922,6 +922,18 @@ async def _get_general_orders(session: AsyncSession, employee: Employee):
 
     orders = (await session.execute(q)).scalars().all()
     res = []
+    
+    # --- НОВАЯ КНОПКА ---
+    create_btn = """
+    <div style="margin-bottom: 15px;">
+        <button class="big-btn success" onclick="startDeliveryCreation()">
+            <i class="fa-solid fa-plus"></i> Створити доставку
+        </button>
+    </div>
+    """
+    res.append({"id": 0, "html": create_btn})
+    # --------------------
+
     for o in orders:
         table_name = o.table.name if o.table else ("Доставка" if o.is_delivery else "Самовивіз")
         
@@ -1567,3 +1579,118 @@ async def pay_supply_doc_pwa(
     except Exception as e:
         logger.error(f"Pay Doc API Error: {e}")
         return JSONResponse({"error": str(e)}, 500)
+
+@router.post("/api/order/create_delivery")
+async def create_staff_delivery_order(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    if not employee.role.can_manage_orders:
+        return JSONResponse({"error": "Forbidden"}, 403)
+
+    try:
+        data = await request.json()
+        cart = data.get("cart")
+        customer_name = data.get("name")
+        phone = data.get("phone")
+        address = data.get("address")
+        comment = data.get("comment", "")
+        
+        if not cart: return JSONResponse({"error": "Кошик порожній"}, status_code=400)
+        
+        total = Decimal(0)
+        items_obj = []
+        
+        prod_ids = [int(item['id']) for item in cart]
+        products_res = await session.execute(select(Product).where(Product.id.in_(prod_ids)))
+        products_map = {p.id: p for p in products_res.scalars().all()}
+        
+        # Загрузка модификаторов
+        all_mod_ids = set()
+        for item in cart:
+            for raw_mod in item.get('modifiers', []):
+                all_mod_ids.add(int(raw_mod['id']))
+        
+        db_modifiers = {}
+        if all_mod_ids:
+            res = await session.execute(select(Modifier).where(Modifier.id.in_(all_mod_ids)))
+            for m in res.scalars().all():
+                db_modifiers[m.id] = m
+        
+        for item in cart:
+            pid = int(item['id'])
+            qty = int(item['qty'])
+            
+            if pid in products_map and qty > 0:
+                prod = products_map[pid]
+                
+                final_mods = []
+                mods_price = Decimal(0)
+                for raw_mod in item.get('modifiers', []):
+                    mid = int(raw_mod['id'])
+                    if mid in db_modifiers:
+                        m_db = db_modifiers[mid]
+                        mods_price += m_db.price
+                        final_mods.append({
+                            "id": m_db.id,
+                            "name": m_db.name,
+                            "price": float(m_db.price),
+                            "ingredient_id": m_db.ingredient_id,
+                            "ingredient_qty": float(m_db.ingredient_qty),
+                            "warehouse_id": m_db.warehouse_id
+                        })
+                
+                item_price = prod.price + mods_price
+                total += item_price * qty
+                
+                items_obj.append(OrderItem(
+                    product_id=prod.id, 
+                    product_name=prod.name, 
+                    quantity=qty, 
+                    price_at_moment=item_price,
+                    preparation_area=prod.preparation_area,
+                    modifiers=final_mods
+                ))
+        
+        # Добавляем стоимость доставки если есть в настройках
+        settings = await session.get(Settings, 1) or Settings()
+        if settings.delivery_cost > 0:
+             if settings.free_delivery_from is None or total < settings.free_delivery_from:
+                 total += settings.delivery_cost
+
+        new_status = await session.scalar(select(OrderStatus).where(OrderStatus.name == "Новий").limit(1))
+        status_id = new_status.id if new_status else 1
+        
+        order = Order(
+            customer_name=customer_name, 
+            phone_number=phone,
+            address=address,
+            total_price=total, 
+            order_type="delivery", 
+            is_delivery=True, 
+            delivery_time="Якнайшвидше",
+            status_id=status_id, 
+            items=items_obj,
+            cancellation_reason=comment # Используем это поле для комментариев при создании
+        )
+        session.add(order)
+        await session.flush()
+
+        for item_data in items_obj:
+            item_data.order_id = order.id
+            session.add(item_data)
+
+        await session.commit()
+        await session.refresh(order, ['status'])
+        
+        session.add(OrderStatusHistory(order_id=order.id, status_id=status_id, actor_info=f"{employee.full_name} (PWA)"))
+        await session.commit()
+        
+        # Уведомляем систему
+        await notify_new_order_to_staff(request.app.state.admin_bot, order, session)
+        
+        return JSONResponse({"success": True, "orderId": order.id})
+    except Exception as e:
+        logger.error(f"Create Delivery Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)

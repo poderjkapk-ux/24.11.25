@@ -240,7 +240,7 @@ STAFF_LOGIN_HTML = """
 """
 
 # --- ГОЛОВНА ПАНЕЛЬ (DASHBOARD) ---
-# ТУТ ПОДВІЙНІ ДУЖКИ {{ }} ДЛЯ CSS, БО ВИКОРИСТОВУЄТЬСЯ .format()
+# ТУТ ПОДВІЙНІ ДУЖКИ {{ }} ДЛЯ CSS/JS, БО ВИКОРИСТОВУЄТЬСЯ .format()
 STAFF_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="uk">
@@ -383,6 +383,35 @@ STAFF_DASHBOARD_HTML = """
     
     <div id="toast-container"></div>
 
+    <div id="delivery-info-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="document.getElementById('delivery-info-modal').classList.remove('active')">&times;</span>
+            <h3 style="margin-top:0;">📦 Дані доставки</h3>
+            
+            <div class="form-group">
+                <label>Телефон клієнта</label>
+                <input type="tel" id="del-phone" class="form-control" placeholder="0XX XXX XX XX">
+            </div>
+            
+            <div class="form-group">
+                <label>Ім'я</label>
+                <input type="text" id="del-name" class="form-control" placeholder="Ім'я клієнта">
+            </div>
+            
+            <div class="form-group">
+                <label>Адреса</label>
+                <textarea id="del-address" class="form-control" rows="2" placeholder="Вулиця, будинок..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>Коментар</label>
+                <input type="text" id="del-comment" class="form-control" placeholder="Домофон, решта з...">
+            </div>
+
+            <button class="big-btn success" onclick="finalizeDeliveryOrder()">🚀 Створити замовлення</button>
+        </div>
+    </div>
+
     <div id="staff-modal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
@@ -394,11 +423,12 @@ STAFF_DASHBOARD_HTML = """
         let currentView = 'orders'; 
         let currentTableId = null;
         let menuData = [];
-        let cart = {{}}; // Key: `${{productId}}-${{modIds}}`
+        let cart = {{}}; // Key: ${{productId}}-${{modIds}}
         let editingOrderId = null;
         let currentStatusChangeId = null;
         let lastNotificationCount = 0;
         let wakeLock = null;
+        let orderMode = 'table'; // 'table' or 'delivery'
         
         // Temp variables for modifier modal
         let selectedProduct = null;
@@ -755,6 +785,13 @@ STAFF_DASHBOARD_HTML = """
 
         // --- NEW ORDER & PRODUCT ADDING LOGIC ---
 
+        // Функція для кнопки "Створити доставку"
+        function startDeliveryCreation() {{
+            orderMode = 'delivery';
+            cart = {{}};
+            openAddProductModal(false);
+        }}
+
         async function openAddProductModal(isEditing = false) {{
             if (menuData.length === 0) {{
                 document.getElementById('modal-body').innerHTML = '<div style="text-align:center; padding:20px;">Завантаження меню...</div>';
@@ -768,13 +805,24 @@ STAFF_DASHBOARD_HTML = """
         function renderProductList(filterText = "", isEditing = false) {{
             const body = document.getElementById('modal-body');
             const lowerFilter = filterText.toLowerCase();
-            let backFn = isEditing ? `openOrderEditModal(${{editingOrderId}}, true)` : `openTableModal(${{currentTableId}}, '${{document.getElementById('modal-title')?.innerText || ''}}')`; 
             
-            if(!isEditing) backFn = `renderNewOrderMenu()`; 
+            let backFn;
+            let titleText;
+            
+            if (isEditing) {{
+                backFn = `openOrderEditModal(${{editingOrderId}}, true)`;
+                titleText = 'Додати страву';
+            }} else if (orderMode === 'delivery') {{
+                backFn = `closeModal()`; 
+                titleText = 'Нова доставка';
+            }} else {{
+                backFn = `openTableModal(${{currentTableId}}, '${{document.getElementById('modal-title')?.innerText || ''}}')`;
+                titleText = 'Нове замовлення';
+            }}
 
             let html = `
                 <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0;">${{isEditing ? 'Додати страву' : 'Нове замовлення'}}</h3>
+                    <h3 style="margin:0;">${{titleText}}</h3>
                     <button onclick="${{backFn}}" class="action-btn secondary" style="padding:5px 10px;">Назад</button>
                 </div>
                 <input type="text" id="search-input" placeholder="🔍 Пошук..." value="${{filterText}}" oninput="renderProductList(this.value, ${{isEditing}})">
@@ -803,7 +851,11 @@ STAFF_DASHBOARD_HTML = """
                  const count = Object.keys(cart).length;
                  const total = Object.values(cart).reduce((sum, i) => sum + i.price * i.qty, 0);
                  if (count > 0) {{
-                     html += `<button class="big-btn" onclick="submitNewOrder()">✅ Замовити (${{count}} поз. - ${{total}} грн)</button>`;
+                     if (orderMode === 'delivery') {{
+                         html += `<button class="big-btn" onclick="openDeliveryInfoModal()">➡️ Далі (${{total.toFixed(2)}} грн)</button>`;
+                     }} else {{
+                         html += `<button class="big-btn" onclick="submitNewOrder()">✅ Замовити (${{count}} поз. - ${{total.toFixed(2)}} грн)</button>`;
+                     }}
                  }}
             }}
 
@@ -914,16 +966,72 @@ STAFF_DASHBOARD_HTML = """
 
         function openTableModal(tableId, tableName) {{
             currentTableId = tableId;
+            orderMode = 'table'; // Сбрасываем режим на столик
             cart = {{}};
             const modal = document.getElementById('staff-modal');
             document.getElementById('modal-body').innerHTML = `
-                <h3 style="text-align:center;">${{tableName}}</h3>
+                <h3 style="text-align:center;" id="modal-title">${{tableName}}</h3>
                 <div style="flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:15px;">
                     <button class="big-btn" onclick="openAddProductModal(false)">📝 Нове замовлення</button>
                     <button class="action-btn secondary" style="justify-content:center; padding:15px;" onclick="closeModal()">Закрити</button>
                 </div>
             `;
             modal.classList.add('active');
+        }}
+        
+        // Новая функция: Открыть форму доставки
+        function openDeliveryInfoModal() {{
+            closeModal(); // Закрываем меню продуктов
+            document.getElementById('delivery-info-modal').classList.add('active');
+        }}
+
+        // Новая функция: Отправка доставки на сервер
+        async function finalizeDeliveryOrder() {{
+            const phone = document.getElementById('del-phone').value;
+            const name = document.getElementById('del-name').value;
+            const address = document.getElementById('del-address').value;
+            const comment = document.getElementById('del-comment').value;
+            
+            if (!phone || !address) return alert("Телефон та Адреса обов'язкові!");
+            
+            const items = Object.values(cart);
+            
+            const btn = event.currentTarget;
+            btn.disabled = true;
+            btn.innerText = "Створення...";
+            
+            try {{
+                const res = await fetch('/staff/api/order/create_delivery', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        name: name,
+                        phone: phone,
+                        address: address,
+                        comment: comment,
+                        cart: items
+                    }})
+                }});
+                
+                const data = await res.json();
+                if(data.success) {{
+                    document.getElementById('delivery-info-modal').classList.remove('active');
+                    showToast("Доставка створена!");
+                    // Очистка формы
+                    document.getElementById('del-phone').value = '';
+                    document.getElementById('del-name').value = '';
+                    document.getElementById('del-address').value = '';
+                    document.getElementById('del-comment').value = '';
+                    
+                    fetchData(); // Обновить список
+                }} else {{
+                    alert("Помилка: " + data.error);
+                }}
+            }} catch (e) {{
+                alert("Помилка з'єднання");
+            }} finally {{
+                btn.disabled = false;
+                btn.innerText = "🚀 Створити замовлення";
+            }}
         }}
         
         async function submitNewOrder() {{
@@ -1252,6 +1360,7 @@ STAFF_DASHBOARD_HTML = """
 """
 
 # --- ШАБЛОН КАРТКИ СТОЛИКА ---
+# ТУТ ОДИНАРНІ ДУЖКИ { } ДЛЯ ФОРМАТУВАННЯ В PYTHON
 STAFF_TABLE_CARD = """
 <div class="card table-card" onclick="openTableModal({id}, '{name_esc}')" style="border: 2px solid {border_color}; background: {bg_color};">
     <div class="card-title"><i class="fa-solid fa-chair"></i> {name_esc}</div>
@@ -1260,6 +1369,7 @@ STAFF_TABLE_CARD = """
 """
 
 # --- ШАБЛОН КАРТКИ ЗАМОВЛЕННЯ ---
+# ТУТ ОДИНАРНІ ДУЖКИ { } ДЛЯ ФОРМАТУВАННЯ В PYTHON
 STAFF_ORDER_CARD = """
 <div class="order-card" id="order-{id}" style="border-left-color: {color}">
     <div class="card-header">
