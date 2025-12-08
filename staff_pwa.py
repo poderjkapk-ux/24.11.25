@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload, selectinload
 # Импорт моделей и зависимостей
 from models import (
     Employee, Settings, Order, OrderStatus, Role, OrderItem, Table, 
-    Category, Product, OrderStatusHistory, StaffNotification
+    Category, Product, OrderStatusHistory, StaffNotification, BalanceHistory
 )
 # Импорт моделей инвентаря
 from inventory_models import Modifier, Supplier, InventoryDoc, InventoryDocItem, Warehouse, Ingredient
@@ -41,7 +41,10 @@ from cash_service import (
     process_handover, add_shift_transaction, get_shift_statistics
 )
 # Импорт сервиса инвентаря (для прихода товара и списания)
-from inventory_service import deduct_products_by_tech_card, reverse_deduction, process_movement, generate_cook_ticket
+from inventory_service import (
+    deduct_products_by_tech_card, reverse_deduction, process_movement, 
+    generate_cook_ticket, calculate_order_prime_cost
+)
 from websocket_manager import manager
 
 # Настройка роутера и логгера
@@ -1090,6 +1093,13 @@ async def update_order_status_api(
     old_status = order.status.name
     new_status = await session.get(OrderStatus, new_status_id)
     
+    # --- НОВАЯ ПРОВЕРКА ПРАВ НА ОТМЕНУ ---
+    if new_status.is_cancelled_status:
+        # Проверяем, есть ли у сотрудника право отменять заказы
+        if not employee.role.can_cancel_orders:
+            return JSONResponse({"error": "⛔️ У вас немає прав скасовувати замовлення! Зверніться до адміністратора."}, status_code=403)
+    # -------------------------------------
+    
     is_already_closed = order.status.is_completed_status or order.status.is_cancelled_status
     is_moving_to_cancelled = new_status.is_cancelled_status
     is_moving_to_active = not (new_status.is_completed_status or new_status.is_cancelled_status)
@@ -1132,6 +1142,82 @@ async def update_order_status_api(
         request.app.state.admin_bot, request.app.state.client_bot, session
     )
     return JSONResponse({"success": True})
+
+# --- НОВЫЙ API ДЛЯ СЛОЖНОЙ ОТМЕНЫ (Как в Telegram) ---
+@router.post("/api/order/cancel_complex")
+async def cancel_order_complex_api(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    employee: Employee = Depends(get_current_staff)
+):
+    """
+    Складная отмена: Списание (Waste) или Возврат (Return) + Штраф.
+    """
+    if not employee.role.can_cancel_orders:
+        return JSONResponse({"error": "Немає прав на скасування"}, status_code=403)
+
+    data = await request.json()
+    order_id = int(data.get("orderId"))
+    action_type = data.get("actionType") # 'return' (на склад) или 'waste' (списать)
+    apply_penalty = data.get("applyPenalty", False) # Начислять ли долг по себестоимости
+    reason = data.get("reason", "Скасування через PWA")
+
+    order = await session.get(Order, order_id, options=[joinedload(Order.status)])
+    if not order: return JSONResponse({"error": "Замовлення не знайдено"}, 404)
+
+    # Находим статус отмены
+    cancel_status = await session.scalar(select(OrderStatus).where(OrderStatus.is_cancelled_status == True).limit(1))
+    if not cancel_status: return JSONResponse({"error": "Статус скасування не налаштовано"}, 500)
+
+    old_status_name = order.status.name
+
+    # 1. Логика Склада
+    if action_type == 'waste':
+        # Если "Списать", мы ставим флаг, чтобы notification_manager НЕ делал reverse_deduction
+        order.skip_inventory_return = True
+    else:
+        # Если "Вернуть", notification_manager сам вызовет reverse_deduction при смене статуса
+        order.skip_inventory_return = False
+
+    # 2. Логика Штрафа (Если Waste и выбрано)
+    debt_msg = ""
+    if action_type == 'waste' and apply_penalty:
+        # Считаем себестоимость
+        cost_price = await calculate_order_prime_cost(session, order.id)
+        if cost_price > 0:
+            # На кого вешать? (Официант или Курьер)
+            target_id = order.accepted_by_waiter_id or order.courier_id or employee.id
+            target_emp = await session.get(Employee, target_id)
+            
+            if target_emp:
+                target_emp.cash_balance += cost_price
+                session.add(BalanceHistory(
+                    employee_id=target_emp.id, 
+                    amount=cost_price, 
+                    new_balance=target_emp.cash_balance,
+                    reason=f"Штраф (Собівартість) за скасування #{order.id}"
+                ))
+                debt_msg = f" (Нараховано борг {cost_price:.2f} грн співробітнику {target_emp.full_name})"
+
+    # 3. Меняем статус
+    order.status_id = cancel_status.id
+    order.cancellation_reason = reason + debt_msg
+    
+    session.add(OrderStatusHistory(
+        order_id=order.id, 
+        status_id=cancel_status.id, 
+        actor_info=f"{employee.full_name} (PWA) {debt_msg}"
+    ))
+    
+    await session.commit()
+
+    # 4. Уведомления
+    await notify_all_parties_on_status_change(
+        order, old_status_name, f"{employee.full_name} (PWA)", 
+        request.app.state.admin_bot, request.app.state.client_bot, session
+    )
+
+    return JSONResponse({"success": True, "message": f"Замовлення скасовано.{debt_msg}"})
 
 @router.post("/api/order/update_items")
 async def update_order_items_api(

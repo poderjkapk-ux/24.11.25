@@ -104,7 +104,44 @@ async def report_cash_flow(
         </tr>
         """
 
-    body = ADMIN_REPORT_CASH_FLOW_BODY.format(
+    # --- ДОБАВЛЕНО: Таблица отмененных заказов (Прозрачность) ---
+    cancelled_statuses = await session.execute(select(OrderStatus.id).where(OrderStatus.is_cancelled_status == True))
+    canc_ids = cancelled_statuses.scalars().all()
+    
+    canc_query = select(Order).where(
+        Order.created_at >= dt_from,
+        Order.created_at <= dt_to,
+        Order.status_id.in_(canc_ids)
+    ).order_by(Order.id.desc())
+    
+    canc_orders = (await session.execute(canc_query)).scalars().all()
+    
+    canc_rows = ""
+    for o in canc_orders:
+        canc_rows += f"""
+        <tr>
+            <td>#{o.id}</td>
+            <td>{o.created_at.strftime('%d.%m %H:%M')}</td>
+            <td>{html.escape(o.cancellation_reason or '-')}</td>
+            <td>{o.total_price} грн</td>
+            <td>{html.escape(o.customer_name or '')}</td>
+        </tr>
+        """
+        
+    canc_table = f"""
+    <div class="card" style="margin-top:20px; border-left: 5px solid #c0392b;">
+        <h3 style="color:#c0392b; margin-top:0;">🚫 Скасовані замовлення та списання</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead><tr><th>ID</th><th>Час</th><th>Причина (Борг/Повернення)</th><th>Сума</th><th>Клієнт</th></tr></thead>
+                <tbody>{canc_rows or "<tr><td colspan='5' style='text-align:center;'>Немає скасувань за цей період</td></tr>"}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    # ------------------------------------------------------------
+
+    body_content = ADMIN_REPORT_CASH_FLOW_BODY.format(
         date_from=d_from,
         date_to=d_to,
         total_revenue=(cash_revenue + card_revenue).quantize(Decimal("0.01")),
@@ -113,13 +150,15 @@ async def report_cash_flow(
         total_expenses=total_expenses.quantize(Decimal("0.01")),
         transaction_rows=transaction_rows or "<tr><td colspan='5'>Транзакций за период не найдено</td></tr>"
     )
+    
+    # Добавляем таблицу отмен к основному телу
+    body = body_content + canc_table
 
     return HTMLResponse(ADMIN_HTML_TEMPLATE.format(
         title="Отчет: Движение средств",
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        # FIX: Added inventory_active=""
         **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))
 
@@ -205,7 +244,6 @@ async def report_workers(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        # FIX: Added inventory_active=""
         **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))
 
@@ -273,7 +311,6 @@ async def report_analytics(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        # FIX: Added inventory_active=""
         **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))
 
@@ -338,7 +375,7 @@ async def report_couriers(
             </tr>
             """
 
-    # Встроенный HTML шаблон для этого отчета, чтобы не менять templates.py
+    # Встроенный HTML шаблон для этого отчета
     COURIER_REPORT_TEMPLATE = """
     <div class="card">
         <h2>🚚 Детальный отчет по курьерам</h2>
@@ -386,6 +423,5 @@ async def report_couriers(
         body=body,
         site_title=settings.site_title,
         reports_active="active",
-        # FIX: Added inventory_active=""
         **{k: "" for k in ["main_active", "orders_active", "clients_active", "tables_active", "products_active", "categories_active", "menu_active", "employees_active", "statuses_active", "settings_active", "design_active", "inventory_active"]}
     ))

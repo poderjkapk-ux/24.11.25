@@ -13,7 +13,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 
 from models import Employee, Role, Order, Settings, CashShift, OrderStatus
-# Импортируем Warehouse для выбора цеха
+# Імпортуємо Warehouse для вибору цеху
 from inventory_models import Warehouse
 from templates import ADMIN_HTML_TEMPLATE
 from dependencies import get_db_session, check_credentials
@@ -55,7 +55,7 @@ async def admin_employees(
     roles = roles_res.scalars().all()
     role_options = "".join([f'<option value="{r.id}">{html.escape(r.name)}</option>' for r in roles])
 
-    # Завантажуємо виробничі цехи (склади) для привязки поварів
+    # Завантажуємо виробничі цехи (склади) для прив'язки кухарів
     warehouses_res = await session.execute(select(Warehouse).where(Warehouse.is_production == True).order_by(Warehouse.name))
     warehouses = warehouses_res.scalars().all()
     
@@ -95,7 +95,7 @@ async def admin_employees(
             if names:
                 wh_info = f"<br><span style='font-size:0.8em; color:#6b7280;'><i class='fa-solid fa-fire-burner'></i> {', '.join(names)}</span>"
         
-        # Підтримка старого поля (для сумісності, якщо міграція не була повною)
+        # Підтримка старого поля (для сумісності)
         elif e.assigned_warehouse_id and e.assigned_warehouse_id in wh_map:
             wh_info = f"<br><span style='font-size:0.8em; color:#6b7280;'><i class='fa-solid fa-fire-burner'></i> {html.escape(wh_map[e.assigned_warehouse_id])}</span>"
         
@@ -249,8 +249,7 @@ async def add_employee(
         full_name=full_name, 
         phone_number=cleaned_phone, 
         role_id=role_id, 
-        assigned_workshop_ids=workshop_ids, # Зберігаємо список ID
-        # assigned_warehouse_id залишаємо пустим або беремо перший, якщо потрібно для сумісності
+        assigned_workshop_ids=workshop_ids, 
         assigned_warehouse_id=workshop_ids[0] if workshop_ids else None, 
         password_hash=pw_hash
     ))
@@ -368,7 +367,6 @@ async def edit_employee(
         
         # Оновлюємо список цехів
         employee.assigned_workshop_ids = workshop_ids
-        # Оновлюємо старе поле для сумісності (беремо перший або None)
         employee.assigned_warehouse_id = workshop_ids[0] if workshop_ids else None
         
         if password and password.strip():
@@ -390,30 +388,21 @@ async def delete_employee(
 ):
     employee = await session.get(Employee, employee_id)
     if employee:
-        # 1. Перевірка на борг (Cash Balance) - ЗАХИСТ ВІД ВТРАТИ ГРОШЕЙ
         if employee.cash_balance > 0:
              return RedirectResponse(url="/admin/employees?error=has_debt", status_code=303)
 
-        # 2. Перевірка на активні замовлення (Кур'єр або Офіціант)
         final_statuses_res = await session.execute(select(OrderStatus.id).where(or_(OrderStatus.is_completed_status == True, OrderStatus.is_cancelled_status == True)))
         final_status_ids = final_statuses_res.scalars().all()
 
         active_assignments = await session.execute(
             select(func.count(Order.id)).where(
                 Order.status_id.not_in(final_status_ids),
-                or_(
-                    Order.courier_id == employee_id,
-                    Order.accepted_by_waiter_id == employee_id
-                )
+                or_(Order.courier_id == employee_id, Order.accepted_by_waiter_id == employee_id)
             )
         )
         
-        # 3. Перевірка на відкриту касову зміну
         active_shift = await session.execute(
-            select(func.count(CashShift.id)).where(
-                CashShift.employee_id == employee_id,
-                CashShift.is_closed == False
-            )
+            select(func.count(CashShift.id)).where(CashShift.employee_id == employee_id, CashShift.is_closed == False)
         )
 
         if active_assignments.scalar() > 0 or active_shift.scalar() > 0:
@@ -424,13 +413,12 @@ async def delete_employee(
             await session.commit()
         except IntegrityError:
             await session.rollback()
-            # Якщо не можна видалити через зв'язки з архівом (наприклад, completed_by_courier)
             return RedirectResponse(url="/admin/employees?error=integrity", status_code=303)
 
     return RedirectResponse(url="/admin/employees", status_code=303)
 
 
-# --- РОЛІ ---
+# --- РОЛІ (ОНОВЛЕНО) ---
 
 @router.get("/admin/roles", response_class=HTMLResponse)
 async def admin_roles(
@@ -446,6 +434,9 @@ async def admin_roles(
     for r in roles:
         def icon(val): return '<i class="fa-solid fa-check" style="color:green;"></i>' if val else '<span style="color:#eee;">•</span>'
         
+        # Іконка для права скасування
+        cancel_icon = '<i class="fa-solid fa-check" style="color:green;"></i>' if r.can_cancel_orders else '<span style="color:#eee;">•</span>'
+
         rows += f"""
         <tr>
             <td>{r.id}</td>
@@ -453,7 +444,7 @@ async def admin_roles(
             <td style="text-align:center;">{icon(r.can_manage_orders)}</td>
             <td style="text-align:center;">{icon(r.can_be_assigned)}</td>
             <td style="text-align:center;">{icon(r.can_serve_tables)}</td>
-            <td style="text-align:center;">{icon(r.can_receive_kitchen_orders)}</td>
+            <td style="text-align:center;">{cancel_icon}</td> <td style="text-align:center;">{icon(r.can_receive_kitchen_orders)}</td>
             <td style="text-align:center;">{icon(r.can_receive_bar_orders)}</td>
             <td class="actions">
                 <a href="/admin/edit_role/{r.id}" class="button-sm" title="Редагувати"><i class="fa-solid fa-pen"></i></a>
@@ -496,13 +487,14 @@ async def admin_roles(
                         <th style="text-align:center;">Оператор</th>
                         <th style="text-align:center;">Кур'єр</th>
                         <th style="text-align:center;">Офіціант</th>
+                        <th style="text-align:center; color:#c0392b;">Скасування</th>
                         <th style="text-align:center;">Кухня</th>
                         <th style="text-align:center;">Бар</th>
                         <th width="100" style="text-align:right;">Дії</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows or '<tr><td colspan="8" style="text-align:center; padding:20px;">Ролей немає</td></tr>'}
+                    {rows or '<tr><td colspan="9" style="text-align:center; padding:20px;">Ролей немає</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -523,15 +515,19 @@ async def admin_roles(
                     <div class="perm-group">
                         <div class="checkbox-group">
                             <input type="checkbox" id="can_manage_orders" name="can_manage_orders" value="true">
-                            <label for="can_manage_orders">Оператор</label>
+                            <label for="can_manage_orders">Оператор (Адмін)</label>
                         </div>
                         <div class="checkbox-group">
                             <input type="checkbox" id="can_be_assigned" name="can_be_assigned" value="true">
-                            <label for="can_be_assigned">Кур'єр</label>
+                            <label for="can_be_assigned">Кур'єр (Доставка)</label>
                         </div>
                         <div class="checkbox-group">
                             <input type="checkbox" id="can_serve_tables" name="can_serve_tables" value="true">
-                            <label for="can_serve_tables">Офіціант</label>
+                            <label for="can_serve_tables">Офіціант (Зал)</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="can_cancel_orders" name="can_cancel_orders" value="true">
+                            <label for="can_cancel_orders" style="color:#c0392b; font-weight:bold;">❌ Скасування замовлень</label>
                         </div>
                         <div class="checkbox-group">
                             <input type="checkbox" id="can_receive_kitchen_orders" name="can_receive_kitchen_orders" value="true">
@@ -566,6 +562,7 @@ async def add_role(
     can_manage_orders: bool = Form(False), 
     can_be_assigned: bool = Form(False), 
     can_serve_tables: bool = Form(False), 
+    can_cancel_orders: bool = Form(False), # <-- Нове поле
     can_receive_kitchen_orders: bool = Form(False), 
     can_receive_bar_orders: bool = Form(False), 
     session: AsyncSession = Depends(get_db_session), 
@@ -576,6 +573,7 @@ async def add_role(
         can_manage_orders=can_manage_orders, 
         can_be_assigned=can_be_assigned, 
         can_serve_tables=can_serve_tables, 
+        can_cancel_orders=can_cancel_orders, # <-- Зберігаємо
         can_receive_kitchen_orders=can_receive_kitchen_orders, 
         can_receive_bar_orders=can_receive_bar_orders
     ))
@@ -618,6 +616,10 @@ async def get_edit_role_form(
                     <label>Офіціант (Зал)</label>
                 </div>
                 <div class="checkbox-group">
+                    <input type="checkbox" name="can_cancel_orders" value="true" {'checked' if role.can_cancel_orders else ''}>
+                    <label style="color:#c0392b; font-weight:bold;">❌ Скасування замовлень</label>
+                </div>
+                <div class="checkbox-group">
                     <input type="checkbox" name="can_receive_kitchen_orders" value="true" {'checked' if role.can_receive_kitchen_orders else ''}>
                     <label>Кухня (Екран повара)</label>
                 </div>
@@ -648,6 +650,7 @@ async def edit_role(
     can_manage_orders: bool = Form(False), 
     can_be_assigned: bool = Form(False), 
     can_serve_tables: bool = Form(False), 
+    can_cancel_orders: bool = Form(False), # <-- Оновлюємо
     can_receive_kitchen_orders: bool = Form(False), 
     can_receive_bar_orders: bool = Form(False), 
     session: AsyncSession = Depends(get_db_session), 
@@ -659,6 +662,7 @@ async def edit_role(
         role.can_manage_orders = can_manage_orders
         role.can_be_assigned = can_be_assigned
         role.can_serve_tables = can_serve_tables
+        role.can_cancel_orders = can_cancel_orders # <--
         role.can_receive_kitchen_orders = can_receive_kitchen_orders
         role.can_receive_bar_orders = can_receive_bar_orders
         await session.commit()

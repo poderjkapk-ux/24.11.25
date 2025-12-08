@@ -419,6 +419,38 @@ STAFF_DASHBOARD_HTML = """
         </div>
     </div>
 
+    <div id="cancel-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="document.getElementById('cancel-modal').classList.remove('active')">&times;</span>
+            <h3 style="color:#e74c3c; margin-top:0;">🚫 Скасування замовлення</h3>
+            <p>Що робити з продуктами?</p>
+            
+            <div style="display:flex; flex-direction:column; gap:10px;">
+                <button class="big-btn" onclick="submitCancel('return')" style="background:#3498db;">
+                    ↩️ Повернути на склад
+                    <div style="font-size:0.75em; font-weight:normal;">Клієнт відмовився, страви не готували</div>
+                </button>
+                
+                <button class="big-btn danger" onclick="showWasteOptions()">
+                    🗑️ Списати (У смітник)
+                    <div style="font-size:0.75em; font-weight:normal;">Страви зіпсовано або вже приготовано</div>
+                </button>
+            </div>
+            
+            <div id="waste-options" style="display:none; margin-top:15px; padding-top:15px; border-top:1px solid #eee;">
+                <p style="color:#c0392b; font-weight:bold;">Хто платить за продукти?</p>
+                <button class="big-btn danger" onclick="submitCancel('waste', true)">
+                    💸 Стягнути з працівника
+                    <div style="font-size:0.75em; font-weight:normal;">Борг = Собівартість продуктів</div>
+                </button>
+                <button class="big-btn secondary" onclick="submitCancel('waste', false)">
+                    🏢 Витрати закладу
+                    <div style="font-size:0.75em; font-weight:normal;">Просто списати</div>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentView = 'orders'; 
         let currentTableId = null;
@@ -739,6 +771,16 @@ STAFF_DASHBOARD_HTML = """
         async function changeOrderStatus(selectElem) {{
             const newStatusId = selectElem.value;
             const option = selectElem.options[selectElem.selectedIndex];
+            
+            // --- NEW: Перевірка на статус Скасування ---
+            const statusName = option.text.toLowerCase();
+            if (statusName.includes("скасовано") || statusName.includes("відміна") || statusName.includes("cancel")) {{
+                document.getElementById('cancel-modal').classList.add('active');
+                selectElem.value = ""; // Скидаємо вибір
+                return;
+            }}
+            // -------------------------------------------
+
             const isCompleted = option.getAttribute('data-completed') === 'true';
             if (isCompleted) {{
                 currentStatusChangeId = newStatusId;
@@ -781,6 +823,43 @@ STAFF_DASHBOARD_HTML = """
             const data = await res.json();
             if(data.success) {{ closeModal(); fetchData(); showToast("Склад збережено"); }} 
             else alert(data.error || "Помилка");
+        }}
+
+        // --- NEW: Логика модалки отмены ---
+        function showWasteOptions() {{
+            document.getElementById('waste-options').style.display = 'block';
+        }}
+
+        async function submitCancel(type, penalty = false) {{
+            if(!confirm("Підтвердити скасування?")) return;
+            
+            try {{
+                const res = await fetch('/staff/api/order/cancel_complex', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        orderId: editingOrderId,
+                        actionType: type,
+                        applyPenalty: penalty,
+                        reason: type === 'return' ? 'Повернення на склад' : (penalty ? 'Списання (Борг)' : 'Списання (Заклад)')
+                    }})
+                }});
+                
+                if (res.status === 403) {{
+                    alert("⛔️ У вас немає прав на скасування!");
+                    document.getElementById('cancel-modal').classList.remove('active');
+                    return;
+                }}
+                
+                const data = await res.json();
+                if(data.success) {{
+                    showToast(data.message);
+                    document.getElementById('cancel-modal').classList.remove('active');
+                    closeModal(); // Закрыть окно заказа
+                    fetchData();
+                }} else {{
+                    alert("Помилка: " + data.error);
+                }}
+            }} catch(e) {{ alert("Помилка з'єднання"); }}
         }}
 
         // --- NEW ORDER & PRODUCT ADDING LOGIC ---

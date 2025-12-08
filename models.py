@@ -64,6 +64,11 @@ class Role(Base):
     can_manage_orders: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     can_be_assigned: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     can_serve_tables: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    
+    # --- НОВЕ ПРАВО: Скасування замовлень ---
+    can_cancel_orders: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    # ----------------------------------------
+    
     can_receive_kitchen_orders: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     can_receive_bar_orders: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
     
@@ -320,6 +325,11 @@ class Order(Base):
     # --- СКЛАД: Прапор списання інгредієнтів ---
     # Запобігає повторному списанню при багаторазовій зміні статусу
     is_inventory_deducted: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=text("false"))
+    
+    # --- ДОДАТКОВО: Для логіки повернення ---
+    # Не зберігається в БД (property або тимчасовий атрибут), але в SQLAlchemy
+    # краще не додавати поля без маппінгу, якщо ми не використовуємо @hybrid_property.
+    # В даному випадку ми просто використовуємо це як динамічний атрибут в коді (setattr).
 
     @property
     def products_text(self) -> str:
@@ -440,8 +450,9 @@ async def create_db_tables():
 
         result_roles = await session.execute(sa.select(Role).limit(1))
         if not result_roles.scalars().first():
-            session.add(Role(name="Адміністратор", can_manage_orders=True, can_be_assigned=True, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
-            session.add(Role(name="Оператор", can_manage_orders=True, can_be_assigned=False, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True))
+            # По умолчанию can_cancel_orders=False, включаем только для Админа и Оператора
+            session.add(Role(name="Адміністратор", can_manage_orders=True, can_be_assigned=True, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True, can_cancel_orders=True))
+            session.add(Role(name="Оператор", can_manage_orders=True, can_be_assigned=False, can_serve_tables=True, can_receive_kitchen_orders=True, can_receive_bar_orders=True, can_cancel_orders=True))
             session.add(Role(name="Кур'єр", can_manage_orders=False, can_be_assigned=True, can_serve_tables=False, can_receive_kitchen_orders=False, can_receive_bar_orders=False))
             session.add(Role(name="Офіціант", can_manage_orders=False, can_be_assigned=False, can_serve_tables=True, can_receive_kitchen_orders=False, can_receive_bar_orders=False))
             session.add(Role(name="Повар", can_manage_orders=False, can_be_assigned=False, can_serve_tables=False, can_receive_kitchen_orders=True, can_receive_bar_orders=False))
