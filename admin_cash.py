@@ -254,12 +254,14 @@ async def handover_form(
     if not active_shift:
         return HTMLResponse("<h1>Спочатку відкрийте касову зміну!</h1><a href='/admin/cash'>Назад</a>")
 
-    # --- ВИДАЛЕНО ФІЛЬТР is_cancelled_status=False ---
-    # Це дозволяє бачити скасовані замовлення, за якими висить борг (штраф)
+    # --- ВИПРАВЛЕННЯ: Додано фільтр is_cancelled_status=False ---
+    # Тепер закриті (скасовані) замовлення не будуть відображатися тут, 
+    # оскільки борг за них вже списано автоматично.
     orders_res = await session.execute(
         select(Order).where(
             Order.payment_method == 'cash',
             Order.is_cash_turned_in == False,
+            Order.status.has(is_cancelled_status=False), # <--- ВАЖЛИВО! Фільтр скасованих
             or_(
                 Order.courier_id == employee.id,
                 Order.accepted_by_waiter_id == employee.id,
@@ -278,8 +280,9 @@ async def handover_form(
         target = o.address if o.is_delivery else (o.table.name if o.table else 'Самовивіз')
         
         status_label = ""
+        # Додаткова перевірка (хоча фільтр вище має прибрати такі замовлення)
         if o.status and o.status.is_cancelled_status:
-            status_label = " <span style='color:red; font-size:0.8em;'>[СКАСОВАНО/ШТРАФ]</span>"
+            status_label = " <span style='color:red; font-size:0.8em;'>[СКАСОВАНО]</span>"
         
         rows += f"""
         <tr>
