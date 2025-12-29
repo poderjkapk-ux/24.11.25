@@ -317,6 +317,7 @@ STAFF_DASHBOARD_HTML = """
 
         .action-btn {{ background: var(--primary); color: var(--white); border: none; padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 6px; }}
         .action-btn.secondary {{ background: #f0f0f0; color: #333; }}
+        .action-btn.danger {{ background: #fee2e2; color: #c0392b; }}
         .action-btn:active {{ opacity: 0.8; transform: translateY(1px); }}
         
         /* NOTIFICATIONS & TOAST */
@@ -401,6 +402,11 @@ STAFF_DASHBOARD_HTML = """
             <div class="form-group">
                 <label>Адреса</label>
                 <textarea id="del-address" class="form-control" rows="2" placeholder="Вулиця, будинок..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>Час доставки</label>
+                <input type="text" id="del-time" class="form-control" placeholder="Наприклад: 19:30 або 'Якнайшвидше'" value="Якнайшвидше">
             </div>
             
             <div class="form-group">
@@ -659,7 +665,7 @@ STAFF_DASHBOARD_HTML = """
             editingOrderId = orderId;
             const modal = document.getElementById('staff-modal');
             const body = document.getElementById('modal-body');
-            // Только если открываем с нуля, показываем лоадер
+            
             if(!keepCart) body.innerHTML = '<div style="text-align:center; padding:50px;"><i class="fa-solid fa-spinner fa-spin"></i> Завантаження...</div>';
             
             modal.classList.add('active');
@@ -683,6 +689,28 @@ STAFF_DASHBOARD_HTML = """
                     courierHtml = `<div style="margin-bottom:15px; background:#e3f2fd; padding:10px; border-radius:8px;"><label style="font-size:0.85rem; color:#1565c0; margin-bottom:5px; display:block;">🚚 Кур'єр:</label><select onchange="assignCourier(this.value)" style="width:100%; padding:8px; border-radius:6px; border:1px solid #90caf9; font-weight:bold;">${{courierOptions}}</select></div>`;
                 }}
 
+                // --- НОВЕ: ГЕНЕРАЦІЯ ІНФО ПРО КЛІЄНТА ---
+                let customerHtml = "";
+                if (data.is_delivery) {{
+                     // Якщо є коментар, показуємо його червоним, якщо це важлива інфа
+                     const commentHtml = data.comment ? `<div style="margin-top:5px; color:#c0392b; font-weight:500;"><i class="fa-solid fa-circle-exclamation"></i> ${{data.comment}}</div>` : '';
+                     
+                     customerHtml = `
+                        <div style="background:#f8fafc; padding:12px; border-radius:8px; margin-bottom:15px; border:1px solid #e2e8f0; font-size:0.95rem; color:#334155;">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                                <span><i class="fa-regular fa-clock"></i> ${{data.created_at}}</span>
+                                <span class="badge ${{data.payment_method === 'cash' ? 'success' : 'info'}}">${{data.payment_method === 'cash' ? '💵 Готівка' : '💳 Картка'}}</span>
+                            </div>
+                            <div style="margin-bottom:4px;"><i class="fa-solid fa-user" style="width:20px; text-align:center; color:#94a3b8;"></i> <b>${{data.customer_name || 'Гість'}}</b></div>
+                            <div style="margin-bottom:4px;"><i class="fa-solid fa-phone" style="width:20px; text-align:center; color:#94a3b8;"></i> <a href="tel:${{data.phone_number}}" style="color:#2563eb; text-decoration:none;">${{data.phone_number || '-'}}</a></div>
+                            <div style="margin-bottom:4px;"><i class="fa-solid fa-location-dot" style="width:20px; text-align:center; color:#94a3b8;"></i> ${{data.address || 'Самовивіз'}}</div>
+                            <div style="margin-bottom:4px;"><i class="fa-solid fa-clock" style="width:20px; text-align:center; color:#94a3b8;"></i> Час доставки: <b>${{data.delivery_time || 'Якнайшвидше'}}</b></div>
+                            ${{commentHtml}}
+                        </div>
+                    `;
+                }}
+                // ----------------------------------------
+
                 if (!keepCart) {{
                     cart = {{}};
                     data.items.forEach(i => {{
@@ -692,12 +720,12 @@ STAFF_DASHBOARD_HTML = """
                     }});
                 }}
 
-                renderEditCart(data.can_edit_items, data.statuses, courierHtml);
+                renderEditCart(data.can_edit_items, data.statuses, courierHtml, customerHtml);
                 
             }} catch (e) {{ body.innerHTML = "Помилка: " + e.message; }}
         }}
 
-        function renderEditCart(canEdit, statuses, courierHtml = "") {{
+        function renderEditCart(canEdit, statuses, courierHtml = "", customerHtml = "") {{
             const body = document.getElementById('modal-body');
             let itemsHtml = `<div class="edit-list">`;
             const currentItems = Object.values(cart);
@@ -728,6 +756,7 @@ STAFF_DASHBOARD_HTML = """
 
             body.innerHTML = `
                 <h3 style="margin-top:0; margin-bottom:10px;">Замовлення #${{editingOrderId}}</h3>
+                ${{customerHtml}}
                 ${{courierHtml}}
                 <div style="margin-bottom:15px; background:#f9f9f9; padding:10px; border-radius:8px;">
                     <label style="font-size:0.85rem; color:#666; margin-bottom:5px; display:block;">Статус:</label>
@@ -1076,6 +1105,7 @@ STAFF_DASHBOARD_HTML = """
             const name = document.getElementById('del-name').value;
             const address = document.getElementById('del-address').value;
             const comment = document.getElementById('del-comment').value;
+            const time = document.getElementById('del-time').value;
             
             if (!phone || !address) return alert("Телефон та Адреса обов'язкові!");
             
@@ -1093,6 +1123,7 @@ STAFF_DASHBOARD_HTML = """
                         phone: phone,
                         address: address,
                         comment: comment,
+                        delivery_time: time,
                         cart: items
                     }})
                 }});
@@ -1106,6 +1137,7 @@ STAFF_DASHBOARD_HTML = """
                     document.getElementById('del-name').value = '';
                     document.getElementById('del-address').value = '';
                     document.getElementById('del-comment').value = '';
+                    document.getElementById('del-time').value = 'Якнайшвидше';
                     
                     fetchData(); // Обновить список
                 }} else {{
